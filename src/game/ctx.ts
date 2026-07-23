@@ -5,8 +5,9 @@ import type { Input } from './input';
 import type { Art } from './sprites';
 import type { Player } from './player';
 import type { Enemy, EnemyKind } from './enemies';
-import type { Boss } from './boss';
+import type { BossLike } from './boss';
 import type { Item, ItemKind, Obstacle } from './items';
+import type { Proj, ProjKind } from './proj';
 import type { Facing } from './types';
 
 export interface GameCtx {
@@ -17,9 +18,10 @@ export interface GameCtx {
   frames: Map<string, HTMLImageElement>;
   player: Player;
   enemies: Enemy[];
-  boss: Boss | null;
+  boss: BossLike | null;
   items: Item[];
   obstacles: Obstacle[];
+  projs: Proj[];
   camX: number;
   stageLen: number;
   hitStop(frames: number): void;
@@ -28,4 +30,5 @@ export interface GameCtx {
   spawnEnemy(kind: EnemyKind, side: Facing): void;
   dropItem(kind: ItemKind, x: number, y: number): void;
   dropCoins(x: number, y: number, n: number): void;
+  spawnProj(kind: ProjKind, x: number, y: number, vx: number): void;
 }

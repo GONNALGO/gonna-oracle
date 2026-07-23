@@ -1,8 +1,9 @@
-// 3 stages: procedural 3-layer parallax backgrounds + wave/obstacle layout.
+// 6 stages: procedural 3-layer parallax backgrounds + wave/obstacle layout.
 import { drawText } from './font';
 import { VH, VW, rand } from './types';
 import type { EnemyKind } from './enemies';
 import type { ItemKind, ObstacleKind } from './items';
+import type { BossKind } from './boss';
 
 export interface WaveDef {
   triggerX: number;
@@ -19,11 +20,13 @@ export interface ObstacleDef {
 export interface StageDef {
   name: string;
   sub: string;
-  track: 'stage1' | 'stage2' | 'stage3';
+  track: 'stage1' | 'stage2' | 'stage3' | 'stage4' | 'stage5' | 'stage6';
   len: number;
   waves: WaveDef[];
   obstacles: ObstacleDef[];
   boss: boolean;
+  bossKind: BossKind | null;
+  bossTrack: 'boss' | 'boss2';
   arenaX: number;
   far: HTMLCanvasElement;
   mid: HTMLCanvasElement;
@@ -295,6 +298,241 @@ function s3Ground(len: number): HTMLCanvasElement {
   return c;
 }
 
+// ---------------- STAGE 4: SILVIO'S DOJO (byzantine night dojo) ----------------
+function s4Far(w: number): HTMLCanvasElement {
+  const [c, x] = mk(w, VH);
+  R(x, 0, 0, w, VH, '#0a0a18');
+  R(x, 0, 100, w, 124, '#101024');
+  // stars
+  for (let i = 0; i < 70; i++) R(x, rand(0, w), rand(0, 90), 1, 1, i % 3 ? '#c8b8e8' : '#6a5a9a');
+  // full moon
+  disc(x, w * 0.32, 36, 15, '#e8e4f8');
+  disc(x, w * 0.32 - 4, 32, 4, '#c8c4e0');
+  // distant temple roofs (pagoda silhouettes)
+  for (let tx = 40; tx < w; tx += 340) {
+    R(x, tx, 96, 90, 44, '#141428');
+    R(x, tx - 12, 90, 114, 8, '#1c1c38');
+    R(x, tx + 20, 66, 50, 26, '#141428');
+    R(x, tx + 8, 60, 74, 8, '#1c1c38');
+    R(x, tx + 40, 48, 10, 14, '#1c1c38');
+    // lit windows
+    for (let wx = tx + 8; wx < tx + 82; wx += 16) {
+      if (Math.random() < 0.5) R(x, wx, 108, 6, 8, '#f5c542');
+    }
+  }
+  return c;
+}
+
+function s4Mid(w: number): HTMLCanvasElement {
+  const [c, x] = mk(w, VH);
+  R(x, 0, 24, w, 118, '#1a1020'); // dojo back wall
+  // mosaic band: purple/gold byzantine diamonds
+  R(x, 0, 46, w, 18, '#3a2a5a');
+  for (let mx = 0; mx < w; mx += 12) {
+    R(x, mx + 3, 50, 6, 10, '#b8860b');
+    R(x, mx + 5, 52, 2, 6, '#f5c542');
+  }
+  // shoji screens
+  for (let sx = 90; sx < w; sx += 300) {
+    R(x, sx, 74, 60, 56, '#d8d4c8');
+    R(x, sx, 74, 60, 3, '#6b4a2a');
+    R(x, sx, 127, 60, 3, '#6b4a2a');
+    for (let gx = sx + 14; gx < sx + 60; gx += 15) R(x, gx, 74, 2, 56, '#6b4a2a');
+    R(x, sx, 98, 60, 2, '#6b4a2a');
+    R(x, sx + 6, 82, 10, 10, '#fff6d8'); // lantern glow through paper
+  }
+  // marble columns with gold capitals
+  for (let cx = 30; cx < w; cx += 150) {
+    R(x, cx - 4, 132, 34, 8, '#8a867a');
+    R(x, cx, 36, 26, 98, '#c8c4d8');
+    R(x, cx, 36, 6, 98, '#a8a4b8');
+    R(x, cx + 20, 36, 4, 98, '#e8e4f0');
+    R(x, cx - 4, 30, 34, 8, '#b8860b');
+    R(x, cx - 2, 26, 30, 4, '#f5c542');
+  }
+  // golden lanterns hanging
+  for (let lx = 105; lx < w; lx += 150) {
+    R(x, lx + 6, 24, 2, 10, '#4a3a20'); // cord
+    R(x, lx, 34, 14, 18, '#f5c542');
+    R(x, lx, 34, 14, 3, '#b8860b');
+    R(x, lx, 49, 14, 3, '#b8860b');
+    R(x, lx + 5, 38, 4, 10, '#fff6d8'); // glow core
+  }
+  return c;
+}
+
+function s4Ground(len: number): HTMLCanvasElement {
+  const [c, x] = mk(len, 84);
+  // marble checkerboard
+  const s = 21;
+  for (let gy = 0; gy < 84; gy += s) {
+    for (let gx = 0; gx < len; gx += s) {
+      R(x, gx, gy, s, s, ((gx / s + gy / s) & 1) ? '#b8b4c8' : '#78748a');
+    }
+  }
+  R(x, 0, 0, len, 2, '#5a5668');
+  // gold inlay lane markers
+  for (let dx = 10; dx < len; dx += 84) R(x, dx, 41, 6, 2, '#b8860b');
+  for (let i = 0; i < len / 40; i++) R(x, rand(0, len), rand(4, 80), 2, 1, 'rgba(0,0,0,0.18)');
+  return c;
+}
+
+// ---------------- STAGE 5: NEON CASINO — THE HOUSE ----------------
+function s5Far(w: number): HTMLCanvasElement {
+  const [c, x] = mk(w, VH);
+  // synthwave gradient wall
+  R(x, 0, 0, w, 46, '#160a2a');
+  R(x, 0, 46, w, 46, '#2a1040');
+  R(x, 0, 92, w, 48, '#451a55');
+  // neon grid
+  x.fillStyle = '#5a2a7a';
+  for (let gy = 100; gy < 140; gy += 10) x.fillRect(0, gy, w, 1);
+  for (let gx = 0; gx < w; gx += 32) x.fillRect(gx, 92, 1, 48);
+  // neon sun
+  disc(x, w * 0.62, 76, 22, '#ff5a8a');
+  R(x, 0, 140, w, 84, '#1c0e30');
+  // hanging light strings
+  for (let lx = 0; lx < w; lx += 14) {
+    const ly = 8 + Math.abs(((lx * 7) % 20) - 10);
+    R(x, lx, ly, 2, 2, lx % 42 === 0 ? '#ff5a8a' : lx % 28 === 0 ? '#7fd858' : '#f5c542');
+  }
+  return c;
+}
+
+function s5Mid(w: number): HTMLCanvasElement {
+  const [c, x] = mk(w, VH);
+  R(x, 0, 60, w, 82, '#241236'); // wall behind machines
+  // THE HOUSE ALWAYS WINS sign
+  R(x, w * 0.5 - 130, 18, 260, 22, '#101018');
+  R(x, w * 0.5 - 130, 18, 260, 2, '#ff5a8a');
+  R(x, w * 0.5 - 130, 38, 260, 2, '#ff5a8a');
+  drawText(x, 'THE HOUSE ALWAYS WINS', w * 0.5 - 122, 26, 1, '#ff5a8a');
+  // slot machine row
+  for (let sx = 10; sx < w; sx += 74) {
+    R(x, sx, 84, 56, 58, '#7a1a2a');
+    R(x, sx, 84, 56, 4, '#93222f');
+    R(x, sx, 84, 4, 58, '#b8860b');
+    R(x, sx + 52, 84, 4, 58, '#b8860b');
+    R(x, sx + 8, 92, 40, 16, '#101018'); // reel window
+    const sy = (sx / 74) % 3;
+    drawText(x, sy === 0 ? '7' : 'G', sx + 13, 96, 2, '#f5c542');
+    drawText(x, sy === 1 ? '7' : 'G', sx + 25, 96, 2, sy === 2 ? '#ff6b6b' : '#f5c542');
+    drawText(x, '7', sx + 37, 96, 2, '#f5c542');
+    R(x, sx + 10, 114, 36, 8, '#b8860b'); // tray
+    R(x, sx + 12, 115, 32, 5, '#f5c542');
+    R(x, sx + 60, 90, 3, 16, '#c8ccd4'); // lever
+    R(x, sx + 58, 86, 7, 6, '#e23b3b');
+    // neon topper
+    R(x, sx + 4, 76, 48, 6, (sx / 74) % 2 ? '#ff5a8a' : '#3fd8d8');
+  }
+  // $GONNA chip garlands
+  for (let gx = 30; gx < w; gx += 200) {
+    R(x, gx, 66, 10, 10, '#f5c542');
+    R(x, gx + 2, 68, 6, 6, '#b8860b');
+    drawText(x, 'G', gx + 2, 68, 1, '#f5c542');
+  }
+  return c;
+}
+
+function s5Ground(len: number): HTMLCanvasElement {
+  const [c, x] = mk(len, 84);
+  // red carpet
+  R(x, 0, 0, len, 84, '#6e1424');
+  R(x, 0, 0, len, 3, '#93222f');
+  R(x, 0, 81, len, 3, '#4a0e1a');
+  // gold trim + diamond pattern
+  R(x, 0, 8, len, 2, '#b8860b');
+  R(x, 0, 74, len, 2, '#b8860b');
+  for (let dx = 8; dx < len; dx += 32) {
+    R(x, dx, 38, 8, 8, '#93222f');
+    R(x, dx + 2, 40, 4, 4, '#b8860b');
+  }
+  // scattered $GONNA chips on the carpet
+  for (let i = 0; i < len / 110; i++) {
+    const cx = rand(0, len);
+    const cy = rand(14, 70);
+    R(x, cx, cy, 6, 4, '#f5c542');
+    R(x, cx + 1, cy + 1, 4, 2, '#b8860b');
+  }
+  return c;
+}
+
+// ---------------- STAGE 6: MOON LAUNCHPAD ----------------
+function s6Far(w: number): HTMLCanvasElement {
+  const [c, x] = mk(w, VH);
+  R(x, 0, 0, w, VH, '#05060f');
+  // starfield
+  for (let i = 0; i < 130; i++) R(x, rand(0, w), rand(0, 130), 1, 1, i % 4 ? '#c8d4f8' : '#7a8ac8');
+  // the Moon (big) + Earth (small, blue)
+  disc(x, w * 0.24, 42, 24, '#d8d4c8');
+  disc(x, w * 0.24 - 7, 36, 6, '#b8b4a8');
+  disc(x, w * 0.24 + 8, 48, 5, '#b8b4a8');
+  disc(x, w * 0.24 - 2, 52, 3, '#a8a498');
+  disc(x, w * 0.68, 30, 11, '#3b6fd4');
+  disc(x, w * 0.68 - 3, 27, 4, '#3fae4a');
+  disc(x, w * 0.68 + 4, 33, 3, '#7fd858');
+  // horizon glow
+  R(x, 0, 128, w, 12, '#101a30');
+  R(x, 0, 140, w, 84, '#0a0e1c');
+  return c;
+}
+
+function s6Mid(w: number): HTMLCanvasElement {
+  const [c, x] = mk(w, VH);
+  // GONNA rocket on the pad (repeats along the stage, launch gantry)
+  for (let rx = 160; rx < w; rx += 620) {
+    // gantry tower
+    R(x, rx - 60, 20, 14, 122, '#2a2f3a');
+    for (let gy = 26; gy < 140; gy += 14) R(x, rx - 58, gy, 10, 2, '#4a4f5c');
+    R(x, rx - 46, 40, 26, 4, '#2a2f3a');
+    R(x, rx - 46, 84, 26, 4, '#2a2f3a');
+    // rocket body
+    R(x, rx, 44, 34, 98, '#e8e4d8');
+    R(x, rx, 44, 34, 10, '#c8ccd4');
+    // nose cone
+    R(x, rx + 4, 26, 26, 18, '#3fae4a');
+    R(x, rx + 10, 16, 14, 10, '#3fae4a');
+    // window
+    R(x, rx + 11, 60, 12, 12, '#101a30');
+    R(x, rx + 13, 62, 8, 8, '#7ecbff');
+    // green $GONNA livery
+    R(x, rx, 84, 34, 6, '#3fae4a');
+    drawText(x, 'GONNA', rx + 3, 96, 1, '#1e6b2a');
+    // fins
+    R(x, rx - 10, 118, 12, 24, '#1e6b2a');
+    R(x, rx + 32, 118, 12, 24, '#1e6b2a');
+    R(x, rx + 8, 140, 18, 4, '#8a8f9c'); // engine
+  }
+  // floodlight poles + countdown sign
+  for (let px = 60; px < w; px += 310) {
+    R(x, px, 60, 4, 82, '#2a2f3a');
+    R(x, px - 6, 54, 16, 8, '#4a4f5c');
+    R(x, px - 4, 56, 4, 4, '#fff6d8');
+    R(x, px + 4, 56, 4, 4, '#fff6d8');
+  }
+  R(x, w * 0.5 - 44, 30, 88, 16, '#101018');
+  drawText(x, 'T-MINUS SOON', w * 0.5 - 38, 35, 1, '#ff5a5a');
+  return c;
+}
+
+function s6Ground(len: number): HTMLCanvasElement {
+  const [c, x] = mk(len, 84);
+  R(x, 0, 0, len, 84, '#2e323e'); // metal deck
+  for (let gx = 0; gx < len; gx += 42) {
+    R(x, gx, 0, 2, 84, '#23262f');
+    for (let ry = 8; ry < 84; ry += 20) R(x, gx + 6, ry, 2, 2, '#3e4350'); // rivets
+  }
+  R(x, 0, 0, len, 3, '#4a4f5c');
+  // hazard stripe band
+  for (let hx = 0; hx < len; hx += 16) {
+    R(x, hx, 76, 8, 6, '#b8860b');
+    R(x, hx + 8, 76, 8, 6, '#101018');
+  }
+  // painted markings
+  for (let mx = 140; mx < len; mx += 420) drawText(x, 'TO THE MOON', mx, 30, 1, '#3e4350');
+  return c;
+}
+
 // ---------------- stage table ----------------
 export function buildStage(idx: number): StageDef {
   if (idx === 0) {
@@ -306,6 +544,8 @@ export function buildStage(idx: number): StageDef {
       len,
       arenaX: len,
       boss: false,
+      bossKind: null,
+      bossTrack: 'boss',
       waves: [
         { triggerX: 120, spawns: ['gecko', 'gecko'] },
         { triggerX: 500, spawns: ['gecko', 'gecko', 'drone'] },
@@ -334,6 +574,8 @@ export function buildStage(idx: number): StageDef {
       len,
       arenaX: len,
       boss: false,
+      bossKind: null,
+      bossTrack: 'boss',
       waves: [
         { triggerX: 120, spawns: ['gecko', 'drone', 'snek'] },
         { triggerX: 500, spawns: ['whale', 'gecko'] },
@@ -356,31 +598,128 @@ export function buildStage(idx: number): StageDef {
       ground: s2Ground(len),
     };
   }
+  if (idx === 2) {
+    const len = 1680;
+    return {
+      name: 'STAGE 3',
+      sub: 'WALL STREET BIZANTINA',
+      track: 'stage3',
+      len,
+      arenaX: len - VW,
+      boss: true,
+      bossKind: 'whale',
+      bossTrack: 'boss',
+      waves: [
+        { triggerX: 120, spawns: ['gecko', 'gecko', 'snek'] },
+        { triggerX: 480, spawns: ['whale', 'drone', 'drone'] },
+        { triggerX: 840, spawns: ['whale', 'snek', 'gecko'] },
+      ],
+      obstacles: [
+        { kind: 'crate', x: 280, y: 170, contains: 'chicken' },
+        { kind: 'drum', x: 420, y: 176, contains: 'none' },
+        { kind: 'can', x: 560, y: 188, contains: 'coinG' }, // whale bait near the brute wave
+        { kind: 'barrel', x: 620, y: 188, contains: 'random' },
+        { kind: 'drum', x: 760, y: 192, contains: 'none' },
+        { kind: 'crate', x: 900, y: 164, contains: 'liz' },
+        { kind: 'safe', x: 1050, y: 180, contains: 'chest' },
+        { kind: 'can', x: 1150, y: 194, contains: 'coinG' },
+      ],
+      far: s3Far(len * 0.3 + VW),
+      mid: s3Mid(len * 0.6 + VW),
+      ground: s3Ground(len),
+    };
+  }
+  if (idx === 3) {
+    const len = 1680;
+    return {
+      name: 'STAGE 4',
+      sub: "SILVIO'S DOJO",
+      track: 'stage4',
+      len,
+      arenaX: len - VW,
+      boss: true,
+      bossKind: 'darkgonna',
+      bossTrack: 'boss',
+      waves: [
+        { triggerX: 120, spawns: ['gecko', 'gecko', 'ninja'] },
+        { triggerX: 480, spawns: ['ninja', 'ninja', 'gecko'] },
+        { triggerX: 840, spawns: ['ninja', 'gecko', 'snek', 'ninja'] },
+        { triggerX: 1120, spawns: ['ninja', 'ninja', 'ninja'] },
+      ],
+      obstacles: [
+        { kind: 'barrel', x: 300, y: 172, contains: 'chicken' },
+        { kind: 'crate', x: 460, y: 164, contains: 'random' },
+        { kind: 'can', x: 640, y: 190, contains: 'coinG' },
+        { kind: 'drum', x: 780, y: 176, contains: 'none' },
+        { kind: 'barrel', x: 980, y: 192, contains: 'random' },
+        { kind: 'crate', x: 1150, y: 168, contains: 'liz' },
+        { kind: 'can', x: 1250, y: 186, contains: 'coinA' },
+      ],
+      far: s4Far(len * 0.3 + VW),
+      mid: s4Mid(len * 0.6 + VW),
+      ground: s4Ground(len),
+    };
+  }
+  if (idx === 4) {
+    const len = 1920;
+    return {
+      name: 'STAGE 5',
+      sub: 'NEON CASINO - THE HOUSE',
+      track: 'stage5',
+      len,
+      arenaX: len - VW,
+      boss: true,
+      bossKind: 'golem',
+      bossTrack: 'boss',
+      waves: [
+        { triggerX: 120, spawns: ['coinsnek', 'snek', 'gecko'] },
+        { triggerX: 500, spawns: ['bouncer', 'coinsnek'] },
+        { triggerX: 920, spawns: ['coinsnek', 'coinsnek', 'snek', 'ninja'] },
+        { triggerX: 1360, spawns: ['bouncer', 'bouncer', 'coinsnek'] },
+      ],
+      obstacles: [
+        { kind: 'chips', x: 300, y: 172, contains: 'coinG' },
+        { kind: 'crate', x: 430, y: 166, contains: 'chicken' },
+        { kind: 'chips', x: 600, y: 190, contains: 'chest' },
+        { kind: 'can', x: 760, y: 186, contains: 'coinG' },
+        { kind: 'chips', x: 1000, y: 168, contains: 'random' },
+        { kind: 'safe', x: 1200, y: 180, contains: 'chest' },
+        { kind: 'chips', x: 1420, y: 192, contains: 'coinG' },
+        { kind: 'barrel', x: 1650, y: 174, contains: 'random' },
+      ],
+      far: s5Far(len * 0.3 + VW),
+      mid: s5Mid(len * 0.6 + VW),
+      ground: s5Ground(len),
+    };
+  }
   const len = 1680;
   return {
-    name: 'STAGE 3',
-    sub: 'WALL STREET BIZANTINA',
-    track: 'stage3',
+    name: 'STAGE 6',
+    sub: 'MOON LAUNCHPAD',
+    track: 'stage6',
     len,
     arenaX: len - VW,
     boss: true,
+    bossKind: 'fud',
+    bossTrack: 'boss2',
     waves: [
-      { triggerX: 120, spawns: ['gecko', 'gecko', 'snek'] },
-      { triggerX: 480, spawns: ['whale', 'drone', 'drone'] },
-      { triggerX: 840, spawns: ['whale', 'snek', 'gecko'] },
+      { triggerX: 120, spawns: ['ninja', 'coinsnek', 'whale'] },
+      { triggerX: 440, spawns: ['bouncer', 'ninja', 'drone'] },
+      { triggerX: 800, spawns: ['whale', 'coinsnek', 'ninja', 'snek'] },
+      { triggerX: 1060, spawns: ['bouncer', 'ninja', 'coinsnek'] },
     ],
     obstacles: [
-      { kind: 'crate', x: 280, y: 170, contains: 'chicken' },
-      { kind: 'drum', x: 420, y: 176, contains: 'none' },
-      { kind: 'can', x: 560, y: 188, contains: 'coinG' }, // whale bait near the brute wave
-      { kind: 'barrel', x: 620, y: 188, contains: 'random' },
-      { kind: 'drum', x: 760, y: 192, contains: 'none' },
-      { kind: 'crate', x: 900, y: 164, contains: 'liz' },
-      { kind: 'safe', x: 1050, y: 180, contains: 'chest' },
-      { kind: 'can', x: 1150, y: 194, contains: 'coinG' },
+      { kind: 'drum', x: 280, y: 174, contains: 'none' }, // fuel drums: explosive
+      { kind: 'crate', x: 420, y: 166, contains: 'chicken' },
+      { kind: 'drum', x: 560, y: 190, contains: 'none' },
+      { kind: 'can', x: 700, y: 188, contains: 'coinG' },
+      { kind: 'drum', x: 880, y: 172, contains: 'none' },
+      { kind: 'safe', x: 1020, y: 180, contains: 'chest' },
+      { kind: 'drum', x: 1150, y: 192, contains: 'none' },
+      { kind: 'barrel', x: 1250, y: 176, contains: 'random' },
     ],
-    far: s3Far(len * 0.3 + VW),
-    mid: s3Mid(len * 0.6 + VW),
-    ground: s3Ground(len),
+    far: s6Far(len * 0.3 + VW),
+    mid: s6Mid(len * 0.6 + VW),
+    ground: s6Ground(len),
   };
 }

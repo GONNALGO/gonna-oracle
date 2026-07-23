@@ -62,8 +62,7 @@ export function drawHud(ctx: CanvasRenderingContext2D, g: GameCtx, score: number
     ctx.fillRect(bx, 204, bw, 5);
     ctx.fillStyle = '#e23b3b';
     ctx.fillRect(bx, 204, (bw * g.boss.hp) / g.boss.maxHp, 5);
-    const name = 'THE WHALE OF WALL STREET';
-    drawTextSh(ctx, name, VW / 2, 193, 1, '#f5c542', 'center');
+    drawTextSh(ctx, g.boss.name, VW / 2, 193, 1, '#f5c542', 'center');
   }
 
   // ---- GO arrow ----

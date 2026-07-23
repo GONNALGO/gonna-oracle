@@ -7,9 +7,12 @@ import type { Art } from './sprites';
 import { Player } from './player';
 import { Enemy } from './enemies';
 import type { EnemyKind } from './enemies';
-import { Boss } from './boss';
+import type { BossLike } from './boss';
+import { makeBoss } from './bosses';
 import { Item, Obstacle } from './items';
 import type { ItemKind } from './items';
+import { Proj } from './proj';
+import type { ProjKind } from './proj';
 import { buildStage } from './stages';
 import type { StageDef } from './stages';
 import { clamp, LANE_TOP, rand, VH, VW } from './types';
@@ -21,7 +24,7 @@ import type { Tally } from './screens';
 
 type Scene = 'title' | 'intro' | 'play' | 'clear' | 'gameover' | 'continue' | 'victory';
 
-type Drawable = Player | Enemy | Boss | Item | Obstacle;
+type Drawable = Player | Enemy | BossLike | Item | Obstacle | Proj;
 
 export class Game implements GameCtx {
   audio = new AudioSys();
@@ -31,9 +34,10 @@ export class Game implements GameCtx {
   frames: Map<string, HTMLImageElement>;
   player = new Player();
   enemies: Enemy[] = [];
-  boss: Boss | null = null;
+  boss: BossLike | null = null;
   items: Item[] = [];
   obstacles: Obstacle[] = [];
+  projs: Proj[] = [];
   camX = 0;
   stageLen = 1920;
 
@@ -59,6 +63,7 @@ export class Game implements GameCtx {
   private tallyApplied = false;
   private continueCount = 9;
   private bossSpawned = false;
+  private finalVictory = false;
   private titleTrack = false;
   private drawList: Drawable[] = [];
 
@@ -66,6 +71,7 @@ export class Game implements GameCtx {
     this.ctx = ctx;
     this.art = art;
     this.frames = frames;
+    for (let i = 0; i < 48; i++) this.projs.push(new Proj());
     this.input.anyKey = () => {
       this.audio.ensure();
       if (this.scene === 'title' && !this.titleTrack) {
@@ -111,6 +117,10 @@ export class Game implements GameCtx {
       this.items.push(new Item('coinG', x + rand(-10, 10), clamp(y + rand(-6, 6), LANE_TOP, 205), true));
     }
   }
+  spawnProj(kind: ProjKind, x: number, y: number, vx: number): void {
+    const pr = this.projs.find((q) => !q.on);
+    if (pr) pr.spawn(kind, x, y, vx);
+  }
 
   // ---------- debug hooks (window.__gonna) ----------
   get carriedObject(): Obstacle | null {
@@ -122,6 +132,40 @@ export class Game implements GameCtx {
   get objects(): Obstacle[] {
     return this.obstacles;
   }
+  get sceneName(): string {
+    return this.scene;
+  }
+  get stageNo(): number {
+    return this.stageIdx;
+  }
+  get stageTitle(): string {
+    return this.stage ? this.stage.name + ' - ' + this.stage.sub : '';
+  }
+  get waveNo(): number {
+    return this.waveIdx;
+  }
+  get victoryIsFinal(): boolean {
+    return this.finalVictory;
+  }
+  debugStage(idx: number): void {
+    this.stageIdx = idx;
+    this.loadStage(idx);
+    this.setScene('intro');
+  }
+  debugWarp(x: number): void {
+    this.player.x = x;
+    this.player.z = 0;
+    this.player.vx = 0;
+    this.camX = clamp(x - 150, 0, Math.max(0, this.stageLen - VW));
+  }
+  debugKillEnemies(): void {
+    for (const e of this.enemies) {
+      if (e.alive) e.hurt({ dmg: 9999, kb: 2, down: true, dir: 1, pierce: true }, this);
+    }
+  }
+  debugHurtBoss(dmg: number): void {
+    if (this.boss) this.boss.hurt({ dmg, kb: 0, down: false, dir: 1 }, this);
+  }
 
   // ---------- scene flow ----------
   private startNewGame(): void {
@@ -129,6 +173,7 @@ export class Game implements GameCtx {
     this.kos = 0;
     this.totalFrames = 0;
     this.stageIdx = 0;
+    this.finalVictory = false;
     this.player.lives = 2;
     this.loadStage(0);
     this.scene = 'intro';
@@ -153,6 +198,7 @@ export class Game implements GameCtx {
     this.stageScoreStart = this.score;
     this.goArrow = false;
     this.fx.reset();
+    for (const pr of this.projs) pr.on = false;
     this.player.reset(60, 178);
   }
 
@@ -228,7 +274,7 @@ export class Game implements GameCtx {
           this.player.z = 0;
           this.player.invuln = 120;
           this.setScene('play');
-          if (this.stage) this.audio.playTrack(this.boss ? 'boss' : this.stage.track);
+          if (this.stage) this.audio.playTrack(this.boss ? this.stage.bossTrack : this.stage.track);
           this.audio.uiSelect();
         } else if (this.continueCount < 0) {
           this.setScene('title');
@@ -275,9 +321,15 @@ export class Game implements GameCtx {
     if (this.boss) this.boss.update(this);
     for (const it of this.items) it.update();
     for (const o of this.obstacles) o.update(this);
+    for (const pr of this.projs) pr.update(this);
 
     this.resolveCombat();
     this.separateEnemies();
+
+    // boss death slow-mo (EMPEROR FUD gets the long one)
+    if (this.boss && this.boss.state === 'dead' && this.boss.t === 0 && this.boss.slowmo > 0) {
+      this.slowmoT = this.boss.slowmo;
+    }
 
     // pickups
     for (const it of this.items) {
@@ -293,9 +345,12 @@ export class Game implements GameCtx {
     for (const e of this.enemies) {
       if (e.state === 'dead' && e.t === 1) {
         this.kos++;
-        this.dropCoins(e.x, e.y, e.kind === 'whale' ? 5 : 2 + Math.floor(rand(0, 3)));
+        this.dropCoins(e.x, e.y, e.kind === 'whale' || e.kind === 'bouncer' ? 5 : 2 + Math.floor(rand(0, 3)));
         if (e.kind === 'snek') this.dropItem('knife', e.x, e.y);
-        else if (Math.random() < 0.15) this.dropItem(Math.random() < 0.5 ? 'chicken' : 'coinA', e.x, e.y);
+        else if (e.kind === 'coinsnek') {
+          this.dropItem('coinG', e.x, e.y); // COIN SNEK leaves $GONNA
+          this.dropCoins(e.x, e.y, 3);
+        } else if (Math.random() < 0.15) this.dropItem(Math.random() < 0.5 ? 'chicken' : 'coinA', e.x, e.y);
       }
     }
     this.enemies = this.enemies.filter((e) => !e.removeMe);
@@ -324,12 +379,18 @@ export class Game implements GameCtx {
       this.stageClear();
     }
 
-    // boss defeat -> victory
+    // boss defeat -> stage clear tally (final boss -> FINAL VICTORY)
     if (this.boss && this.boss.removeMe) {
+      const wasFinal = this.stage?.bossKind === 'fud';
       this.boss = null;
-      this.setScene('victory');
-      this.audio.stopMusic();
-      this.audio.fanfare();
+      if (wasFinal) {
+        this.finalVictory = true;
+        this.setScene('victory');
+        this.audio.stopMusic();
+        this.audio.fanfare();
+      } else {
+        this.stageClear();
+      }
     }
 
     this.fx.update();
@@ -452,8 +513,8 @@ export class Game implements GameCtx {
     // boss trigger
     if (this.stage.boss && !this.bossSpawned && this.camX >= this.stage.arenaX - 1) {
       this.bossSpawned = true;
-      this.boss = new Boss(this.camX + VW + 70);
-      this.audio.playTrack('boss');
+      this.boss = makeBoss(this.stage.bossKind ?? 'whale', this.camX + VW + 70);
+      this.audio.playTrack(this.stage.bossTrack);
       this.goArrow = false;
       return;
     }
@@ -509,7 +570,7 @@ export class Game implements GameCtx {
       return;
     }
     if (this.scene === 'victory') {
-      drawVictory(c, { score: this.score, timeFrames: this.totalFrames, kos: this.kos }, this.sceneT);
+      drawVictory(c, { score: this.score, timeFrames: this.totalFrames, kos: this.kos }, this.sceneT, this.finalVictory);
       return;
     }
     if (!this.stage) return;
@@ -529,6 +590,7 @@ export class Game implements GameCtx {
     for (const o of this.obstacles) dl.push(o);
     for (const it of this.items) dl.push(it);
     for (const e of this.enemies) dl.push(e);
+    for (const pr of this.projs) if (pr.on) dl.push(pr);
     if (this.boss) dl.push(this.boss);
     dl.push(this.player);
     dl.sort((a, b) => a.y - b.y);
@@ -548,6 +610,6 @@ export class Game implements GameCtx {
     if (this.scene === 'clear') drawClear(c, this.tally, this.score);
     if (this.scene === 'gameover') drawGameOver(c, this.sceneT);
     if (this.scene === 'continue') drawContinue(c, this.continueCount, this.sceneT);
-    if (this.boss && !this.boss.alive) drawMarketCap(c, this.boss.t);
+    if (this.boss && !this.boss.alive) drawMarketCap(c, this.boss.t, this.boss.deathLine);
   }
 }

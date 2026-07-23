@@ -1,9 +1,49 @@
-// THE WHALE OF WALL STREET — Stage 3 boss.
+// THE WHALE OF WALL STREET — Stage 3 boss. Also defines the shared boss contract.
 import { clamp, GRAV, LANE_BOT, LANE_TOP } from './types';
 import type { Facing, HitInfo } from './types';
 import type { GameCtx } from './ctx';
 
 export type BState = 'intro' | 'idle' | 'swing' | 'flop' | 'summon' | 'stun' | 'dead';
+
+export type BossKind = 'whale' | 'darkgonna' | 'golem' | 'fud';
+
+export interface BossAttack {
+  x0: number;
+  x1: number;
+  laneTol: number;
+  dmg: number;
+  kb: number;
+  down: boolean;
+}
+
+// Contract every boss implements (HP bar w/ name, intro text, arena cam lock,
+// slow-mo death, phase summons — wired in engine/hud).
+export interface BossLike {
+  x: number;
+  y: number;
+  z: number;
+  face: Facing;
+  hp: number;
+  maxHp: number;
+  state: string;
+  t: number;
+  animT: number;
+  flashT: number;
+  hitPlayer: boolean;
+  lastHitId: number;
+  swingId: number;
+  alive: boolean;
+  removeMe: boolean;
+  readonly kind: BossKind;
+  readonly name: string; // shown on the HP bar
+  readonly introLine: string; // popup when the fight starts
+  readonly deathLine: string; // overlay text while dying
+  readonly slowmo: number; // slow-mo frames on death (0 = none)
+  hurt(hit: HitInfo, g: GameCtx): boolean;
+  attackBox(): BossAttack | null;
+  update(g: GameCtx): void;
+  draw(ctx2d: CanvasRenderingContext2D, g: GameCtx): void;
+}
 
 export class Boss {
   x: number;
@@ -27,6 +67,11 @@ export class Boss {
   lastHitId = 0;
   alive = true;
   removeMe = false;
+  readonly kind: BossKind = 'whale';
+  readonly name = 'THE WHALE OF WALL STREET';
+  readonly introLine = 'YOUR COINS. MY OCEAN.';
+  readonly deathLine = 'MARKET CAP REACHED!';
+  readonly slowmo = 0;
 
   constructor(x: number) {
     this.x = x;
@@ -65,7 +110,7 @@ export class Boss {
     return true;
   }
 
-  attackBox(): { x0: number; x1: number; laneTol: number; dmg: number; kb: number; down: boolean } | null {
+  attackBox(): BossAttack | null {
     if (!this.alive) return null;
     if (this.state === 'swing' && this.t >= 26 && this.t <= 33) {
       const reach = 74;
@@ -88,6 +133,7 @@ export class Boss {
 
     switch (this.state) {
       case 'intro': {
+        if (this.t === 1) g.fx.popup(this.x - 40, this.y - 130, this.introLine, '#f5c542', 110);
         this.x -= 1.1;
         if (this.t > 70) this.set('idle');
         break;

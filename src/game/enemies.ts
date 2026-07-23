@@ -5,7 +5,7 @@ import type { GameCtx } from './ctx';
 import { blockObjects } from './items';
 import type { Obstacle } from './items';
 
-export type EnemyKind = 'gecko' | 'drone' | 'whale' | 'snek';
+export type EnemyKind = 'gecko' | 'drone' | 'whale' | 'snek' | 'ninja' | 'coinsnek' | 'bouncer';
 
 export type EState =
   | 'enter' | 'seek' | 'attack' | 'recover' | 'reposition'
@@ -24,7 +24,14 @@ const STATS: Record<EnemyKind, Stats> = {
   drone: { hp: 15, spd: 0.9, dmg: 8, range: 60, score: 150 },
   whale: { hp: 60, spd: 0.42, dmg: 12, range: 64, score: 400 },
   snek: { hp: 25, spd: 1.05, dmg: 7, range: 66, score: 200 },
+  ninja: { hp: 30, spd: 1.25, dmg: 7, range: 30, score: 250 }, // NINJA GECKO (v3)
+  coinsnek: { hp: 25, spd: 0.95, dmg: 8, range: 92, score: 250 }, // COIN SNEK (v3)
+  bouncer: { hp: 60, spd: 0.55, dmg: 12, range: 64, score: 500 }, // BOUNCER WHALE (v3)
 };
+
+function isBrute(k: EnemyKind): boolean {
+  return k === 'whale' || k === 'bouncer';
+}
 
 let eSwing = 10000;
 
@@ -76,8 +83,8 @@ export class Enemy {
     if (!this.alive || this.state === 'dead') return false;
     if (this.state === 'down' && this.z <= 0) return false; // lying: invulnerable (FF style)
     if (this.invuln > 0) return false;
-    // whale blocks frontal hits sometimes (thrown objects & explosions pierce)
-    if (!hit.pierce && this.kind === 'whale' && this.state === 'seek' && hit.dir !== this.face && chance(0.25)) {
+    // brutes block frontal hits sometimes (thrown objects & explosions pierce)
+    if (!hit.pierce && isBrute(this.kind) && this.state === 'seek' && hit.dir !== this.face && chance(0.25)) {
       this.set('block');
       g.audio.block();
       g.fx.spark(this.x + this.face * 14, this.y - 36, false);
@@ -160,26 +167,27 @@ export class Enemy {
     if (this.state === 'thrown') return false; // handled vs enemies
     if (this.kind === 'gecko') return this.state === 'attack' && this.t >= 12 && this.t <= 15;
     if (this.kind === 'snek') return this.state === 'attack' && this.t >= 8 && this.t <= 22;
-    if (this.kind === 'whale') return this.state === 'attack' && this.t >= 24 && this.t <= 60;
+    if (isBrute(this.kind)) return this.state === 'attack' && this.t >= 24 && this.t <= 60;
     if (this.kind === 'drone') return this.state === 'attack' && this.t >= 18;
-    return false;
+    if (this.kind === 'ninja') return this.state === 'attack' && this.t >= 6 && this.t <= 24;
+    return false; // coinsnek spits projectiles instead
   }
 
   attackReach(): { x0: number; x1: number; laneTol: number; dmg: number; kb: number; down: boolean } {
     const s = STATS[this.kind];
-    if (this.kind === 'whale') {
+    if (isBrute(this.kind)) {
       return { x0: this.x - 16, x1: this.x + 16, laneTol: 14, dmg: s.dmg, kb: 4, down: true };
     }
     if (this.kind === 'drone') {
       return { x0: this.x - 14, x1: this.x + 14, laneTol: 16, dmg: s.dmg, kb: 3, down: true };
     }
-    const reach = this.kind === 'snek' ? 30 : 24;
+    const reach = this.kind === 'snek' ? 30 : this.kind === 'ninja' ? 28 : 24;
     return {
       x0: this.face === 1 ? this.x : this.x - reach,
       x1: this.face === 1 ? this.x + reach : this.x,
-      laneTol: this.kind === 'snek' ? 12 : 11,
+      laneTol: this.kind === 'snek' || this.kind === 'ninja' ? 12 : 11,
       dmg: s.dmg,
-      kb: this.kind === 'snek' ? 3 : 1.5,
+      kb: this.kind === 'snek' ? 3 : this.kind === 'ninja' ? 2 : 1.5,
       down: this.kind === 'snek',
     };
   }
@@ -214,6 +222,8 @@ export class Enemy {
         const wantX = this.kind === 'gecko' ? st.range - 4 : st.range;
         if (Math.abs(dx) > wantX) {
           this.x += Math.sign(dx) * st.spd;
+        } else if (this.kind === 'coinsnek' && Math.abs(dx) < 56) {
+          this.x -= Math.sign(dx) * st.spd * 0.7; // keep spitting distance
         }
         this.x = clamp(this.x, g.camX - 30, g.camX + VW + 30);
         // hover bob for drone
@@ -229,8 +239,13 @@ export class Enemy {
             this.diveTX = p.x;
             this.diveTY = p.y;
           }
-        } else if (this.kind === 'whale' && this.atkCd <= 0 && p.state !== 'dead' && this.grabCan(g)) {
-          // whale picked up a trash can -> windup state set inside grabCan
+        } else if (isBrute(this.kind) && this.atkCd <= 0 && p.state !== 'dead' && this.grabCan(g)) {
+          // brute picked up a trash can -> windup state set inside grabCan
+        } else if (this.kind === 'ninja' && this.atkCd <= 0 && chance(0.012)) {
+          // lane hop
+          this.set('reposition');
+          this.vy = chance(0.5) ? 1 : -1;
+          this.vz = 2.6;
         } else if (this.atkCd <= 0 && chance(0.004)) {
           this.set('reposition');
           this.vy = chance(0.5) ? 1 : -1;
@@ -238,12 +253,17 @@ export class Enemy {
         break;
       }
       case 'reposition': {
-        this.y = clamp(this.y + this.vy * st.spd, LANE_TOP, LANE_BOT);
+        this.y = clamp(this.y + this.vy * st.spd * (this.kind === 'ninja' ? 1.7 : 1), LANE_TOP, LANE_BOT);
         if (this.kind === 'drone') {
           this.hoverPhase += 0.08;
           this.z = 24 + Math.sin(this.hoverPhase) * 5;
         }
-        if (this.t > 50) { this.set('seek'); this.atkCd = 20; }
+        if (this.kind === 'ninja') {
+          // lane hop: quick arc between lanes
+          this.vz -= GRAV;
+          this.z = Math.max(0, this.z + this.vz);
+          if (this.t > 26) { this.z = 0; this.vz = 0; this.set('seek'); this.atkCd = 14; }
+        } else if (this.t > 50) { this.set('seek'); this.atkCd = 20; }
         break;
       }
       case 'attack': {
@@ -253,10 +273,22 @@ export class Enemy {
           // dash forward with blade
           if (this.t >= 8 && this.t <= 22) this.x += this.face * 4.6;
           if (this.t >= 34) { this.set('recover'); this.atkCd = 50 + Math.random() * 40; }
-        } else if (this.kind === 'whale') {
+        } else if (this.kind === 'ninja') {
+          // dash + double hit (second window re-arms at t 15)
+          if (this.t >= 6 && this.t <= 24) this.x += this.face * 4.4;
+          if (this.t === 15) this.hitPlayer = false;
+          if (this.t >= 32) { this.set('recover'); this.atkCd = 36 + Math.random() * 26; }
+        } else if (this.kind === 'coinsnek') {
+          // spit a $GONNA coin
+          if (this.t === 10) {
+            g.spawnProj('coin', this.x + this.face * 16, this.y, this.face * 3.4);
+            g.audio.swing();
+          }
+          if (this.t >= 28) { this.set('recover'); this.atkCd = 80 + Math.random() * 50; }
+        } else if (isBrute(this.kind)) {
           // charge
           if (this.t >= 24 && this.t <= 60) {
-            this.x += this.face * 3.2;
+            this.x += this.face * (this.kind === 'bouncer' ? 4.2 : 3.2);
             if (this.t % 6 === 0) g.fx.ring(this.x, this.y, 10, '#8a8f9c');
           }
           if (this.t >= 88) { this.set('recover'); this.atkCd = 70 + Math.random() * 40; }
@@ -290,7 +322,7 @@ export class Enemy {
         if (this.kind === 'drone' && this.z < 24) {
           this.z += 1.4; // rise back
         }
-        if (this.t >= (this.kind === 'whale' ? 30 : 18)) this.set('seek');
+        if (this.t >= (isBrute(this.kind) ? 30 : 18)) this.set('seek');
         break;
       }
       case 'block': {
@@ -412,6 +444,16 @@ export class Enemy {
         if (this.state === 'block' || this.state === 'windup') return a.whale[3];
         if (this.state === 'attack' && this.t >= 20) return a.whale[2];
         return a.whale[wk];
+      case 'bouncer':
+        if (this.state === 'block' || this.state === 'windup') return a.bouncer[3];
+        if (this.state === 'attack' && this.t >= 20) return a.bouncer[2];
+        return a.bouncer[wk];
+      case 'ninja':
+        if (this.state === 'attack' && this.t >= 4) return a.ninja[2];
+        return a.ninja[wk];
+      case 'coinsnek':
+        if (this.state === 'attack' && this.t >= 4 && this.t <= 18) return a.coinsnek[2];
+        return a.coinsnek[wk];
       case 'snek':
         if (this.state === 'attack' && this.t >= 6 && this.t <= 24) return a.snek[2];
         return a.snek[wk];
@@ -427,7 +469,7 @@ export class Enemy {
     // shadow
     ctx2d.globalAlpha = clamp(0.35 - this.z / 220, 0.06, 0.35) * alpha;
     ctx2d.fillStyle = '#000';
-    const shw = this.kind === 'whale' ? 24 : this.kind === 'snek' ? 18 : 14;
+    const shw = isBrute(this.kind) ? 24 : this.kind === 'snek' || this.kind === 'coinsnek' ? 18 : 14;
     ctx2d.beginPath();
     ctx2d.ellipse(sx, this.y + 2, shw, 4.5, 0, 0, Math.PI * 2);
     ctx2d.fill();
@@ -457,7 +499,7 @@ export class Enemy {
     }
 
     // hp pip bar for brutes
-    if (this.kind === 'whale' && this.alive && this.hp < this.maxHp) {
+    if (isBrute(this.kind) && this.alive && this.hp < this.maxHp) {
       ctx2d.fillStyle = '#101018';
       ctx2d.fillRect(sx - 16, sy - 70, 32, 4);
       ctx2d.fillStyle = '#e23b3b';

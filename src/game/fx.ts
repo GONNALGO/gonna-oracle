@@ -83,13 +83,13 @@ export class FX {
     }
   }
 
-  popup(x: number, y: number, txt: string, c = '#fff'): void {
+  popup(x: number, y: number, txt: string, c = '#fff', life = 42): void {
     const p = this.pops.find((q) => !q.on);
     if (!p) return;
     p.on = true;
     p.x = x; p.y = y;
-    p.vy = -0.7;
-    p.life = 42;
+    p.vy = -0.35;
+    p.life = life;
     p.txt = txt;
     p.c = c;
   }

@@ -4,7 +4,7 @@ import { GRAV, LANE_BOT, LANE_TOP, rand } from './types';
 import type { GameCtx } from './ctx';
 
 export type ItemKind = 'chicken' | 'coinG' | 'coinA' | 'liz' | 'knife' | 'chest';
-export type ObstacleKind = 'can' | 'barrel' | 'crate' | 'safe' | 'drum';
+export type ObstacleKind = 'can' | 'barrel' | 'crate' | 'safe' | 'drum' | 'chips';
 export type ObstacleMode = 'idle' | 'held' | 'thrown';
 
 export interface ObCfg {
@@ -26,6 +26,7 @@ export const OB_CFG: Record<ObstacleKind, ObCfg> = {
   crate: { hp: 1, liftable: true, throwDmg: 20, throwSpd: 5.4, throwRange: 340, halfW: 11, laneHalf: 13, jumpClear: 20, c1: '#a5723c', c2: '#8a5a2a' },
   safe: { hp: 3, liftable: false, throwDmg: 0, throwSpd: 0, throwRange: 0, halfW: 13, laneHalf: 30, jumpClear: 26, c1: '#8a8f9c', c2: '#5a5f6c' },
   drum: { hp: 1, liftable: true, throwDmg: 40, throwSpd: 4.4, throwRange: 280, halfW: 10, laneHalf: 13, jumpClear: 22, c1: '#b33a2a', c2: '#f5c542' },
+  chips: { hp: 1, liftable: true, throwDmg: 10, throwSpd: 5.6, throwRange: 260, halfW: 9, laneHalf: 12, jumpClear: 16, c1: '#f5c542', c2: '#b8860b' },
 };
 
 // swing ids for thrown obstacles (player punches use small ints, enemies 10000+)

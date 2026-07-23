@@ -98,10 +98,54 @@ export interface FinalStats {
   kos: number;
 }
 
-export function drawVictory(ctx: CanvasRenderingContext2D, stats: FinalStats, t: number): void {
+export function drawVictory(ctx: CanvasRenderingContext2D, stats: FinalStats, t: number, final = false): void {
   ctx.fillStyle = '#070a14';
   ctx.fillRect(0, 0, VW, VH);
   mosaicBorder(ctx);
+  if (final) {
+    // FINAL VICTORY: rocket launch + credits
+    ctx.fillStyle = '#0a0e1c';
+    ctx.fillRect(0, 150, VW, 74);
+    for (let i = 0; i < 40; i++) {
+      ctx.fillStyle = i % 3 ? '#c8d4f8' : '#7a8ac8';
+      ctx.fillRect((i * 97) % VW, (i * 53) % 130, 1, 1);
+    }
+    // rocket climbs as t grows
+    const ry = 168 - Math.min(150, Math.max(0, t - 20) * 1.1);
+    const rx = VW / 2 - 90;
+    ctx.fillStyle = '#e8e4d8';
+    ctx.fillRect(rx, ry - 40, 16, 40);
+    ctx.fillStyle = '#3fae4a';
+    ctx.fillRect(rx + 2, ry - 52, 12, 12);
+    ctx.fillStyle = '#101a30';
+    ctx.fillRect(rx + 5, ry - 34, 6, 6);
+    ctx.fillStyle = '#1e6b2a';
+    ctx.fillRect(rx - 5, ry - 12, 6, 12);
+    ctx.fillRect(rx + 15, ry - 12, 6, 12);
+    // exhaust
+    const fl = 8 + ((t >> 2) & 3) * 3;
+    ctx.fillStyle = '#f5c542';
+    ctx.fillRect(rx + 3, ry, 10, fl);
+    ctx.fillStyle = '#ff8a3c';
+    ctx.fillRect(rx + 5, ry, 6, fl + 5);
+    drawTextSh(ctx, 'FUD ELIMINATED.', VW / 2, 26, 2, '#e23b3b', 'center');
+    drawTextSh(ctx, 'TO THE MOON.', VW / 2, 46, 2, '#f5c542', 'center');
+    const secs = Math.floor(stats.timeFrames / 60);
+    const mm = Math.floor(secs / 60);
+    const ss = String(secs % 60).padStart(2, '0');
+    drawTextSh(ctx, 'SCORE ' + String(stats.score).padStart(8, '0'), VW / 2 + 60, 70, 1, '#f5c542', 'center');
+    drawTextSh(ctx, 'TIME ' + mm + ':' + ss + '  REKT ' + stats.kos, VW / 2 + 60, 82, 1, '#c8ccd4', 'center');
+    if (t > 90) {
+      drawTextSh(ctx, 'GONNA FIGHT', VW / 2 + 60, 104, 2, '#7fd858', 'center');
+      drawTextSh(ctx, 'GONNA + THE BYZANTINES', VW / 2 + 60, 124, 1, '#f5c542', 'center');
+      drawTextSh(ctx, 'A GONNAVERSE PRODUCTION', VW / 2 + 60, 138, 1, '#8a8f9c', 'center');
+      drawTextSh(ctx, 'STARRING GONNA AS HIMSELF', VW / 2 + 60, 152, 1, '#8a8f9c', 'center');
+      drawTextSh(ctx, 'WHALE - DARK GONNA - SLOT GOLEM - FUD', VW / 2 + 60, 166, 1, '#8a8f9c', 'center');
+      drawTextSh(ctx, 'THANK YOU FOR PLAYING', VW / 2 + 60, 184, 1, '#7fd858', 'center');
+    }
+    if (t > 200 && (t & 32) !== 0) drawTextSh(ctx, 'PRESS ENTER', VW / 2, 206, 1, '#ffffff', 'center');
+    return;
+  }
   // golden rays
   ctx.fillStyle = '#14100a';
   for (let i = 0; i < 8; i++) ctx.fillRect(0, 30 + i * 22, VW, 8);
@@ -124,8 +168,8 @@ export function drawVictory(ctx: CanvasRenderingContext2D, stats: FinalStats, t:
   if (t > 120 && (t & 32) !== 0) drawTextSh(ctx, 'PRESS ENTER', VW / 2, 202, 1, '#ffffff', 'center');
 }
 
-export function drawMarketCap(ctx: CanvasRenderingContext2D, t: number): void {
+export function drawMarketCap(ctx: CanvasRenderingContext2D, t: number, line = 'MARKET CAP REACHED!'): void {
   if (t > 20 && (t & 8) !== 0) {
-    drawTextSh(ctx, 'MARKET CAP REACHED!', VW / 2, 60, 2, '#f5c542', 'center');
+    drawTextSh(ctx, line, VW / 2, 60, 2, '#f5c542', 'center');
   }
 }
