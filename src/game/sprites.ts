@@ -38,7 +38,7 @@ function R(x: Ctx, px: number, py: number, w: number, h: number, c: string): voi
 
 // ---------------- player frames ----------------
 export async function loadFrames(): Promise<Map<string, HTMLImageElement>> {
-  const manifest = (await (await fetch('/frames/manifest.json')).json()) as { file: string; row: number; col: number }[];
+  const manifest = (await (await fetch('frames/manifest.json')).json()) as { file: string; row: number; col: number }[];
   const map = new Map<string, HTMLImageElement>();
   await Promise.all(
     manifest.map(
@@ -50,7 +50,7 @@ export async function loadFrames(): Promise<Map<string, HTMLImageElement>> {
             resolve();
           };
           img.onerror = () => reject(new Error('frame load failed: ' + m.file));
-          img.src = '/frames/' + m.file;
+          img.src = 'frames/' + m.file;
         }),
     ),
   );
