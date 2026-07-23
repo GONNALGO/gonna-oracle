@@ -1,13 +1,15 @@
-// GONNA — the player. States, combos, grab/throw, jump, special, anchored frames.
+// GONNA — the player. States, combos, grab/throw, jump, special, carry, anchored frames.
 import { clamp, GRAV, LANE_BOT, LANE_TOP, VW } from './types';
 import type { Facing, HitInfo } from './types';
 import type { GameCtx } from './ctx';
 import type { Enemy } from './enemies';
+import { blockObjects } from './items';
+import type { Obstacle } from './items';
 
 export type PState =
   | 'idle' | 'walk' | 'punch' | 'kick' | 'jump' | 'jumpkick'
   | 'hurt' | 'down' | 'getup' | 'grab' | 'knee' | 'throw'
-  | 'special' | 'dead' | 'victory';
+  | 'special' | 'dead' | 'victory' | 'carry';
 
 const SCALE = 0.55; // source frames are ~2x game size
 const IDLE_FR = ['0_0', '0_1', '0_3', '0_5'];
@@ -51,6 +53,7 @@ export class Player {
   knees = 0;
   airAtk = false;
   withKnife = false;
+  carrying: Obstacle | null = null; // lane object held overhead (v2)
 
   reset(x: number, y: number): void {
     this.x = x; this.y = y; this.z = 0;
@@ -63,6 +66,7 @@ export class Player {
     this.t = 0; this.invuln = 0; this.flashT = 0;
     this.combo = 0; this.queued = false;
     this.held = null; this.knees = 0; this.airAtk = false;
+    this.carrying = null;
   }
 
   get onGround(): boolean { return this.z <= 0; }
@@ -79,6 +83,7 @@ export class Player {
   hurt(hit: HitInfo, g: GameCtx): boolean {
     if (this.invuln > 0 || this.state === 'dead' || this.state === 'down' || this.state === 'getup' || this.state === 'victory') return false;
     if (this.state === 'grab' || this.state === 'knee') this.releaseHeld(g, false);
+    if (this.carrying) this.setDown(g); // drop the object when hit
     this.hp -= hit.dmg;
     this.flashT = 8;
     g.fx.spark(this.x, this.y - 40, true);
@@ -160,8 +165,10 @@ export class Player {
         let dx = (inp.down.right ? 1 : 0) - (inp.down.left ? 1 : 0);
         let dy = (inp.down.down ? 1 : 0) - (inp.down.up ? 1 : 0);
         if (dx !== 0 && dy !== 0) { dx *= 0.8; dy *= 0.8; }
+        const oldX = this.x;
         this.x = clamp(this.x + dx * 1.4, g.camX + 12, Math.min(g.camX + VW - 12, g.stageLen - 10));
         this.y = clamp(this.y + dy * 1.0, LANE_TOP, LANE_BOT);
+        this.x = blockObjects(g.obstacles, oldX, this.x, this.y, this.z);
         if (dx !== 0) this.face = dx > 0 ? 1 : -1;
         this.state = dx !== 0 || dy !== 0 ? 'walk' : 'idle';
 
@@ -187,12 +194,46 @@ export class Player {
             e.getHeld(g);
             g.audio.grab();
           } else {
-            this.startPunch(1, g);
+            // lift check: DOWN+Z near an object, or Z while touching it
+            const o = this.findLiftable(g);
+            if (o) this.lift(o, g);
+            else this.startPunch(1, g);
           }
         } else if (inp.pressed.kick) {
           this.set('kick');
           this.swingId = swingCounter++;
           g.audio.swing();
+        }
+        break;
+      }
+
+      case 'carry': {
+        if (!this.carrying) { this.set('idle'); break; }
+        let dx = (inp.down.right ? 1 : 0) - (inp.down.left ? 1 : 0);
+        let dy = (inp.down.down ? 1 : 0) - (inp.down.up ? 1 : 0);
+        if (dx !== 0 && dy !== 0) { dx *= 0.8; dy *= 0.8; }
+        const oldX = this.x;
+        // walk speed -40% while hauling
+        this.x = clamp(this.x + dx * 1.4 * 0.6, g.camX + 12, Math.min(g.camX + VW - 12, g.stageLen - 10));
+        this.y = clamp(this.y + dy * 1.0 * 0.6, LANE_TOP, LANE_BOT);
+        this.x = blockObjects(g.obstacles, oldX, this.x, this.y, this.z);
+        if (dx !== 0) this.face = dx > 0 ? 1 : -1;
+        if (inp.pressed.jump) {
+          this.setDown(g); // object drops, then jump
+          this.set('jump');
+          this.vz = 4.6;
+          this.airAtk = false;
+          g.audio.jump();
+        } else if (inp.pressed.punch) {
+          this.setDown(g); // Z: set down gently
+          this.set('idle');
+        } else if (inp.pressed.kick) {
+          // X: THROW forward along the lane
+          const o = this.carrying;
+          this.carrying = null;
+          o.y = this.y;
+          o.launch(this.face, false, g);
+          this.set('throw');
         }
         break;
       }
@@ -348,6 +389,37 @@ export class Player {
     return null;
   }
 
+  // ---------- lane objects: lift / carry / throw ----------
+  private findLiftable(g: GameCtx): Obstacle | null {
+    const inp = g.input;
+    for (const o of g.obstacles) {
+      if (o.mode !== 'idle' || o.removeMe || !o.cfg.liftable) continue;
+      const dx = Math.abs(o.x - this.x);
+      if (Math.abs(o.y - this.y) >= 12) continue;
+      if (dx < o.cfg.halfW + 14 && (inp.down.down || dx <= o.cfg.halfW + 8)) return o;
+    }
+    return null;
+  }
+
+  private lift(o: Obstacle, g: GameCtx): void {
+    o.mode = 'held';
+    this.carrying = o;
+    this.face = o.x >= this.x ? 1 : -1;
+    this.set('carry');
+    g.audio.lift();
+    g.fx.popup(this.x, this.y - 76, 'X THROW / Z DROP', '#c8ccd4');
+  }
+
+  setDown(g: GameCtx): void {
+    const o = this.carrying;
+    if (!o) return;
+    this.carrying = null;
+    o.mode = 'idle';
+    o.x = clamp(this.x + this.face * (o.cfg.halfW + 8), 12, g.stageLen - 12);
+    o.y = this.y;
+    g.audio.land();
+  }
+
   // ---------- draw ----------
   draw(ctx2d: CanvasRenderingContext2D, g: GameCtx): void {
     const sx = Math.round(this.x - g.camX);
@@ -376,6 +448,7 @@ export class Player {
       case 'getup': key = '3_3'; break;
       case 'grab': case 'knee': key = this.state === 'knee' ? '1_3' : '0_0'; break;
       case 'throw': key = '1_5'; break;
+      case 'carry': key = WALK_FR[Math.floor(this.animT / 6) & 3]; break;
       case 'special': key = '2_0'; break;
       case 'victory': key = (this.animT & 8) === 0 ? '2_0' : '2_1'; break;
     }
@@ -402,5 +475,12 @@ export class Player {
       }
     }
     ctx2d.restore();
+
+    // carried lane object held overhead (Final Fight style)
+    if (this.carrying) {
+      const oi = g.art[this.carrying.kind];
+      const bob = (this.animT & 8) === 0 ? 0 : -1;
+      ctx2d.drawImage(oi, sx - (oi.width >> 1), Math.round(sy - dh - oi.height + 6 + bob));
+    }
   }
 }

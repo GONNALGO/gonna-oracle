@@ -162,6 +162,8 @@ export class AudioSys {
   jump(): void { this.noise(0.16, 0.2, 4000); this.blip(300, 0.15, 'sine', 0.18, 700); }
   land(): void { this.noise(0.06, 0.25, 1200); }
   grab(): void { this.blip(180, 0.08, 'square', 0.3, 120); this.noise(0.06, 0.3, 2000); }
+  lift(): void { this.noise(0.07, 0.25, 2600); this.blip(260, 0.12, 'square', 0.28, 620); }
+  crash(): void { this.noise(0.18, 0.55, 1400); this.blip(180, 0.14, 'square', 0.3, 50); }
   throwSfx(): void { this.noise(0.25, 0.35, 3000); this.blip(500, 0.25, 'sine', 0.2, 150); }
   special(): void { this.blip(200, 0.5, 'sawtooth', 0.35, 1600); this.noise(0.5, 0.5, 900, 0.35); this.blip(80, 0.4, 'square', 0.4, 40, 0.35); }
   explode(): void { this.noise(0.7, 0.7, 700); this.blip(120, 0.5, 'sawtooth', 0.4, 30); }

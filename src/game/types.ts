@@ -13,6 +13,7 @@ export interface HitInfo {
   kb: number; // knockback px/frame applied
   down: boolean; // causes knockdown
   dir: Facing; // direction of the blow
+  pierce?: boolean; // ignores whale guard (thrown objects / explosions)
 }
 
 export function clamp(v: number, lo: number, hi: number): number {

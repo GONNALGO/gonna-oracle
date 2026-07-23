@@ -316,6 +316,7 @@ export function buildStage(idx: number): StageDef {
         { kind: 'can', x: 320, y: 168, contains: 'coinA' },
         { kind: 'barrel', x: 700, y: 190, contains: 'chicken' },
         { kind: 'crate', x: 1100, y: 160, contains: 'random' },
+        { kind: 'safe', x: 1250, y: 180, contains: 'chest' }, // heavy block: break (3 hits) or walk around
         { kind: 'can', x: 1500, y: 196, contains: 'coinG' },
         { kind: 'barrel', x: 1700, y: 172, contains: 'random' },
       ],
@@ -341,9 +342,13 @@ export function buildStage(idx: number): StageDef {
       ],
       obstacles: [
         { kind: 'crate', x: 300, y: 172, contains: 'chicken' },
+        { kind: 'drum', x: 480, y: 176, contains: 'none' }, // explosive: throw into the wave
+        { kind: 'can', x: 560, y: 186, contains: 'coinG' }, // whale may hurl this one
         { kind: 'barrel', x: 640, y: 162, contains: 'random' },
+        { kind: 'drum', x: 900, y: 168, contains: 'none' },
         { kind: 'barrel', x: 1050, y: 192, contains: 'chest' },
         { kind: 'crate', x: 1420, y: 168, contains: 'coinA' },
+        { kind: 'safe', x: 1600, y: 180, contains: 'chest' },
         { kind: 'can', x: 1750, y: 186, contains: 'random' },
       ],
       far: s2Far(len * 0.3 + VW),
@@ -366,8 +371,12 @@ export function buildStage(idx: number): StageDef {
     ],
     obstacles: [
       { kind: 'crate', x: 280, y: 170, contains: 'chicken' },
+      { kind: 'drum', x: 420, y: 176, contains: 'none' },
+      { kind: 'can', x: 560, y: 188, contains: 'coinG' }, // whale bait near the brute wave
       { kind: 'barrel', x: 620, y: 188, contains: 'random' },
+      { kind: 'drum', x: 760, y: 192, contains: 'none' },
       { kind: 'crate', x: 900, y: 164, contains: 'liz' },
+      { kind: 'safe', x: 1050, y: 180, contains: 'chest' },
       { kind: 'can', x: 1150, y: 194, contains: 'coinG' },
     ],
     far: s3Far(len * 0.3 + VW),

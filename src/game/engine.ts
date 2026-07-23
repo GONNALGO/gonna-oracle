@@ -112,6 +112,17 @@ export class Game implements GameCtx {
     }
   }
 
+  // ---------- debug hooks (window.__gonna) ----------
+  get carriedObject(): Obstacle | null {
+    return this.player.carrying;
+  }
+  get projectiles(): Obstacle[] {
+    return this.obstacles.filter((o) => o.mode === 'thrown');
+  }
+  get objects(): Obstacle[] {
+    return this.obstacles;
+  }
+
   // ---------- scene flow ----------
   private startNewGame(): void {
     this.score = 0;
@@ -263,7 +274,7 @@ export class Game implements GameCtx {
     for (const e of this.enemies) e.update(this);
     if (this.boss) this.boss.update(this);
     for (const it of this.items) it.update();
-    for (const o of this.obstacles) o.update();
+    for (const o of this.obstacles) o.update(this);
 
     this.resolveCombat();
     this.separateEnemies();
@@ -369,7 +380,7 @@ export class Game implements GameCtx {
         }
       }
       for (const o of this.obstacles) {
-        if (o.lastSwing === box.id) continue;
+        if (o.mode !== 'idle' || o.lastSwing === box.id) continue;
         if (o.x > box.x0 - 10 && o.x < box.x1 + 10 && Math.abs(o.y - box.y) <= 15) {
           o.lastSwing = box.id;
           o.hurt(this);

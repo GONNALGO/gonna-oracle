@@ -336,6 +336,7 @@ function paintBarrel(): HTMLCanvasElement {
   R(x, 1, 11, 20, 3, PAL.silverD); // bands
   R(x, 1, 18, 20, 3, PAL.silverD);
   R(x, 5, 7, 3, 3, '#a5723c');
+  drawText(x, 'G', 8, 14, 1, PAL.gold); // $GONNA brand
   return c;
 }
 
@@ -352,6 +353,46 @@ function paintCrate(): HTMLCanvasElement {
   R(x, 0, 22, 24, 2, '#6e431f');
   R(x, 0, 0, 2, 24, '#6e431f');
   R(x, 22, 0, 2, 24, '#6e431f');
+  drawText(x, 'A', 9, 9, 1, PAL.greenD); // $ALGO brand
+  return c;
+}
+
+// CONCRETE SAFE — heavy, tall, NOT liftable
+function paintSafe(): HTMLCanvasElement {
+  const [c, x] = mk(26, 40);
+  R(x, 1, 0, 24, 40, PAL.silverD);
+  R(x, 1, 0, 24, 3, PAL.silver); // top highlight
+  R(x, 1, 37, 24, 3, '#5a5f6c'); // base shade
+  R(x, 3, 5, 20, 30, '#9aa0ac'); // door inset
+  R(x, 3, 5, 20, 2, PAL.silver);
+  // rivets
+  x.fillStyle = '#6e7380';
+  for (const [rx, ry] of [[5, 7], [20, 7], [5, 32], [20, 32]] as const) x.fillRect(rx, ry, 2, 2);
+  // cracks
+  R(x, 15, 12, 1, 6, '#6e7380');
+  R(x, 16, 17, 3, 1, '#6e7380');
+  R(x, 8, 22, 1, 5, '#787d88');
+  // gold combo dial
+  R(x, 10, 14, 6, 6, PAL.goldD);
+  R(x, 11, 15, 4, 4, PAL.gold);
+  R(x, 12, 16, 2, 2, PAL.ink);
+  return c;
+}
+
+// OIL DRUM — explosive
+function paintDrum(): HTMLCanvasElement {
+  const [c, x] = mk(22, 30);
+  R(x, 3, 1, 16, 28, '#8a2a1e');
+  R(x, 1, 4, 20, 22, '#b33a2a');
+  R(x, 1, 4, 20, 3, '#7a2218'); // top rim shade
+  R(x, 1, 23, 20, 3, '#7a2218');
+  R(x, 1, 10, 20, 2, '#d8d4c8'); // ribs
+  R(x, 1, 19, 20, 2, '#d8d4c8');
+  // hazard band
+  R(x, 1, 13, 20, 5, PAL.gold);
+  x.fillStyle = PAL.ink;
+  for (let i = 0; i < 5; i++) x.fillRect(2 + i * 4, 13, 2, 5);
+  R(x, 5, 6, 3, 3, '#d95a3c'); // highlight
   return c;
 }
 
@@ -381,6 +422,8 @@ export interface Art {
   can: HTMLCanvasElement;
   barrel: HTMLCanvasElement;
   crate: HTMLCanvasElement;
+  safe: HTMLCanvasElement;
+  drum: HTMLCanvasElement;
   lizIcon: HTMLCanvasElement;
 }
 
@@ -400,6 +443,8 @@ export function buildArt(): Art {
     can: paintCan(),
     barrel: paintBarrel(),
     crate: paintCrate(),
+    safe: paintSafe(),
+    drum: paintDrum(),
     lizIcon: paintLizIcon(),
   };
 }

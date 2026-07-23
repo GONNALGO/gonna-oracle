@@ -2,12 +2,14 @@
 import { chance, clamp, GRAV, LANE_BOT, LANE_TOP, VW } from './types';
 import type { Facing, HitInfo } from './types';
 import type { GameCtx } from './ctx';
+import { blockObjects } from './items';
+import type { Obstacle } from './items';
 
 export type EnemyKind = 'gecko' | 'drone' | 'whale' | 'snek';
 
 export type EState =
   | 'enter' | 'seek' | 'attack' | 'recover' | 'reposition'
-  | 'stun' | 'down' | 'getup' | 'held' | 'thrown' | 'block' | 'dead';
+  | 'stun' | 'down' | 'getup' | 'held' | 'thrown' | 'block' | 'dead' | 'windup';
 
 interface Stats {
   hp: number;
@@ -53,6 +55,7 @@ export class Enemy {
   hitPlayer = false; // current swing already connected
   lieT = 0;
   lastHitId = 0;
+  heldObj: Obstacle | null = null; // whale holding a trash can (v2)
 
   constructor(kind: EnemyKind, x: number, y: number, side: Facing) {
     this.kind = kind;
@@ -73,13 +76,14 @@ export class Enemy {
     if (!this.alive || this.state === 'dead') return false;
     if (this.state === 'down' && this.z <= 0) return false; // lying: invulnerable (FF style)
     if (this.invuln > 0) return false;
-    // whale blocks frontal hits sometimes
-    if (this.kind === 'whale' && this.state === 'seek' && hit.dir !== this.face && chance(0.25)) {
+    // whale blocks frontal hits sometimes (thrown objects & explosions pierce)
+    if (!hit.pierce && this.kind === 'whale' && this.state === 'seek' && hit.dir !== this.face && chance(0.25)) {
       this.set('block');
       g.audio.block();
       g.fx.spark(this.x + this.face * 14, this.y - 36, false);
       return false;
     }
+    if (this.heldObj) this.dropObj(g); // interrupted wind-up: can falls
     this.hp -= hit.dmg;
     this.flashT = 6;
     g.fx.spark(this.x + hit.dir * 6, this.y - this.z - 34, hit.down);
@@ -112,6 +116,16 @@ export class Enemy {
     g.audio.ko();
     g.addScore(STATS[this.kind].score);
     g.fx.popup(this.x, this.y - 70, '+' + STATS[this.kind].score, '#7fd858');
+  }
+
+  // drop a carried trash can back to the ground (interrupted / released)
+  dropObj(g: GameCtx): void {
+    const o = this.heldObj;
+    if (!o) return;
+    this.heldObj = null;
+    o.mode = 'idle';
+    o.x = clamp(this.x + this.face * (o.cfg.halfW + 8), 12, g.stageLen - 12);
+    o.y = this.y;
   }
 
   getHeld(g: GameCtx): void {
@@ -179,6 +193,7 @@ export class Enemy {
     if (this.atkCd > 0) this.atkCd--;
     const p = g.player;
     const st = STATS[this.kind];
+    const prevX = this.x;
 
     switch (this.state) {
       case 'enter': {
@@ -214,6 +229,8 @@ export class Enemy {
             this.diveTX = p.x;
             this.diveTY = p.y;
           }
+        } else if (this.kind === 'whale' && this.atkCd <= 0 && p.state !== 'dead' && this.grabCan(g)) {
+          // whale picked up a trash can -> windup state set inside grabCan
         } else if (this.atkCd <= 0 && chance(0.004)) {
           this.set('reposition');
           this.vy = chance(0.5) ? 1 : -1;
@@ -328,12 +345,56 @@ export class Enemy {
         if (this.t >= 20) { this.set('seek'); this.atkCd = 30; }
         break;
       }
+      case 'windup': {
+        // whale telegraphing a trash-can throw (dodge: change lane or jump)
+        const o = this.heldObj;
+        if (!o) { this.flashT = 0; this.set('seek'); break; }
+        this.flashT = (this.t & 8) < 4 ? 2 : 0;
+        if (this.t === 1) g.fx.popup(this.x, this.y - 76, '!', '#ff6b6b');
+        if (this.t >= 46) {
+          this.flashT = 0;
+          this.heldObj = null;
+          this.face = g.player.x >= this.x ? 1 : -1;
+          o.y = this.y;
+          o.launch(this.face, true, g);
+          this.set('recover');
+          this.atkCd = 150;
+        }
+        break;
+      }
       case 'held': {
         // position set by player; timer safety
         if (this.t > 240) this.escapeHold(g);
         break;
       }
     }
+
+    // solid lane objects: block horizontal movement (walk around them)
+    if (this.state === 'enter' || this.state === 'seek' || this.state === 'reposition' || this.state === 'attack') {
+      const bx = blockObjects(g.obstacles, prevX, this.x, this.y, this.z);
+      if (bx !== this.x) {
+        this.x = bx;
+        if (this.state === 'enter' || this.state === 'seek') {
+          this.y = clamp(this.y + (this.y < (LANE_TOP + LANE_BOT) / 2 ? 1 : -1) * 0.9, LANE_TOP, LANE_BOT);
+        }
+      }
+    }
+  }
+
+  // whale: pick up a nearby trash can (returns true when grabbed)
+  private grabCan(g: GameCtx): boolean {
+    for (const o of g.obstacles) {
+      if (o.kind !== 'can' || o.mode !== 'idle' || o.removeMe) continue;
+      if (Math.abs(o.x - this.x) < 22 && Math.abs(o.y - this.y) < 12 && chance(0.04)) {
+        this.heldObj = o;
+        o.mode = 'held';
+        this.face = g.player.x >= this.x ? 1 : -1;
+        this.set('windup');
+        g.audio.lift();
+        return true;
+      }
+    }
+    return false;
   }
 
   // ---------- draw ----------
@@ -348,7 +409,7 @@ export class Enemy {
         if (this.state === 'attack' && this.t >= 14) return a.drone[2];
         return a.drone[wk];
       case 'whale':
-        if (this.state === 'block') return a.whale[3];
+        if (this.state === 'block' || this.state === 'windup') return a.whale[3];
         if (this.state === 'attack' && this.t >= 20) return a.whale[2];
         return a.whale[wk];
       case 'snek':
@@ -388,6 +449,12 @@ export class Enemy {
     }
     ctx2d.restore();
     ctx2d.globalAlpha = 1;
+
+    // trash can held overhead during wind-up
+    if (this.heldObj) {
+      const oi = g.art[this.heldObj.kind];
+      ctx2d.drawImage(oi, sx - (oi.width >> 1), Math.round(sy - img.height - oi.height + 6));
+    }
 
     // hp pip bar for brutes
     if (this.kind === 'whale' && this.alive && this.hp < this.maxHp) {
