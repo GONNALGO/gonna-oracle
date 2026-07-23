@@ -1,0 +1,406 @@
+// GONNA — the player. States, combos, grab/throw, jump, special, anchored frames.
+import { clamp, GRAV, LANE_BOT, LANE_TOP, VW } from './types';
+import type { Facing, HitInfo } from './types';
+import type { GameCtx } from './ctx';
+import type { Enemy } from './enemies';
+
+export type PState =
+  | 'idle' | 'walk' | 'punch' | 'kick' | 'jump' | 'jumpkick'
+  | 'hurt' | 'down' | 'getup' | 'grab' | 'knee' | 'throw'
+  | 'special' | 'dead' | 'victory';
+
+const SCALE = 0.55; // source frames are ~2x game size
+const IDLE_FR = ['0_0', '0_1', '0_3', '0_5'];
+const WALK_FR = ['3_0', '3_1', '3_2', '3_5'];
+
+export interface AttackBox {
+  x0: number;
+  x1: number;
+  y: number;
+  laneTol: number;
+  dmg: number;
+  kb: number;
+  down: boolean;
+  id: number;
+}
+
+let swingCounter = 1;
+
+export class Player {
+  x = 60;
+  y = 178;
+  z = 0;
+  vx = 0;
+  vy = 0;
+  vz = 0;
+  face: Facing = 1;
+  hp = 100;
+  maxHp = 100;
+  lives = 2;
+  meter = 0; // 0..3 segments
+  knifeUses = 0;
+  state: PState = 'idle';
+  t = 0;
+  animT = 0;
+  invuln = 0;
+  flashT = 0;
+  combo = 0; // current punch index 1..3
+  queued = false; // combo continuation queued
+  swingId = 0;
+  held: Enemy | null = null;
+  knees = 0;
+  airAtk = false;
+  withKnife = false;
+
+  reset(x: number, y: number): void {
+    this.x = x; this.y = y; this.z = 0;
+    this.vx = 0; this.vy = 0; this.vz = 0;
+    this.face = 1;
+    this.hp = this.maxHp;
+    this.meter = 0;
+    this.knifeUses = 0;
+    this.state = 'idle';
+    this.t = 0; this.invuln = 0; this.flashT = 0;
+    this.combo = 0; this.queued = false;
+    this.held = null; this.knees = 0; this.airAtk = false;
+  }
+
+  get onGround(): boolean { return this.z <= 0; }
+  get busy(): boolean {
+    return this.state !== 'idle' && this.state !== 'walk';
+  }
+
+  private set(s: PState): void {
+    this.state = s;
+    this.t = 0;
+  }
+
+  // ---------- damage intake ----------
+  hurt(hit: HitInfo, g: GameCtx): boolean {
+    if (this.invuln > 0 || this.state === 'dead' || this.state === 'down' || this.state === 'getup' || this.state === 'victory') return false;
+    if (this.state === 'grab' || this.state === 'knee') this.releaseHeld(g, false);
+    this.hp -= hit.dmg;
+    this.flashT = 8;
+    g.fx.spark(this.x, this.y - 40, true);
+    g.fx.popup(this.x, this.y - 66, '-' + hit.dmg, '#ff6b6b');
+    g.fx.shake(3);
+    g.hitStop(4);
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.set('dead');
+      this.vz = 2.6;
+      this.vx = hit.dir * 2;
+      g.audio.ko();
+    } else if (hit.down) {
+      this.set('down');
+      this.vz = 2.4;
+      this.vx = hit.dir * hit.kb;
+      g.audio.ko();
+    } else {
+      this.set('hurt');
+      this.vx = hit.dir * hit.kb * 0.5;
+      g.audio.hurtPlayer();
+    }
+    return true;
+  }
+
+  private releaseHeld(g: GameCtx, thrown: boolean): void {
+    if (!this.held) return;
+    const e = this.held;
+    this.held = null;
+    if (thrown) {
+      e.thrown(this.face, g);
+    } else {
+      e.escapeHold(g);
+    }
+  }
+
+  // ---------- attack box for engine ----------
+  attackBox(): AttackBox | null {
+    const mk = (reach: number, dmg: number, kb: number, down: boolean): AttackBox => ({
+      x0: this.face === 1 ? this.x + 6 : this.x - 6 - reach,
+      x1: this.face === 1 ? this.x + 6 + reach : this.x - 6,
+      y: this.y,
+      laneTol: 13,
+      dmg, kb, down,
+      id: this.swingId,
+    });
+    if (this.state === 'punch') {
+      const active = this.t >= 4 && this.t <= 8;
+      if (!active) return null;
+      if (this.knifeUses > 0) return mk(50, 15, 2, false);
+      if (this.combo === 3) return mk(38, 12, 3, true);
+      return mk(34, 8, 1.5, false);
+    }
+    if (this.state === 'kick') {
+      if (this.t < 9 || this.t > 14) return null;
+      return mk(46, 16, 4, true);
+    }
+    if (this.state === 'jumpkick') {
+      return mk(40, 14, 3, true);
+    }
+    if (this.state === 'knee') {
+      if (this.t < 4 || this.t > 8) return null;
+      return mk(30, 6, 1, false);
+    }
+    return null;
+  }
+
+  // ---------- update ----------
+  update(g: GameCtx): void {
+    this.t++;
+    this.animT++;
+    if (this.invuln > 0) this.invuln--;
+    if (this.flashT > 0) this.flashT--;
+    const inp = g.input;
+
+    switch (this.state) {
+      case 'idle':
+      case 'walk': {
+        let dx = (inp.down.right ? 1 : 0) - (inp.down.left ? 1 : 0);
+        let dy = (inp.down.down ? 1 : 0) - (inp.down.up ? 1 : 0);
+        if (dx !== 0 && dy !== 0) { dx *= 0.8; dy *= 0.8; }
+        this.x = clamp(this.x + dx * 1.4, g.camX + 12, Math.min(g.camX + VW - 12, g.stageLen - 10));
+        this.y = clamp(this.y + dy * 1.0, LANE_TOP, LANE_BOT);
+        if (dx !== 0) this.face = dx > 0 ? 1 : -1;
+        this.state = dx !== 0 || dy !== 0 ? 'walk' : 'idle';
+
+        if (inp.pressed.jump) {
+          this.set('jump');
+          this.vz = 4.6;
+          this.airAtk = false;
+          g.audio.jump();
+        } else if (inp.pressed.special && this.meter >= 1) {
+          this.meter -= 1;
+          this.hp = Math.max(1, this.hp - 5);
+          this.set('special');
+          g.audio.special();
+          g.fx.flash = 6;
+        } else if (inp.pressed.punch) {
+          // grab check: stunned enemy in reach
+          const e = this.findGrabbable(g);
+          if (e) {
+            this.set('grab');
+            this.held = e;
+            this.knees = 0;
+            this.face = e.x >= this.x ? 1 : -1;
+            e.getHeld(g);
+            g.audio.grab();
+          } else {
+            this.startPunch(1, g);
+          }
+        } else if (inp.pressed.kick) {
+          this.set('kick');
+          this.swingId = swingCounter++;
+          g.audio.swing();
+        }
+        break;
+      }
+
+      case 'punch': {
+        if (inp.pressed.punch && this.t >= 5) this.queued = true;
+        const dur = this.combo === 3 ? 20 : 15;
+        if (this.t >= dur) {
+          if (this.queued && this.combo < 3) this.startPunch(this.combo + 1, g);
+          else this.set('idle');
+        }
+        break;
+      }
+
+      case 'kick': {
+        if (this.t >= 26) this.set('idle');
+        break;
+      }
+
+      case 'jump':
+      case 'jumpkick': {
+        this.vz -= GRAV;
+        this.z += this.vz;
+        const dx = (inp.down.right ? 1 : 0) - (inp.down.left ? 1 : 0);
+        this.x = clamp(this.x + dx * 1.2, g.camX + 12, Math.min(g.camX + VW - 12, g.stageLen - 10));
+        if (dx !== 0 && this.state === 'jump') this.face = dx > 0 ? 1 : -1;
+        if (this.state === 'jump' && (inp.pressed.punch || inp.pressed.kick)) {
+          this.state = 'jumpkick';
+          this.swingId = swingCounter++;
+          g.audio.swing();
+        }
+        if (this.z <= 0) {
+          this.z = 0;
+          this.vz = 0;
+          this.set('idle');
+          g.audio.land();
+          g.fx.ring(this.x, this.y, 14, '#8a8f9c');
+        }
+        break;
+      }
+
+      case 'special': {
+        // BYZANTINE SLAM: spin + shockwave, engine applies the hit at t==10
+        if (this.t === 10) {
+          g.fx.ring(this.x, this.y - 10, 120, '#7fd858');
+          g.fx.ring(this.x, this.y - 10, 80, '#f5c542');
+          g.fx.shake(7);
+          g.fx.flash = 5;
+          g.hitStop(6);
+        }
+        if (this.t % 3 === 0) this.face = this.face === 1 ? -1 : 1; // spin flip
+        if (this.t >= 44) {
+          this.face = 1;
+          this.set('idle');
+        }
+        break;
+      }
+
+      case 'hurt': {
+        this.x += this.vx;
+        this.vx *= 0.85;
+        if (this.t >= 14) this.set('idle');
+        break;
+      }
+
+      case 'down':
+      case 'dead': {
+        this.vz -= GRAV;
+        this.z += this.vz;
+        this.x += this.vx;
+        if (this.z <= 0) {
+          this.z = 0;
+          if (this.vz < -1.2) {
+            this.vz = -this.vz * 0.4; // bounce
+            this.vx *= 0.5;
+            g.audio.land();
+          } else {
+            this.vz = 0;
+            this.vx = 0;
+          }
+        }
+        if (this.state === 'down' && this.t >= 44) {
+          this.set('getup');
+          this.invuln = 70;
+        }
+        break;
+      }
+
+      case 'getup': {
+        if (this.t >= 18) this.set('idle');
+        break;
+      }
+
+      case 'grab': {
+        if (!this.held) { this.set('idle'); break; }
+        // hold enemy in front
+        this.held.x = this.x + this.face * 18;
+        this.held.y = this.y;
+        if (inp.pressed.punch) {
+          this.set('knee');
+          this.swingId = swingCounter++;
+        } else if (inp.pressed.kick || this.t > 200) {
+          this.set('throw');
+          g.audio.throwSfx();
+          this.releaseHeld(g, true);
+        }
+        break;
+      }
+
+      case 'knee': {
+        if (this.held) {
+          this.held.x = this.x + this.face * 18;
+          this.held.y = this.y;
+        }
+        if (this.t >= 14) {
+          this.knees++;
+          if (!this.held || this.knees >= 2) {
+            this.set('throw');
+            g.audio.throwSfx();
+            this.releaseHeld(g, true);
+          } else {
+            this.set('grab');
+          }
+        }
+        break;
+      }
+
+      case 'throw': {
+        if (this.t >= 18) this.set('idle');
+        break;
+      }
+
+      case 'victory':
+        break;
+    }
+  }
+
+  private startPunch(n: number, g: GameCtx): void {
+    this.set('punch');
+    this.combo = n;
+    this.queued = false;
+    this.swingId = swingCounter++;
+    this.withKnife = this.knifeUses > 0;
+    if (this.withKnife) this.knifeUses--;
+    g.audio.swing();
+  }
+
+  private findGrabbable(g: GameCtx): Enemy | null {
+    for (const e of g.enemies) {
+      if (!e.alive || e.state !== 'stun') continue;
+      if (Math.abs(e.x - this.x) < 26 && Math.abs(e.y - this.y) < 12) return e;
+    }
+    return null;
+  }
+
+  // ---------- draw ----------
+  draw(ctx2d: CanvasRenderingContext2D, g: GameCtx): void {
+    const sx = Math.round(this.x - g.camX);
+    const sy = Math.round(this.y - this.z);
+    // shadow
+    ctx2d.globalAlpha = clamp(0.4 - this.z / 200, 0.08, 0.4);
+    ctx2d.fillStyle = '#000';
+    ctx2d.beginPath();
+    ctx2d.ellipse(sx, this.y + 2, 16 - this.z * 0.04, 5 - this.z * 0.015, 0, 0, Math.PI * 2);
+    ctx2d.fill();
+    ctx2d.globalAlpha = 1;
+
+    // invuln blink
+    if (this.invuln > 0 && (this.animT & 4) !== 0 && this.state !== 'getup') return;
+
+    let key = '0_0';
+    switch (this.state) {
+      case 'idle': key = IDLE_FR[(this.animT >> 3) & 3]; break;
+      case 'walk': key = WALK_FR[Math.floor(this.animT / 6) & 3]; break;
+      case 'punch': key = this.withKnife ? '1_4' : this.combo === 1 ? '1_1' : this.combo === 2 ? '1_2' : '1_3'; break;
+      case 'kick': key = this.t < 13 ? '1_4' : '1_5'; break;
+      case 'jump': key = this.vz > 0 ? ((this.animT & 8) === 0 ? '2_0' : '2_5') : '2_2'; break;
+      case 'jumpkick': key = '1_4'; break;
+      case 'hurt': key = '3_3'; break;
+      case 'down': case 'dead': key = '3_3'; break;
+      case 'getup': key = '3_3'; break;
+      case 'grab': case 'knee': key = this.state === 'knee' ? '1_3' : '0_0'; break;
+      case 'throw': key = '1_5'; break;
+      case 'special': key = '2_0'; break;
+      case 'victory': key = (this.animT & 8) === 0 ? '2_0' : '2_1'; break;
+    }
+    const img = g.frames.get(key);
+    if (!img) return;
+    const dw = img.width * SCALE;
+    const dh = img.height * SCALE;
+
+    ctx2d.save();
+    if (this.flashT > 0) ctx2d.filter = 'brightness(3)';
+    const lying = (this.state === 'down' || this.state === 'dead') && this.z <= 0 && this.t > 10;
+    if (lying) {
+      ctx2d.translate(sx, this.y - 4);
+      ctx2d.rotate((this.face * -Math.PI) / 2);
+      ctx2d.drawImage(img, -dw / 2, -dh * 0.6, dw, dh);
+    } else {
+      ctx2d.translate(sx, sy);
+      if (this.face === -1) ctx2d.scale(-1, 1);
+      // bottom-center anchor: feet on ground line
+      ctx2d.drawImage(img, -dw / 2, -dh, dw, dh);
+      // knife in hand during slash
+      if (this.state === 'punch' && this.withKnife && this.t >= 4 && this.t <= 8) {
+        ctx2d.drawImage(g.art.knife, dw * 0.28, -dh * 0.55, 18, 8);
+      }
+    }
+    ctx2d.restore();
+  }
+}

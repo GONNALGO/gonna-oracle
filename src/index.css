@@ -73,3 +73,11 @@
     @apply bg-background text-foreground;
   }
 }
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: #05060a;
+  overflow: hidden;
+}
