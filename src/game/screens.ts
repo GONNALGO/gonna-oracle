@@ -42,7 +42,7 @@ export function drawTitle(ctx: CanvasRenderingContext2D, t: number, art: Art): v
   ctx.drawImage(art.lizIcon, 0, 0, 24, 20);
   ctx.restore();
   drawText(ctx, 'V2.0 BYZANTINE', VW - textWidth('V2.0 BYZANTINE', 1) - 8, VH - 14, 1, '#5a5f6c');
-  drawText(ctx, '(C) GONNA & THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 
 export function drawIntro(ctx: CanvasRenderingContext2D, name: string, sub: string, t: number): void {
@@ -119,7 +119,7 @@ export function drawVictory(ctx: CanvasRenderingContext2D, stats: FinalStats, t:
   drawTextSh(ctx, String(stats.kos), 284, 134, 1, '#ffffff', 'right');
   if (t > 60) {
     drawTextSh(ctx, 'GONNA FIGHT', VW / 2, 160, 2, '#7fd858', 'center');
-    drawTextSh(ctx, 'GONNA & THE BYZANTINES', VW / 2, 182, 1, '#8a8f9c', 'center');
+    drawTextSh(ctx, 'GONNA + THE BYZANTINES', VW / 2, 182, 1, '#8a8f9c', 'center');
   }
   if (t > 120 && (t & 32) !== 0) drawTextSh(ctx, 'PRESS ENTER', VW / 2, 202, 1, '#ffffff', 'center');
 }
