@@ -484,14 +484,16 @@ export class Player {
   // ---------- lane objects: lift / carry / throw ----------
   private findLiftable(g: GameCtx): Obstacle | null {
     const inp = g.input;
+    // v7 touch fix: thumbs have no DOWN chord and 8-way stick lane alignment
+    // is imprecise, so on touch the lane window AND the proximity reach are
+    // generous — a P tap anywhere near an object lifts it instead of whiffing
+    // a punch that would smash the (hp=1) object. Desktop rule is UNCHANGED.
+    const touch = inp.touchMode;
     for (const o of g.obstacles) {
       if (o.mode !== 'idle' || o.removeMe || !o.cfg.liftable) continue;
       const dx = Math.abs(o.x - this.x);
-      if (Math.abs(o.y - this.y) >= 12) continue;
-      // v6 touch: thumbs have no DOWN chord, so the "Z while touching" reach
-      // is relaxed (touching + 4px) and the DOWN reach extends a bit further.
-      const touch = inp.touchMode;
-      if (dx < o.cfg.halfW + (touch ? 16 : 14) && (inp.down.down || dx <= o.cfg.halfW + (touch ? 12 : 8))) return o;
+      if (Math.abs(o.y - this.y) >= (touch ? 17 : 12)) continue;
+      if (dx < o.cfg.halfW + (touch ? 24 : 14) && (inp.down.down || dx <= o.cfg.halfW + (touch ? 20 : 8))) return o;
     }
     return null;
   }
@@ -502,7 +504,8 @@ export class Player {
     this.face = o.x >= this.x ? 1 : -1;
     this.set('carry');
     g.audio.lift();
-    g.fx.popup(this.x, this.y - 76, 'X THROW / Z DROP', '#c8ccd4');
+    g.haptics.hit(); // v7: tactile confirm that the lift triggered (touch only)
+    g.fx.popup(this.x, this.y - 76, g.input.touchMode ? 'K THROW / P DROP' : 'X THROW / Z DROP', '#c8ccd4');
   }
 
   setDown(g: GameCtx): void {

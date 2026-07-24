@@ -1,137 +1,561 @@
 // All audio synthesized with WebAudio. No files. Mute toggle handled by engine.
+//
+// v7 — full COMPOSITIONAL rewrite, Capcom CPS1/CPS2 school (Final Fight,
+// Street Fighter II, Mega Man). The WebAudio scheduler engine is unchanged in
+// architecture; the music itself is now composed, not beeped:
+// - 3 voices: BASS (triangle, low octave, groovy 8th-note lines), LEAD (25%
+//   pulse wave, catchy hooks, light delayed vibrato, sits UNDER the bass),
+//   DRUMS (noise: kick on quarters, snare on 2&4, hats 8ths/16ths + fills).
+// - Real chord progressions: i-VI-III-VII for the urban stages, i-iv-V for
+//   boss tension. 8-bar loops, with a B-cycle variation every second pass
+//   (drum fill + counter-melody turnaround).
+// - Less shrill: gentle lowpass on the music bus, mid registers, no staccato
+//   piercing repeats, lead level below bass level.
+
+// ---------------------------------------------------------------------------
+// Sequencer data model. Patterns are written as 16th-step token strings:
+//   note name + octave (A1, C#2, Bb3) = note-on, '~' = sustain, '.' = rest.
+// Drum tokens per 16th step: k=kick s=snare h=hat o=open-hat c=crash
+// (combinable: 'kh' = kick+hat). '.' = silence.
+// ---------------------------------------------------------------------------
+
+export interface SeqEvent {
+  step: number; // 16th-note index inside the loop
+  midi: number;
+  len: number; // sustain in 16th steps
+}
 
 export interface Track {
   bpm: number;
-  bass: (number | 0)[]; // midi notes per 16th step, 0 = rest
-  lead: (number | 0)[];
-  bassWave?: OscillatorType;
-  leadWave?: OscillatorType;
+  steps: number; // loop length in 16th steps (bars * 16)
+  swing: number; // 0 = straight, >0 delays off-16ths (funky shuffle)
+  bass: SeqEvent[];
+  lead: SeqEvent[];
+  bassB: SeqEvent[] | null; // B-cycle variation (every 2nd loop)
+  leadB: SeqEvent[] | null;
+  drums: number[];
+  drumsB: number[] | null;
+  // compiled step -> event lookups
+  bMap: (SeqEvent | null)[];
+  lMap: (SeqEvent | null)[];
+  bMapB: (SeqEvent | null)[] | null;
+  lMapB: (SeqEvent | null)[] | null;
 }
 
 function midiToFreq(m: number): number {
   return 440 * Math.pow(2, (m - 69) / 12);
 }
 
-// ---- Chiptune compositions (16th-note steps) ----
-// Stage 1: night city drive, A minor, 140bpm, 64 steps (4 bars)
-const ST1_BASS: (number | 0)[] = [
-  33, 0, 33, 0, 33, 0, 36, 0, 33, 0, 33, 0, 40, 0, 38, 0,
-  33, 0, 33, 0, 33, 0, 36, 0, 31, 0, 31, 0, 38, 0, 36, 0,
-  33, 0, 33, 0, 33, 0, 36, 0, 33, 0, 33, 0, 40, 0, 38, 0,
-  29, 0, 29, 0, 31, 0, 33, 0, 36, 0, 38, 0, 40, 0, 43, 0,
-];
-const ST1_LEAD: (number | 0)[] = [
-  57, 0, 60, 0, 64, 0, 60, 0, 65, 0, 64, 0, 60, 0, 57, 0,
-  57, 0, 60, 0, 64, 0, 67, 0, 65, 0, 64, 0, 60, 0, 62, 0,
-  57, 0, 60, 0, 64, 0, 60, 0, 65, 0, 64, 0, 60, 0, 57, 0,
-  55, 0, 57, 0, 59, 0, 60, 0, 62, 0, 64, 0, 67, 0, 69, 0,
-];
-// Stage 2: docks dusk, C major-ish groove, 132bpm
-const ST2_BASS: (number | 0)[] = [
-  36, 0, 0, 36, 0, 0, 39, 0, 36, 0, 0, 36, 0, 43, 0, 41,
-  34, 0, 0, 34, 0, 0, 38, 0, 36, 0, 0, 36, 0, 41, 0, 39,
-  36, 0, 0, 36, 0, 0, 39, 0, 36, 0, 0, 36, 0, 43, 0, 41,
-  31, 0, 0, 31, 0, 0, 34, 0, 33, 0, 0, 33, 0, 36, 0, 38,
-];
-const ST2_LEAD: (number | 0)[] = [
-  60, 0, 0, 0, 64, 0, 67, 0, 0, 0, 65, 0, 64, 0, 0, 0,
-  58, 0, 0, 0, 62, 0, 65, 0, 0, 0, 64, 0, 62, 0, 0, 0,
-  60, 0, 0, 0, 64, 0, 67, 0, 0, 0, 69, 0, 67, 0, 65, 0,
-  64, 0, 0, 0, 62, 0, 60, 0, 58, 0, 55, 0, 58, 0, 0, 0,
-];
-// Stage 3 / boss: fast minor, tense, 160bpm
-const ST3_BASS: (number | 0)[] = [
-  33, 33, 0, 33, 33, 0, 33, 36, 33, 33, 0, 33, 38, 0, 36, 0,
-  33, 33, 0, 33, 33, 0, 33, 36, 31, 31, 0, 31, 38, 0, 40, 0,
-  33, 33, 0, 33, 33, 0, 33, 36, 33, 33, 0, 33, 38, 0, 36, 0,
-  29, 29, 0, 29, 31, 0, 33, 0, 36, 36, 0, 38, 40, 0, 41, 0,
-];
-const ST3_LEAD: (number | 0)[] = [
-  69, 0, 69, 0, 0, 72, 0, 69, 67, 0, 64, 0, 69, 0, 0, 0,
-  69, 0, 69, 0, 0, 72, 0, 74, 72, 0, 69, 0, 67, 0, 64, 0,
-  69, 0, 69, 0, 0, 72, 0, 69, 67, 0, 64, 0, 69, 0, 0, 0,
-  65, 0, 67, 0, 69, 0, 72, 0, 76, 0, 74, 0, 72, 0, 74, 0,
-];
-// Stage 4: dojo night — hirajoshi-flavored minor, 150bpm
-const ST4_BASS: (number | 0)[] = [
-  33, 0, 33, 0, 36, 0, 33, 0, 31, 0, 31, 0, 36, 0, 38, 0,
-  33, 0, 33, 0, 36, 0, 33, 0, 41, 0, 40, 0, 38, 0, 36, 0,
-  33, 0, 33, 0, 36, 0, 33, 0, 31, 0, 31, 0, 36, 0, 38, 0,
-  29, 0, 31, 0, 33, 0, 36, 0, 38, 0, 36, 0, 33, 0, 31, 0,
-];
-const ST4_LEAD: (number | 0)[] = [
-  69, 0, 0, 67, 0, 0, 64, 0, 62, 0, 64, 0, 67, 0, 0, 0,
-  69, 0, 0, 72, 0, 0, 71, 0, 67, 0, 69, 0, 0, 0, 0, 0,
-  69, 0, 0, 67, 0, 0, 64, 0, 62, 0, 64, 0, 67, 0, 0, 0,
-  62, 0, 64, 0, 67, 0, 69, 0, 71, 0, 72, 0, 74, 0, 0, 0,
-];
-// Stage 5: synthwave casino — laid-back neon groove, 118bpm
-const ST5_BASS: (number | 0)[] = [
-  33, 0, 0, 33, 0, 33, 0, 0, 36, 0, 0, 36, 0, 38, 0, 0,
-  31, 0, 0, 31, 0, 31, 0, 0, 33, 0, 36, 0, 38, 0, 40, 0,
-  33, 0, 0, 33, 0, 33, 0, 0, 36, 0, 0, 36, 0, 38, 0, 0,
-  29, 0, 0, 29, 0, 31, 0, 0, 33, 0, 36, 0, 40, 0, 38, 0,
-];
-const ST5_LEAD: (number | 0)[] = [
-  69, 0, 0, 0, 0, 67, 0, 69, 0, 0, 72, 0, 0, 0, 69, 0,
-  74, 0, 0, 0, 0, 72, 0, 69, 0, 0, 67, 0, 0, 0, 0, 0,
-  69, 0, 0, 0, 0, 67, 0, 69, 0, 0, 72, 0, 0, 0, 76, 0,
-  74, 0, 0, 72, 0, 0, 69, 0, 67, 0, 69, 0, 0, 0, 0, 0,
-];
-// Stage 6: launch night — driving space march, 152bpm
-const ST6_BASS: (number | 0)[] = [
-  33, 33, 0, 33, 0, 33, 36, 0, 33, 33, 0, 33, 0, 38, 36, 0,
-  33, 33, 0, 33, 0, 33, 36, 0, 41, 0, 40, 0, 38, 0, 36, 0,
-  33, 33, 0, 33, 0, 33, 36, 0, 33, 33, 0, 33, 0, 38, 36, 0,
-  29, 29, 0, 31, 0, 33, 0, 36, 38, 0, 40, 0, 43, 0, 45, 0,
-];
-const ST6_LEAD: (number | 0)[] = [
-  69, 0, 72, 0, 0, 69, 0, 67, 0, 69, 0, 0, 64, 0, 0, 0,
-  69, 0, 72, 0, 0, 76, 0, 74, 0, 72, 0, 69, 0, 67, 0,
-  69, 0, 72, 0, 0, 69, 0, 67, 0, 69, 0, 0, 64, 0, 0, 0,
-  65, 0, 67, 0, 69, 0, 72, 0, 76, 0, 79, 0, 76, 0, 0, 0,
-];
-// Final boss: EMPEROR FUD — boss theme variation, darker, 172bpm
-const FUD_BASS: (number | 0)[] = [
-  33, 33, 0, 33, 39, 0, 33, 36, 33, 33, 0, 33, 39, 0, 36, 0,
-  33, 33, 0, 33, 39, 0, 33, 36, 31, 31, 0, 31, 38, 0, 39, 0,
-  33, 33, 0, 33, 39, 0, 33, 36, 33, 33, 0, 33, 39, 0, 36, 0,
-  29, 29, 0, 29, 31, 0, 33, 0, 36, 36, 0, 38, 39, 0, 40, 0,
-];
-const FUD_LEAD: (number | 0)[] = [
-  69, 0, 69, 0, 0, 73, 0, 69, 67, 0, 64, 0, 69, 0, 0, 0,
-  69, 0, 69, 0, 0, 73, 0, 75, 73, 0, 69, 0, 67, 0, 64, 0,
-  69, 0, 69, 0, 0, 73, 0, 69, 67, 0, 64, 0, 69, 0, 0, 0,
-  66, 0, 67, 0, 69, 0, 73, 0, 78, 0, 75, 0, 73, 0, 75, 0,
-];
-// Title: heroic slow loop, 120bpm
-const TITLE_BASS: (number | 0)[] = [
-  33, 0, 0, 0, 33, 0, 0, 0, 36, 0, 0, 0, 38, 0, 0, 0,
-  33, 0, 0, 0, 33, 0, 0, 0, 40, 0, 38, 0, 36, 0, 31, 0,
-];
-const TITLE_LEAD: (number | 0)[] = [
-  57, 0, 0, 60, 0, 0, 64, 0, 0, 69, 0, 0, 67, 0, 64, 0,
-  57, 0, 0, 60, 0, 0, 64, 0, 72, 0, 0, 71, 0, 69, 0, 0,
-];
+const STEP_SEMI: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+function parsePat(src: string): SeqEvent[] {
+  const toks = src.trim().split(/\s+/);
+  const out: SeqEvent[] = [];
+  let last: SeqEvent | null = null;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t === '.') {
+      last = null;
+      continue;
+    }
+    if (t === '~') {
+      if (last) last.len++;
+      continue;
+    }
+    const m = /^([A-G])([#b]?)(-?\d)$/.exec(t);
+    if (!m) throw new Error('bad note token: ' + t);
+    let semi = STEP_SEMI[m[1]];
+    if (m[2] === '#') semi++;
+    else if (m[2] === 'b') semi--;
+    const midi = (parseInt(m[3], 10) + 1) * 12 + semi;
+    last = { step: i, midi, len: 1 };
+    out.push(last);
+  }
+  return out;
+}
+
+const DRUM_BIT: Record<string, number> = { k: 1, s: 2, h: 4, o: 8, c: 16 };
+
+function parseDrums(src: string): number[] {
+  return src
+    .trim()
+    .split(/\s+/)
+    .map((t) => {
+      let m = 0;
+      for (const ch of t) m |= DRUM_BIT[ch] ?? 0;
+      return m;
+    });
+}
+
+function toMap(ev: SeqEvent[], steps: number): (SeqEvent | null)[] {
+  const map: (SeqEvent | null)[] = new Array(steps).fill(null);
+  for (const e of ev) map[e.step] = e;
+  return map;
+}
+
+function mkTrack(
+  bpm: number,
+  bassA: string,
+  leadA: string,
+  drumA: string,
+  opts: { swing?: number; bassB?: string; leadB?: string; drumB?: string } = {},
+): Track {
+  const bass = parsePat(bassA);
+  const lead = parsePat(leadA);
+  const drums = parseDrums(drumA);
+  const steps = drums.length;
+  const bassB = opts.bassB ? parsePat(opts.bassB) : null;
+  const leadB = opts.leadB ? parsePat(opts.leadB) : null;
+  const drumsB = opts.drumB ? parseDrums(opts.drumB) : null;
+  return {
+    bpm,
+    steps,
+    swing: opts.swing ?? 0,
+    bass,
+    lead,
+    bassB,
+    leadB,
+    drums,
+    drumsB,
+    bMap: toMap(bass, steps),
+    lMap: toMap(lead, steps),
+    bMapB: bassB ? toMap(bassB, steps) : null,
+    lMapB: leadB ? toMap(leadB, steps) : null,
+  };
+}
+
+// ---- reusable drum bars (16 tokens each) ----
+const D_ROCK = 'kh . h . sh . h . kh . h . sh . h .'; // kick 1&3, snare 2&4, 8th hats
+const D_ROCKC = 'ckh . h . sh . h . kh . h . sh . h .'; // + crash accent
+const D_DRIVE = 'kh h h h sh h h h kh h h h sh h h h'; // martial 16th hats
+const D_DRIVEC = 'ckh h h h sh h h h kh h h h sh h h h';
+const D_DOCK = 'kh . h . sh . k . kh . h . sh . h .'; // laid-back, kick push on & of 2
+const D_FUNK = 'kh h . h sh h kh . kh h . h sh h o .'; // funky 16th grid (swung)
+const D_CALM = 'kh . . . sh . . . kh . . . sh . h .'; // dojo minimalism
+const D_FILL = 'kh . h . sh . h . kh . sh . s s sh o'; // turnaround fill
+const D_FILL16 = 'kh h h h sh h sh h kh h sh sh s s sh o'; // 16th fill
+const D_JINGLE = 'ckh . h . sh . h . kh . h . sh . h o';
+const D_FINALE = 'kh . sh . kh . sh . kh sh s s c . . .';
+const D_SPARSE = 'k . . . s . . . k . . . s . . .';
+const D_END = 'k . . . . . . . . . . . . . . .';
+
+function drumLoop(bars: string[]): string {
+  return bars.join(' ');
+}
+
+// ---------------------------------------------------------------------------
+// COMPOSITIONS — all loops are 8 bars (128 steps).
+// ---------------------------------------------------------------------------
+
+// TITLE — heroic, memorable fanfare-loop. C major: I - V6 - vi - iii - IV - I6 - ii - V.
+const TITLE_BASS_A = [
+  'C2 . C2 . G1 . C2 . C3 . C2 . G1 . C2 .', // C
+  'B1 . B1 . G1 . B1 . B2 . B1 . G1 . B1 .', // G/B
+  'A1 . A1 . E2 . A1 . A2 . A1 . E2 . A1 .', // Am
+  'E2 . E2 . B1 . E2 . E3 . E2 . B1 . E2 .', // Em
+  'F2 . F2 . C2 . F2 . C3 . F2 . C2 . F2 .', // F
+  'E2 . E2 . C2 . E2 . E3 . E2 . C2 . E2 .', // C/E
+  'D2 . D2 . A1 . D2 . D3 . D2 . A1 . D2 .', // Dm
+  'G1 . G1 . D2 . G1 . G2 . G1 . D2 . G1 G2', // G (pickup)
+].join(' ');
+const TITLE_LEAD_A = [
+  'E4 ~ ~ . G4 ~ ~ . C5 ~ ~ . ~ ~ ~ .', // the hook: rise to C5 and hold
+  'D5 ~ ~ . B4 ~ ~ . G4 ~ . A4 . B4 ~ .',
+  'C5 ~ ~ . A4 ~ ~ . E4 ~ . G4 . A4 ~ .',
+  'B4 ~ ~ . G4 ~ ~ . E4 ~ ~ . ~ ~ ~ .',
+  'A4 ~ ~ . C5 ~ ~ . E5 ~ ~ . D5 . C5 .',
+  'G4 ~ ~ . E4 ~ ~ . C5 ~ . B4 . A4 ~ .',
+  'A4 ~ ~ . F4 ~ ~ . D4 ~ . E4 . F4 ~ .',
+  'G4 ~ . A4 . B4 ~ . D5 ~ . E5 ~ ~ ~ .',
+].join(' ');
+const TITLE_BASS_B = [
+  'C2 . C2 . G1 . C2 . C3 . C2 . G1 . C2 .',
+  'B1 . B1 . G1 . B1 . B2 . B1 . G1 . B1 .',
+  'A1 . A1 . E2 . A1 . A2 . A1 . E2 . A1 .',
+  'E2 . E2 . B1 . E2 . E3 . E2 . B1 . E2 .',
+  'F2 . F2 . C2 . F2 . C3 . F2 . C2 . F2 .',
+  'E2 . E2 . C2 . E2 . E3 . E2 . C2 . E2 .',
+  'D2 . D2 . A1 . D2 . F2 . A2 . D3 . A2 .', // ii with run-up
+  'G1 . G1 . D2 . G1 . G2 . F2 . D2 . B1 .', // V turnaround
+].join(' ');
+const TITLE_LEAD_B = [
+  'E4 ~ ~ . G4 ~ ~ . C5 ~ ~ . ~ ~ ~ .',
+  'D5 ~ ~ . B4 ~ ~ . G4 ~ . A4 . B4 ~ .',
+  'C5 ~ ~ . A4 ~ ~ . E4 ~ . G4 . A4 ~ .',
+  'B4 ~ ~ . G4 ~ ~ . E4 ~ ~ . ~ ~ ~ .',
+  'A4 ~ ~ . C5 ~ ~ . E5 ~ ~ . D5 . C5 .',
+  'G4 ~ ~ . E4 ~ ~ . C5 ~ . B4 . A4 ~ .',
+  'F4 ~ ~ . A4 ~ ~ . D5 ~ . C5 . A4 ~ .', // counter-melody answer
+  'B4 ~ . D5 . G4 ~ . A4 ~ . B4 ~ ~ ~ .',
+].join(' ');
+
+// STAGE 1 METRO — urban groove, A minor: i - VI - III - VII (x2), 112bpm.
+const S1_BASS_A = [
+  'A1 . A1 . A1 . A2 . A1 . A1 . G1 . A1 .',
+  'F1 . F1 . F1 . F2 . F1 . F1 . E1 . F1 .',
+  'C2 . C2 . C2 . C3 . C2 . C2 . B1 . C2 .',
+  'G1 . G1 . G1 . G2 . G1 . G1 . A1 . B1 .',
+  'A1 . A1 . A2 . A1 . A1 . E2 . G1 . A1 .',
+  'F2 . F2 . F2 . C2 . F2 . C2 . E2 . F2 .', // F up an octave under the lead peak
+  'C2 . C2 . C3 . C2 . C2 . G1 . B1 . C2 .',
+  'G1 . G1 . G2 . G1 . B1 . D2 . G2 . G1 .',
+].join(' ');
+const S1_LEAD_A = [
+  'A4 ~ ~ . G4 . A4 . C5 ~ ~ . A4 ~ ~ .', // hook phrase 1
+  'A4 ~ ~ . G4 . A4 . F4 ~ ~ . E4 ~ ~ .',
+  'E4 ~ ~ . G4 ~ . A4 . C5 ~ ~ . D5 ~ .',
+  'D5 ~ ~ . B4 ~ . G4 . A4 ~ . ~ ~ ~ .',
+  'A4 ~ ~ . G4 . A4 . C5 ~ ~ . D5 ~ ~ .', // hook phrase 2 (lifted)
+  'E5 ~ ~ . D5 . C5 . A4 ~ ~ . G4 ~ ~ .',
+  'E4 ~ . G4 . A4 ~ . C5 . D5 ~ . E5 ~ .',
+  'D5 ~ . B4 . G4 ~ . A4 ~ ~ . ~ ~ ~ .',
+].join(' ');
+const S1_BASS_B = S1_BASS_A; // groove locked; variation lives in lead + drums
+const S1_LEAD_B = [
+  'A4 ~ ~ . G4 . A4 . C5 ~ ~ . A4 ~ ~ .',
+  'A4 ~ ~ . G4 . A4 . F4 ~ ~ . E4 ~ ~ .',
+  'E4 ~ ~ . G4 ~ . A4 . C5 ~ ~ . D5 ~ .',
+  'D5 ~ ~ . B4 ~ . G4 . A4 ~ . ~ ~ ~ .',
+  'A4 ~ ~ . G4 . A4 . C5 ~ ~ . D5 ~ ~ .',
+  'E5 ~ ~ . D5 . C5 . A4 ~ ~ . G4 ~ ~ .',
+  'G4 ~ ~ . E4 ~ . G4 . A4 ~ ~ . C5 ~ .', // counter-melody turnaround
+  'B4 ~ . D5 . B4 ~ . G4 ~ . A4 ~ ~ ~ .',
+].join(' ');
+
+// STAGE 2 DOCKS — laid-back but driving, D minor: i - VI - III - VII, 96bpm.
+const S2_BASS_A = [
+  'D2 ~ ~ . . D2 . . D2 . . A1 . D2 . .',
+  'Bb1 ~ ~ . . Bb1 . . Bb1 . . F1 . Bb1 . .',
+  'F1 ~ ~ . . F1 . . F1 . . C2 . F1 . .',
+  'C2 ~ ~ . . C2 . . C2 . . G1 . C2 . .',
+  'D2 ~ ~ . . D2 . . D2 . . A1 . C2 D2 .',
+  'Bb1 ~ ~ . . Bb1 . . Bb1 . . F1 . A1 Bb1 .',
+  'F1 ~ ~ . . F1 . . F1 . . C2 . E2 F2 .',
+  'C2 ~ ~ . . C2 . . C2 . . D2 . E2 G2 .',
+].join(' ');
+const S2_LEAD_A = [
+  'A4 ~ ~ ~ ~ ~ . . F4 ~ ~ . A4 ~ ~ .',
+  'F4 ~ ~ ~ ~ ~ . . D4 ~ ~ . F4 ~ ~ .',
+  'A4 ~ ~ . G4 ~ ~ . F4 ~ ~ . E4 ~ ~ .',
+  'E4 ~ ~ . D4 ~ ~ . C4 ~ ~ . ~ ~ ~ .',
+  'F4 ~ ~ . A4 ~ ~ . D5 ~ ~ . C5 ~ ~ .',
+  'C5 ~ ~ . A4 ~ ~ . F4 ~ ~ . G4 ~ ~ .',
+  'A4 ~ ~ . C5 ~ ~ . A4 ~ . G4 . F4 ~ .',
+  'E4 ~ . G4 . E4 ~ . D4 ~ ~ . ~ ~ ~ .',
+].join(' ');
+const S2_BASS_B = S2_BASS_A;
+const S2_LEAD_B = [
+  'A4 ~ ~ ~ ~ ~ . . F4 ~ ~ . A4 ~ ~ .',
+  'F4 ~ ~ ~ ~ ~ . . D4 ~ ~ . F4 ~ ~ .',
+  'A4 ~ ~ . G4 ~ ~ . F4 ~ ~ . E4 ~ ~ .',
+  'E4 ~ ~ . D4 ~ ~ . C4 ~ ~ . ~ ~ ~ .',
+  'F4 ~ ~ . A4 ~ ~ . D5 ~ ~ . C5 ~ ~ .',
+  'C5 ~ ~ . A4 ~ ~ . F4 ~ ~ . G4 ~ ~ .',
+  'C5 ~ ~ . A4 ~ . C5 . D5 ~ ~ . C5 ~ .', // counter-melody
+  'G4 ~ . E4 . C4 ~ . D4 ~ ~ . ~ ~ ~ .',
+].join(' ');
+
+// STAGE 3 WALL ST — martial, E minor: i - VI - III - VII, 122bpm, 16th hats.
+const S3_BASS_A = [
+  'E1 . E1 E1 . E1 . E2 . E1 . E1 . B1 . E1',
+  'C2 . C2 C2 . C2 . C3 . C2 . C2 . G1 . C2',
+  'G1 . G1 G1 . G1 . G2 . G1 . G1 . D2 . G1',
+  'D2 . D2 D2 . D2 . D3 . D2 . D2 . A1 . D2',
+  'E1 . E1 E1 . E1 . E2 . E1 . B1 . D2 . E2',
+  'C2 . C2 C2 . C2 . C3 . C2 . G1 . B1 . C2',
+  'G1 . G1 G1 . G1 . G2 . G1 . D2 . F#2 . G2',
+  'D2 . D2 D2 . D2 . A2 . A1 . B1 . C#2 . D2',
+].join(' ');
+const S3_LEAD_A = [
+  'E4 . E4 . G4 ~ . E4 . A4 ~ . G4 ~ ~ .',
+  'E4 . E4 . G4 ~ . A4 . G4 ~ . E4 ~ ~ .',
+  'D4 . D4 . G4 ~ . B4 ~ ~ . A4 . G4 ~ .',
+  'A4 ~ . G4 . F#4 ~ . E4 ~ . D4 ~ ~ ~ .',
+  'E4 . E4 . G4 ~ . E4 . B4 ~ . A4 ~ ~ .',
+  'A4 . A4 . C5 ~ . B4 . A4 ~ . G4 ~ ~ .',
+  'B4 ~ . A4 . G4 ~ . D5 ~ . B4 . G4 ~ .',
+  'A4 ~ . F#4 . D4 ~ . E4 ~ ~ . ~ ~ ~ .',
+].join(' ');
+const S3_BASS_B = S3_BASS_A;
+const S3_LEAD_B = [
+  'E4 . E4 . G4 ~ . E4 . A4 ~ . G4 ~ ~ .',
+  'E4 . E4 . G4 ~ . A4 . G4 ~ . E4 ~ ~ .',
+  'D4 . D4 . G4 ~ . B4 ~ ~ . A4 . G4 ~ .',
+  'A4 ~ . G4 . F#4 ~ . E4 ~ . D4 ~ ~ ~ .',
+  'E4 . E4 . G4 ~ . E4 . B4 ~ . A4 ~ ~ .',
+  'A4 . A4 . C5 ~ . B4 . A4 ~ . G4 ~ ~ .',
+  'G4 ~ . B4 . D5 ~ . B4 . G4 . A4 . B4 .', // martial answer
+  'F#4 ~ . D4 . A4 ~ . E4 ~ ~ . ~ ~ ~ .',
+].join(' ');
+
+// STAGE 4 DOJO — pentatonic, calmer. A minor pentatonic: i - i - iv - iv - VI - VII - i - i, 92bpm.
+const S4_BASS_A = [
+  'A1 ~ ~ . A1 ~ ~ . A1 ~ ~ . E2 ~ ~ .',
+  'A1 ~ ~ . A1 ~ ~ . G1 ~ ~ . E1 ~ ~ .',
+  'D2 ~ ~ . D2 ~ ~ . D2 ~ ~ . A1 ~ ~ .',
+  'D2 ~ ~ . D2 ~ ~ . C2 ~ ~ . A1 ~ ~ .',
+  'F1 ~ ~ . F1 ~ ~ . C2 ~ ~ . F2 ~ ~ .',
+  'G1 ~ ~ . G1 ~ ~ . D2 ~ ~ . G2 ~ ~ .',
+  'A1 ~ ~ . A1 ~ ~ . E2 ~ ~ . A1 ~ ~ .',
+  'A1 ~ ~ . G1 ~ ~ . E1 ~ ~ . A1 ~ ~ .',
+].join(' ');
+const S4_LEAD_A = [
+  'A4 ~ ~ ~ ~ ~ . . D5 ~ ~ ~ ~ ~ . .',
+  'C5 ~ ~ ~ ~ ~ . . A4 ~ ~ . G4 ~ ~ .',
+  'A4 ~ ~ ~ ~ ~ . . G4 ~ ~ . E4 ~ ~ .',
+  'D4 ~ ~ ~ ~ ~ . . E4 ~ ~ . G4 ~ ~ .',
+  'A4 ~ ~ . C5 ~ ~ . D5 ~ ~ . E5 ~ ~ .',
+  'D5 ~ ~ . C5 ~ ~ . A4 ~ ~ . G4 ~ ~ .',
+  'E4 ~ ~ . G4 ~ ~ . A4 ~ ~ . C5 ~ ~ .',
+  'A4 ~ ~ ~ ~ ~ . . ~ ~ ~ ~ ~ ~ ~ .',
+].join(' ');
+const S4_BASS_B = S4_BASS_A;
+const S4_LEAD_B = [
+  'A4 ~ ~ ~ ~ ~ . . D5 ~ ~ ~ ~ ~ . .',
+  'C5 ~ ~ ~ ~ ~ . . A4 ~ ~ . G4 ~ ~ .',
+  'A4 ~ ~ ~ ~ ~ . . G4 ~ ~ . E4 ~ ~ .',
+  'D4 ~ ~ ~ ~ ~ . . E4 ~ ~ . G4 ~ ~ .',
+  'A4 ~ ~ . C5 ~ ~ . D5 ~ ~ . E5 ~ ~ .',
+  'D5 ~ ~ . C5 ~ ~ . A4 ~ ~ . G4 ~ ~ .',
+  'C5 ~ ~ . A4 ~ ~ . G4 ~ ~ . E4 ~ ~ .', // falling counter-melody
+  'D4 ~ ~ . E4 ~ ~ . A4 ~ ~ ~ ~ ~ . .',
+].join(' ');
+
+// STAGE 5 CASINO — funky swing, C minor: i - i - iv - iv - i - iv - V - i, 106bpm swung.
+const S5_BASS_A = [
+  'C2 . . C2 . C2 . . Eb2 . . C2 . G1 . Bb1',
+  'C2 . . C2 . C2 . . Eb2 . . C2 . Bb1 . C2',
+  'F2 . . F2 . F2 . . Ab2 . . F2 . C3 . Eb3', // iv up an octave under the high stabs
+  'F2 . . F2 . F2 . . Ab2 . . F2 . Eb3 . F2',
+  'C2 . . C2 . C2 . . Eb2 . . C2 . G1 . Bb1',
+  'F2 . . F2 . F2 . . Ab2 . . F2 . C3 . Eb3',
+  'G1 . . G1 . G1 . . B1 . . D2 . G2 . G1',
+  'C2 . . C2 . Eb2 . G2 . . C3 . Bb2 . G2 .',
+].join(' ');
+const S5_LEAD_A = [
+  'C4 . . Eb4 . G4 . . Bb4 ~ . . G4 . Eb4 .',
+  'C4 . . Eb4 . G4 . . Bb4 . A4 . G4 ~ ~ .',
+  'F4 . . Ab4 . C5 ~ . . Bb4 ~ . . Ab4 ~ .',
+  'F4 . . Ab4 . C5 . . Bb4 . Ab4 . G4 ~ ~ .',
+  'C4 . . Eb4 . G4 . . Bb4 ~ . . C5 ~ ~ .',
+  'Ab4 . . C5 . Eb5 ~ . . C5 ~ . . Bb4 ~ .',
+  'G4 . . B4 . D5 ~ . . B4 . D5 . G4 ~ .',
+  'C5 ~ ~ . Bb4 . G4 . Eb4 ~ ~ . ~ ~ ~ .',
+].join(' ');
+const S5_BASS_B = S5_BASS_A;
+const S5_LEAD_B = [
+  'C4 . . Eb4 . G4 . . Bb4 ~ . . G4 . Eb4 .',
+  'C4 . . Eb4 . G4 . . Bb4 . A4 . G4 ~ ~ .',
+  'F4 . . Ab4 . C5 ~ . . Bb4 ~ . . Ab4 ~ .',
+  'F4 . . Ab4 . C5 . . Bb4 . Ab4 . G4 ~ ~ .',
+  'C4 . . Eb4 . G4 . . Bb4 ~ . . C5 ~ ~ .',
+  'Ab4 . . C5 . Eb5 ~ . . C5 ~ . . Bb4 ~ .',
+  'D5 ~ . B4 . G4 ~ . B4 . D5 ~ . B4 . G4', // dominant climb
+  'Eb5 ~ . C5 . Bb4 ~ . G4 ~ . Eb4 ~ ~ ~ .',
+].join(' ');
+
+// STAGE 6 LAUNCHPAD — rising epic, A minor: i - VI - VII - v - i - VI - iv - V, 126bpm.
+const S6_BASS_A = [
+  'A1 . A1 . C2 . D2 . E2 . D2 . C2 . A1 .',
+  'F1 . F1 . A1 . C2 . F2 . C2 . A1 . F1 .',
+  'G1 . G1 . B1 . D2 . G2 . D2 . B1 . G1 .',
+  'E2 . E2 . G1 . B1 . E2 . B1 . G1 . E2 .', // v up an octave under the held E5
+  'A1 . A1 . C2 . E2 . A2 . E2 . C2 . A1 .',
+  'F1 . F1 . A1 . C2 . F2 . C2 . A1 . F1 .',
+  'D2 . D2 . F2 . A2 . C3 . A2 . F2 . D2 .',
+  'E1 . E1 . G#1 . B1 . E2 . D2 . B1 . G#1 .',
+].join(' ');
+const S6_LEAD_A = [
+  'A4 ~ ~ . C5 ~ ~ . E5 ~ ~ . D5 . C5 .',
+  'C5 ~ ~ . A4 ~ ~ . C5 ~ ~ . D5 ~ ~ .',
+  'D5 ~ ~ . B4 ~ ~ . D5 ~ ~ . E5 ~ ~ .',
+  'E5 ~ ~ . D5 . B4 . G4 ~ ~ . B4 ~ ~ .',
+  'A4 ~ ~ . C5 ~ ~ . E5 ~ ~ . D5 . C5 .',
+  'C5 ~ ~ . D5 ~ ~ . E5 ~ ~ . C5 ~ ~ .',
+  'D5 ~ ~ . C5 ~ ~ . A4 ~ ~ . F4 ~ ~ .',
+  'G#4 ~ ~ . B4 ~ ~ . E5 ~ ~ . ~ ~ ~ .',
+].join(' ');
+const S6_BASS_B = S6_BASS_A;
+const S6_LEAD_B = [
+  'A4 ~ ~ . C5 ~ ~ . E5 ~ ~ . D5 . C5 .',
+  'C5 ~ ~ . A4 ~ ~ . C5 ~ ~ . D5 ~ ~ .',
+  'D5 ~ ~ . B4 ~ ~ . D5 ~ ~ . E5 ~ ~ .',
+  'E5 ~ ~ . D5 . B4 . G4 ~ ~ . B4 ~ ~ .',
+  'A4 ~ ~ . C5 ~ ~ . E5 ~ ~ . D5 . C5 .',
+  'C5 ~ ~ . D5 ~ ~ . E5 ~ ~ . C5 ~ ~ .',
+  'F4 ~ . A4 . D5 ~ . C5 ~ . A4 ~ ~ ~ .', // rising answer
+  'G#4 ~ . B4 . E5 ~ . D5 ~ . B4 ~ ~ ~ .',
+].join(' ');
+
+// BOSS — fast minor but GROOVE-heavy (no dissonance): A minor i - i - iv - V, 144bpm.
+const BOSS_BASS_A = [
+  'A1 . A1 . A1 . A2 . A1 . A1 . G1 . A1 .',
+  'A1 . A1 . A2 . A1 . A1 . E2 . G1 . A1 .',
+  'D2 . D2 . D2 . A2 . D2 . D2 . C2 . D2 .',
+  'E2 . E2 . E2 . B2 . E2 . E2 . D2 . E2 .',
+  'A1 . A1 . A1 . A2 . A1 . A1 . G1 . A1 .',
+  'A1 . A1 . A2 . A1 . B1 . C2 . D2 . E2 .',
+  'D2 . D2 . D2 . A2 . D2 . D2 . C2 . D2 .',
+  'E2 . E2 . B2 . E2 . G#2 . B2 . D2 . E2 .',
+].join(' ');
+const BOSS_LEAD_A = [
+  'A4 . A4 . C5 ~ . A4 . G4 . A4 ~ ~ ~ .', // call
+  'A4 . A4 . C5 ~ . D5 . E5 ~ . D5 . C5 .', // response
+  'D5 ~ . C5 . A4 ~ . F4 . A4 ~ . G4 ~ .',
+  'G#4 ~ . B4 . E5 ~ . D5 . B4 ~ . G#4 ~ .',
+  'A4 . A4 . C5 ~ . A4 . G4 . A4 ~ ~ ~ .',
+  'E5 ~ . D5 . C5 ~ . A4 . G4 . A4 ~ ~ .',
+  'D5 ~ . C5 . A4 ~ . F4 . G4 . A4 ~ ~ .',
+  'B4 ~ . G#4 . E4 ~ . A4 ~ ~ . ~ ~ ~ .',
+].join(' ');
+const BOSS_BASS_B = BOSS_BASS_A;
+const BOSS_LEAD_B = [
+  'A4 . A4 . C5 ~ . A4 . G4 . A4 ~ ~ ~ .',
+  'A4 . A4 . C5 ~ . D5 . E5 ~ . D5 . C5 .', // response
+  'D5 ~ . C5 . A4 ~ . F4 . A4 ~ . G4 ~ .',
+  'G#4 ~ . B4 . E5 ~ . D5 . B4 ~ . G#4 ~ .',
+  'A4 . A4 . C5 ~ . A4 . G4 . A4 ~ ~ ~ .',
+  'E5 ~ . D5 . C5 ~ . A4 . G4 . A4 ~ ~ .',
+  'A4 ~ . C5 . D5 ~ . C5 . A4 . G4 ~ ~ .', // counter-riff
+  'G#4 ~ . B4 . D5 ~ . E5 ~ ~ . ~ ~ ~ .',
+].join(' ');
+
+// BOSS 2 (EMPEROR FUD) — same family, E minor i - i - iv - V, 148bpm, darker riff.
+const FUD_BASS_A = [
+  'E1 . E1 . E1 . E2 . E1 . E1 . D1 . E1 .',
+  'E1 . E1 . E2 . E1 . E1 . B1 . D1 . E1 .',
+  'A1 . A1 . A1 . E2 . A1 . A1 . G1 . A1 .',
+  'B1 . B1 . B1 . F#2 . B1 . B1 . A1 . B1 .',
+  'E1 . E1 . E1 . E2 . E1 . E1 . D1 . E1 .',
+  'E1 . E1 . E2 . E1 . F#1 . G1 . A1 . B1 .',
+  'A1 . A1 . A1 . E2 . A1 . A1 . G1 . A1 .',
+  'B1 . B1 . F#2 . B1 . D#2 . F#2 . A2 . B1 .',
+].join(' ');
+const FUD_LEAD_A = [
+  'E4 . E4 . G4 ~ . E4 . D4 . E4 ~ ~ ~ .',
+  'E4 . E4 . G4 ~ . A4 . B4 ~ . A4 . G4 .',
+  'A4 ~ . G4 . E4 ~ . C4 . E4 ~ . D4 ~ .',
+  'D#4 ~ . F#4 . B4 ~ . A4 . F#4 ~ . D#4 ~ .',
+  'E4 . E4 . G4 ~ . E4 . D4 . E4 ~ ~ ~ .',
+  'B4 ~ . A4 . G4 ~ . E4 . D4 . E4 ~ ~ .',
+  'C5 ~ . B4 . A4 ~ . E4 . F4 . G4 ~ ~ .',
+  'F#4 ~ . D#4 . B3 ~ . E4 ~ ~ . ~ ~ ~ .',
+].join(' ');
+const FUD_BASS_B = FUD_BASS_A;
+const FUD_LEAD_B = [
+  'E4 . E4 . G4 ~ . E4 . D4 . E4 ~ ~ ~ .',
+  'E4 . E4 . G4 ~ . A4 . B4 ~ . A4 . G4 .',
+  'A4 ~ . G4 . E4 ~ . C4 . E4 ~ . D4 ~ .',
+  'D#4 ~ . F#4 . B4 ~ . A4 . F#4 ~ . D#4 ~ .',
+  'E4 . E4 . G4 ~ . E4 . D4 . E4 ~ ~ ~ .',
+  'B4 ~ . A4 . G4 ~ . E4 . D4 . E4 ~ ~ .',
+  'E4 ~ . G4 . A4 ~ . G4 . E4 . D4 ~ ~ .', // counter-riff
+  'D#4 ~ . F#4 . A4 ~ . B4 ~ ~ . ~ ~ ~ .',
+].join(' ');
+
+// VICTORY jingle — bright C major fanfare loop, 8 bars, 126bpm.
+const WIN_BASS = [
+  'C2 . C2 . G2 . C2 . C3 . C2 . G2 . C2 .',
+  'F2 . F2 . C3 . F2 . C3 . F2 . C3 . F2 .',
+  'G2 . G2 . D2 . G2 . G2 . G2 . D2 . G2 .',
+  'C2 . C2 . E2 . G2 . C3 ~ ~ ~ ~ ~ ~ ~',
+  'C2 . C2 . G2 . C2 . C3 . C2 . G2 . C2 .',
+  'F2 . F2 . C3 . F2 . C3 . F2 . C3 . F2 .',
+  'G2 . G2 . D2 . G2 . G2 . G2 . D2 . G2 G2',
+  'C2 . C2 . E2 . G2 . C3 ~ ~ ~ ~ ~ ~ ~',
+].join(' ');
+const WIN_LEAD = [
+  'E4 ~ . G4 ~ . C5 ~ . E5 ~ . D5 . C5 .',
+  'A4 ~ . C5 ~ . D5 ~ . C5 ~ . A4 . G4 .',
+  'B4 ~ . D5 ~ . E5 ~ . D5 ~ . B4 . G4 .',
+  'C5 ~ ~ ~ ~ ~ ~ ~ E5 ~ ~ . G4 ~ ~ .',
+  'G4 ~ . C5 ~ . E5 ~ . D5 ~ . C5 . E4 .',
+  'A4 ~ . C5 ~ . D5 ~ . E5 ~ . C5 . A4 .',
+  'B4 ~ . D5 ~ . G4 ~ . B4 ~ . D5 . E5 .',
+  'C5 ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ .',
+].join(' ');
+
+// GAME OVER jingle — A minor slow descent, 8 bars, 92bpm.
+const OVER_BASS = [
+  'A1 ~ ~ ~ ~ ~ . . A1 ~ ~ . G1 ~ ~ .',
+  'F1 ~ ~ ~ ~ ~ . . F1 ~ ~ . C2 ~ ~ .',
+  'D2 ~ ~ ~ ~ ~ . . D2 ~ ~ . E2 ~ ~ .',
+  'E1 ~ ~ ~ ~ ~ . . E1 ~ ~ . G#1 ~ ~ .',
+  'A1 ~ ~ ~ ~ ~ . . A1 ~ ~ . G1 ~ ~ .',
+  'F1 ~ ~ ~ ~ ~ . . F1 ~ ~ . E1 ~ ~ .',
+  'D2 ~ ~ ~ ~ ~ . . D2 ~ ~ . E2 ~ ~ .',
+  'A1 ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ .',
+].join(' ');
+const OVER_LEAD = [
+  'A4 ~ ~ ~ ~ ~ . . G4 ~ ~ . E4 ~ ~ .',
+  'F4 ~ ~ ~ ~ ~ . . E4 ~ ~ . C4 ~ ~ .',
+  'D4 ~ ~ ~ ~ ~ . . F4 ~ ~ . A4 ~ ~ .',
+  'G#4 ~ ~ ~ ~ ~ . . E4 ~ ~ . B3 ~ ~ .',
+  'E5 ~ ~ ~ ~ ~ . . D5 ~ ~ . C5 ~ ~ .',
+  'A4 ~ ~ ~ ~ ~ . . G4 ~ ~ . F4 ~ ~ .',
+  'F4 ~ ~ ~ ~ ~ . . E4 ~ ~ . D4 ~ ~ .',
+  'A4 ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ .',
+].join(' ');
 
 export const TRACKS: Record<string, Track> = {
-  title: { bpm: 120, bass: TITLE_BASS, lead: TITLE_LEAD, leadWave: 'square' },
-  stage1: { bpm: 140, bass: ST1_BASS, lead: ST1_LEAD },
-  stage2: { bpm: 132, bass: ST2_BASS, lead: ST2_LEAD },
-  stage3: { bpm: 160, bass: ST3_BASS, lead: ST3_LEAD },
-  stage4: { bpm: 150, bass: ST4_BASS, lead: ST4_LEAD },
-  stage5: { bpm: 118, bass: ST5_BASS, lead: ST5_LEAD, leadWave: 'sawtooth' },
-  stage6: { bpm: 152, bass: ST6_BASS, lead: ST6_LEAD },
-  boss: { bpm: 168, bass: ST3_BASS, lead: ST3_LEAD },
-  boss2: { bpm: 172, bass: FUD_BASS, lead: FUD_LEAD },
+  title: mkTrack(108, TITLE_BASS_A, TITLE_LEAD_A, drumLoop([D_ROCKC, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK]), {
+    bassB: TITLE_BASS_B,
+    leadB: TITLE_LEAD_B,
+    drumB: drumLoop([D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_FILL]),
+  }),
+  stage1: mkTrack(112, S1_BASS_A, S1_LEAD_A, drumLoop([D_ROCKC, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK]), {
+    bassB: S1_BASS_B,
+    leadB: S1_LEAD_B,
+    drumB: drumLoop([D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_FILL]),
+  }),
+  stage2: mkTrack(96, S2_BASS_A, S2_LEAD_A, drumLoop([D_DOCK, D_DOCK, D_DOCK, D_DOCK, D_DOCK, D_DOCK, D_DOCK, D_DOCK]), {
+    bassB: S2_BASS_B,
+    leadB: S2_LEAD_B,
+    drumB: drumLoop([D_DOCK, D_DOCK, D_DOCK, D_DOCK, D_DOCK, D_DOCK, D_DOCK, D_FILL]),
+  }),
+  stage3: mkTrack(122, S3_BASS_A, S3_LEAD_A, drumLoop([D_DRIVEC, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE]), {
+    bassB: S3_BASS_B,
+    leadB: S3_LEAD_B,
+    drumB: drumLoop([D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_FILL16]),
+  }),
+  stage4: mkTrack(92, S4_BASS_A, S4_LEAD_A, drumLoop([D_CALM, D_CALM, D_CALM, D_CALM, D_CALM, D_CALM, D_CALM, D_CALM]), {
+    bassB: S4_BASS_B,
+    leadB: S4_LEAD_B,
+    drumB: drumLoop([D_CALM, D_CALM, D_CALM, D_CALM, D_CALM, D_CALM, D_CALM, D_FILL]),
+  }),
+  stage5: mkTrack(106, S5_BASS_A, S5_LEAD_A, drumLoop([D_FUNK, D_FUNK, D_FUNK, D_FUNK, D_FUNK, D_FUNK, D_FUNK, D_FUNK]), {
+    swing: 0.55,
+    bassB: S5_BASS_B,
+    leadB: S5_LEAD_B,
+    drumB: drumLoop([D_FUNK, D_FUNK, D_FUNK, D_FUNK, D_FUNK, D_FUNK, D_FUNK, D_FILL16]),
+  }),
+  stage6: mkTrack(126, S6_BASS_A, S6_LEAD_A, drumLoop([D_ROCKC, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK]), {
+    bassB: S6_BASS_B,
+    leadB: S6_LEAD_B,
+    drumB: drumLoop([D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_FILL16]),
+  }),
+  boss: mkTrack(144, BOSS_BASS_A, BOSS_LEAD_A, drumLoop([D_DRIVEC, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE]), {
+    bassB: BOSS_BASS_B,
+    leadB: BOSS_LEAD_B,
+    drumB: drumLoop([D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_FILL16]),
+  }),
+  boss2: mkTrack(148, FUD_BASS_A, FUD_LEAD_A, drumLoop([D_DRIVEC, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE]), {
+    bassB: FUD_BASS_B,
+    leadB: FUD_LEAD_B,
+    drumB: drumLoop([D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_DRIVE, D_FILL16]),
+  }),
+  victory: mkTrack(126, WIN_BASS, WIN_LEAD, drumLoop([D_JINGLE, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_ROCK, D_FINALE])),
+  gameover: mkTrack(92, OVER_BASS, OVER_LEAD, drumLoop([D_SPARSE, D_SPARSE, D_SPARSE, D_SPARSE, D_SPARSE, D_SPARSE, D_SPARSE, D_END])),
 };
 
 export class AudioSys {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private musicGain: GainNode | null = null;
+  private musicFilter: BiquadFilterNode | null = null; // v7: gentle master lowpass on the music bus
   private sfxGain: GainNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
+  private pulse25: PeriodicWave | null = null; // v7: Capcom 25% pulse lead
   muted = false;
 
   // music sequencer state
@@ -153,10 +577,22 @@ export class AudioSys {
     this.master.connect(this.ctx.destination);
     this.musicGain = this.ctx.createGain();
     this.musicGain.gain.value = 0.34;
-    this.musicGain.connect(this.master);
+    // v7: gentle lowpass on the music bus — kills the shrill edge, keeps the bite
+    this.musicFilter = this.ctx.createBiquadFilter();
+    this.musicFilter.type = 'lowpass';
+    this.musicFilter.frequency.value = 3400;
+    this.musicFilter.Q.value = 0.4;
+    this.musicGain.connect(this.musicFilter);
+    this.musicFilter.connect(this.master);
     this.sfxGain = this.ctx.createGain();
     this.sfxGain.gain.value = 0.9;
     this.sfxGain.connect(this.master);
+    // v7: 25% pulse wave for the lead voice (Mega Man / SF2 hollow lead)
+    const H = 24;
+    const pre = new Float32Array(H + 1);
+    const pim = new Float32Array(H + 1);
+    for (let n = 1; n <= H; n++) pim[n] = (2 / (Math.PI * n)) * Math.sin(Math.PI * n * 0.25);
+    this.pulse25 = this.ctx.createPeriodicWave(pre, pim, { disableNormalization: false });
     // shared noise buffer
     const len = this.ctx.sampleRate;
     this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
@@ -262,30 +698,96 @@ export class AudioSys {
   private schedule(): void {
     if (!this.ctx || !this.track || !this.musicGain || this.muted) return;
     if (this.nextT < this.ctx.currentTime - 0.25) this.nextT = this.ctx.currentTime;
-    const stepDur = 60 / this.track.bpm / 4;
+    const tr = this.track;
+    const stepDur = 60 / tr.bpm / 4;
     // schedule up to 0.12s ahead
     while (this.nextT < this.ctx.currentTime + 0.12) {
-      const i = this.step % this.track.bass.length;
-      const b = this.track.bass[i];
-      const l = this.track.lead[i % this.track.lead.length];
-      if (b) this.note(midiToFreq(b), stepDur * 0.9, this.track.bassWave ?? 'triangle', 0.5, this.nextT);
-      if (l) this.note(midiToFreq(l), stepDur * 0.95, this.track.leadWave ?? 'square', 0.2, this.nextT);
+      const idx = this.step % tr.steps;
+      const cycle = Math.floor(this.step / tr.steps);
+      const useB = (cycle & 1) === 1; // variation every 2nd pass
+      let t0 = this.nextT;
+      if (tr.swing > 0 && (idx & 1) === 1) t0 += stepDur * tr.swing * 0.5; // swung off-16ths
+      const bMap = useB && tr.bMapB ? tr.bMapB : tr.bMap;
+      const lMap = useB && tr.lMapB ? tr.lMapB : tr.lMap;
+      const drm = useB && tr.drumsB ? tr.drumsB : tr.drums;
+      const b = bMap[idx];
+      if (b) this.note(midiToFreq(b.midi), b.len * stepDur * 0.92, 'triangle', 0.5, t0, false);
+      const l = lMap[idx];
+      if (l) {
+        // lead: 25% pulse, UNDER the bass in level, vibrato on held notes
+        const leadWave: OscillatorType | PeriodicWave = this.pulse25 ?? 'square';
+        this.note(midiToFreq(l.midi), l.len * stepDur * 0.95, leadWave, 0.15, t0, l.len * stepDur >= 0.24);
+      }
+      const d = drm[idx];
+      if (d) this.drum(d, t0);
       this.nextT += stepDur;
       this.step++;
     }
   }
 
-  private note(freq: number, dur: number, type: OscillatorType, vol: number, t0: number): void {
+  private note(freq: number, dur: number, wave: OscillatorType | PeriodicWave, vol: number, t0: number, vib: boolean): void {
     if (!this.ctx || !this.musicGain) return;
     const o = this.ctx.createOscillator();
     const g = this.ctx.createGain();
-    o.type = type;
+    if (typeof wave === 'string') o.type = wave as OscillatorType;
+    else o.setPeriodicWave(wave);
     o.frequency.value = freq;
     g.gain.setValueAtTime(vol, t0);
     g.gain.setTargetAtTime(0.0001, t0 + dur * 0.7, 0.03);
+    if (vib) {
+      // light delayed vibrato (Capcom lead shimmer) — 5.6Hz, +-9 cents
+      const lfo = this.ctx.createOscillator();
+      const lg = this.ctx.createGain();
+      lfo.frequency.value = 5.6;
+      lg.gain.setValueAtTime(0, t0);
+      lg.gain.linearRampToValueAtTime(9, t0 + Math.min(0.14, dur * 0.4));
+      lfo.connect(lg);
+      lg.connect(o.detune);
+      lfo.start(t0);
+      lfo.stop(t0 + dur + 0.1);
+    }
     o.connect(g).connect(this.musicGain);
     o.start(t0);
     o.stop(t0 + dur + 0.1);
+  }
+
+  // ---------- v7 drum voice (all noise-based, on the music bus) ----------
+  private drum(mask: number, t0: number): void {
+    if (!this.ctx || !this.musicGain || !this.noiseBuf) return;
+    const burst = (type: BiquadFilterType, freq: number, dur: number, vol: number, q = 0.8): void => {
+      if (!this.ctx || !this.musicGain || !this.noiseBuf) return;
+      const s = this.ctx.createBufferSource();
+      s.buffer = this.noiseBuf;
+      s.loop = true;
+      const f = this.ctx.createBiquadFilter();
+      f.type = type;
+      f.frequency.value = freq;
+      f.Q.value = q;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(vol, t0);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      s.connect(f).connect(g).connect(this.musicGain);
+      s.start(t0);
+      s.stop(t0 + dur + 0.02);
+    };
+    if (mask & 1) {
+      // kick: noise thump + sine body drop (the groove anchor)
+      burst('lowpass', 240, 0.13, 0.5);
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(108, t0);
+      o.frequency.exponentialRampToValueAtTime(44, t0 + 0.1);
+      g.gain.setValueAtTime(0.55, t0);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.13);
+      o.connect(g).connect(this.musicGain);
+      o.start(t0);
+      o.stop(t0 + 0.15);
+    }
+    if (mask & 2) burst('bandpass', 1900, 0.11, 0.34, 1.1); // snare on 2 & 4
+    if (mask & 4) burst('highpass', 7800, 0.03, 0.1); // closed hat
+    if (mask & 8) burst('highpass', 7200, 0.16, 0.13); // open hat
+    if (mask & 16) burst('highpass', 5200, 0.5, 0.16); // crash
   }
 
   destroy(): void {

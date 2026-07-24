@@ -143,7 +143,7 @@ export class Game implements GameCtx {
     this.audio.destroy();
   }
 
-  // v6: touch-only pause (keyboard layout unchanged)
+  // v6 touch II button + v7 desktop P/ESC — play-scene pause with audio freeze
   togglePause(): void {
     if (this.scene !== 'play') return;
     this.paused = !this.paused;
@@ -317,6 +317,11 @@ export class Game implements GameCtx {
   // ---------- main loop ----------
   step(): void {
     if (this.paused) {
+      // v7: P/ESC resumes from desktop too (touch resumes via the II button)
+      if (this.input.pressed.pause) {
+        this.input.pressed.pause = false;
+        this.togglePause();
+      }
       this.input.postUpdate(); // swallow buffered edges while frozen
       return;
     }
@@ -325,6 +330,11 @@ export class Game implements GameCtx {
     if (inp.pressed.mute) {
       this.audio.toggleMute();
       inp.pressed.mute = false;
+    }
+    // v7: desktop pause (P / ESC) — same veil + sim freeze as the touch II button
+    if (inp.pressed.pause) {
+      inp.pressed.pause = false;
+      this.togglePause();
     }
 
     switch (this.scene) {
@@ -354,7 +364,7 @@ export class Game implements GameCtx {
           if (this.tally.count >= 1 && !this.tallyApplied) {
             this.tallyApplied = true;
             this.score += this.tally.timeBonus + this.tally.coinBonus;
-            this.audio.fanfare();
+            this.audio.uiSelect(); // v7: the victory track plays under the tally
           }
         } else if (inp.pressed.start) {
           this.stageIdx++;
@@ -507,7 +517,7 @@ export class Game implements GameCtx {
         p.vx = 0;
       } else {
         this.setScene('gameover');
-        this.audio.stopMusic();
+        this.audio.playTrack('gameover'); // v7: composed game-over jingle
       }
     }
 
@@ -524,8 +534,7 @@ export class Game implements GameCtx {
       if (wasFinal) {
         this.finalVictory = true;
         this.setScene('victory');
-        this.audio.stopMusic();
-        this.audio.fanfare();
+        this.audio.playTrack('victory'); // v7: victory jingle under the credits
       } else {
         this.stageClear();
       }
@@ -542,8 +551,7 @@ export class Game implements GameCtx {
     this.player.state = 'victory';
     this.player.t = 0;
     this.setScene('clear');
-    this.audio.stopMusic();
-    this.audio.fanfare();
+    this.audio.playTrack('victory'); // v7: composed victory jingle loop
   }
 
   private resolveCombat(): void {
@@ -820,12 +828,12 @@ export class Game implements GameCtx {
     if (this.scene === 'continue') drawContinue(c, this.continueCount, this.sceneT);
     if (this.boss && !this.boss.alive) drawMarketCap(c, this.boss.t, this.boss.deathLine);
 
-    // v6: pause veil (touch PAUSE button)
+    // v6/v7: pause veil (touch II button, desktop P/ESC)
     if (this.paused) {
       c.fillStyle = 'rgba(4,5,10,0.55)';
       c.fillRect(0, 0, VW, VH);
       drawTextSh(c, 'PAUSED', VW / 2, 96, 3, '#f5c542', 'center');
-      drawTextSh(c, 'TAP II TO RESUME', VW / 2, 124, 1, '#c8ccd4', 'center');
+      drawTextSh(c, this.touchActive ? 'TAP II TO RESUME' : 'P / ESC TO RESUME', VW / 2, 124, 1, '#c8ccd4', 'center');
     }
     c.restore(); // overlay view
   }

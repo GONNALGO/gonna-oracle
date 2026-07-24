@@ -31,9 +31,8 @@ export function drawTitle(ctx: CanvasRenderingContext2D, t: number, art: Art): v
     drawTextSh(ctx, 'INSERT COIN - PRESS ENTER', VW / 2, 148, 1, '#ffffff', 'center');
   }
   // controls
-  drawText(ctx, 'ARROWS/WASD MOVE', VW / 2, 168, 1, '#8a8f9c', 'center');
-  drawText(ctx, 'Z PUNCH  X KICK  SPACE JUMP', VW / 2, 178, 1, '#8a8f9c', 'center');
-  drawText(ctx, 'C SPECIAL (G-METER)  M MUTE', VW / 2, 188, 1, '#8a8f9c', 'center');
+  drawText(ctx, 'ARROWS/WASD MOVE  SPACE JUMP  C SPECIAL', VW / 2, 172, 1, '#8a8f9c', 'center');
+  drawText(ctx, 'Z PUNCH  X KICK  P PAUSE  M MUTE', VW / 2, 184, 1, '#8a8f9c', 'center');
   // lizard mascots
   ctx.drawImage(art.lizIcon, 60, 140, 24, 20);
   ctx.save();
