@@ -824,7 +824,7 @@ export class Game implements GameCtx {
     if (this.paused) {
       c.fillStyle = 'rgba(4,5,10,0.55)';
       c.fillRect(0, 0, VW, VH);
-      drawTextSh(c, 'PAUSA', VW / 2, 96, 3, '#f5c542', 'center');
+      drawTextSh(c, 'PAUSED', VW / 2, 96, 3, '#f5c542', 'center');
       drawTextSh(c, 'TAP II TO RESUME', VW / 2, 124, 1, '#c8ccd4', 'center');
     }
     c.restore(); // overlay view

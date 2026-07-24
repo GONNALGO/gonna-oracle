@@ -133,8 +133,8 @@ export default function InstallHint() {
           />
         </svg>
         <span>
-          Per il vero fullscreen: <span style={{ color: '#4da3ff' }}>Condividi</span> &rarr;{' '}
-          <span style={{ color: '#e8ecf4' }}>&laquo;Aggiungi a Home&raquo;</span>
+          For true fullscreen: <span style={{ color: '#4da3ff' }}>Share</span> &rarr;{' '}
+          <span style={{ color: '#e8ecf4' }}>&laquo;Add to Home Screen&raquo;</span>
         </span>
         <button
           id="gonna-a2hs-ok"
