@@ -252,6 +252,148 @@ function paintSnek(frame: number, dash: boolean, pal: SnekPal = SNEK_PAL): HTMLC
   return c;
 }
 
+// ---------------- v5: MOLTOTOV SNEK ----------------
+// Snake in a jacket, hurling a lit molotov. Frames: coil1 coil2 throw.
+function paintMoltov(frame: number, thrw: boolean): HTMLCanvasElement {
+  const [c, x] = mk(42, 34);
+  const s = frame ? 1 : 0;
+  // coiled body S-curve (low, wide)
+  R(x, 2, 26, 16, 4, PAL.greenD);
+  R(x, 4 + s, 22, 16, 4, PAL.green);
+  R(x, 8 + s, 29, 16, 3, PAL.greenD);
+  R(x, 12 + s, 19, 12, 4, PAL.green);
+  // little jacket on the raised neck
+  R(x, 20 + s, 10, 14, 10, '#3a3a4c');
+  R(x, 20 + s, 10, 14, 3, '#26262e');
+  R(x, 26 + s, 12, 3, 8, PAL.goldD); // zipper
+  // head w/ hood
+  R(x, 22 + s, 2, 10, 10, PAL.green);
+  R(x, 20 + s, 2, 4, 8, PAL.greenD);
+  R(x, 30 + s, 2, 4, 8, PAL.greenD);
+  R(x, 28 + s, 5, 3, 3, PAL.white);
+  R(x, 29 + s, 6, 2, 2, PAL.ink);
+  R(x, 26 + s, 11, 6, 2, PAL.red); // tongue
+  // molotov bottle held high (lit rag)
+  if (thrw) {
+    R(x, 36, 0, 4, 8, '#3f7a3a'); // bottle up
+    R(x, 36, 6, 4, 3, '#c8b87a');
+    R(x, 37, -1 + 2, 3, 3, '#ff8a3c'); // flame
+    R(x, 38, -2 + 2, 1, 2, '#f5c542');
+    // throwing arm arc
+    R(x, 32 + s, 4, 6, 3, PAL.green);
+  } else {
+    R(x, 34 + s, 6, 4, 8, '#3f7a3a'); // bottle at side
+    R(x, 34 + s, 12, 4, 3, '#c8b87a');
+    R(x, 35 + s, 4, 3, 3, '#ff8a3c'); // flame
+    R(x, 36 + s, 3, 1, 2, '#f5c542');
+  }
+  return c;
+}
+
+// ---------------- v5: RIOT SHIELD BULL ----------------
+// Heavy brute with a riot shield. Frames: walk1 walk2 charge.
+function paintBull(legFrame: number, charge: boolean): HTMLCanvasElement {
+  const [c, x] = mk(56, 68);
+  const lean = charge ? 6 : 0;
+  const hide = '#8a5a3a';
+  const hideD = '#6e442a';
+  // legs + hooves
+  const a = legFrame ? 2 : 0;
+  R(x, 16, 58, 9, 8 - a, '#3a2a22');
+  R(x, 14, 64 - a, 12, 4, PAL.ink);
+  R(x, 30, 58, 9, 8 - (legFrame ? 0 : 2), '#33241d');
+  R(x, 28, 64 - (legFrame ? 0 : 2), 12, 4, '#181822');
+  // massive torso (bare hide + belt)
+  R(x, 10 + lean, 26, 32, 34, hide);
+  R(x, 10 + lean, 26, 32, 4, hideD);
+  R(x, 10 + lean, 50, 32, 5, '#26262e'); // belt
+  R(x, 24 + lean, 51, 5, 3, PAL.goldD); // buckle
+  // pecs shade
+  R(x, 14 + lean, 30, 10, 8, hideD);
+  R(x, 28 + lean, 30, 10, 8, hideD);
+  // bull head: horns + snout + angry eye
+  R(x, 14 + lean, 4, 24, 22, hide);
+  R(x, 34 + lean, 12, 10, 10, hideD); // snout
+  R(x, 36 + lean, 20, 8, 3, '#d8b89a'); // jaw
+  R(x, 40 + lean, 15, 3, 3, PAL.ink); // nostril
+  R(x, 30 + lean, 10, 5, 5, PAL.white);
+  R(x, 32 + lean, 12, 2, 2, PAL.red); // angry red eye
+  R(x, 28 + lean, 8, 8, 2, PAL.ink); // brow
+  // horns
+  R(x, 10 + lean, 2, 6, 4, '#e8e4d8');
+  R(x, 8 + lean, 0, 3, 6, '#e8e4d8');
+  R(x, 36 + lean, 2, 6, 4, '#e8e4d8');
+  R(x, 41 + lean, 0, 3, 6, '#e8e4d8');
+  // gold nose ring
+  R(x, 42 + lean, 21, 3, 3, PAL.gold);
+  // far arm
+  R(x, 8 + lean, 32, 5, 18, hideD);
+  // RIOT SHIELD on the near (front) arm — big slab with visor
+  if (charge) {
+    // shield lowered, leading the charge
+    R(x, 42 + lean, 30, 12, 34, PAL.silverD);
+    R(x, 42 + lean, 30, 12, 4, PAL.silver);
+    R(x, 44 + lean, 36, 8, 5, '#101a30'); // visor
+    R(x, 44 + lean, 46, 8, 12, '#6e7380');
+    drawText(x, 'R', 46 + lean, 52, 1, PAL.silver);
+    R(x, 42 + lean, 60, 12, 4, '#5a5f6c');
+  } else {
+    R(x, 40 + lean, 22, 13, 38, PAL.silverD);
+    R(x, 40 + lean, 22, 13, 4, PAL.silver);
+    R(x, 43 + lean, 28, 8, 5, '#101a30'); // visor
+    R(x, 43 + lean, 40, 8, 14, '#6e7380');
+    drawText(x, 'R', 45 + lean, 46, 1, PAL.silver);
+    R(x, 40 + lean, 56, 13, 4, '#5a5f6c');
+  }
+  return c;
+}
+
+// ---------------- v5: FUD CULTIST ----------------
+// Hooded figure, purple candle, glowing red eyes. Frames: drift1 drift2 cast.
+function paintCultist(frame: number, cast: boolean): HTMLCanvasElement {
+  const [c, x] = mk(36, 54);
+  const s = frame ? 1 : 0;
+  // robe (tattered hem)
+  R(x, 8, 18, 20, 30, PAL.purpleD);
+  R(x, 10, 18, 16, 30, PAL.purple);
+  R(x, 8, 46, 4, 6, PAL.purpleD);
+  R(x, 14, 46, 4, 7, PAL.purple);
+  R(x, 20, 46, 4, 6, PAL.purpleD);
+  R(x, 26, 46, 3, 7, PAL.purple);
+  R(x, 8, 18, 20, 3, PAL.purpleD);
+  // rope belt
+  R(x, 10, 32, 16, 2, PAL.goldD);
+  // hood (deep, face hidden)
+  R(x, 9, 2, 18, 16, PAL.purpleD);
+  R(x, 11, 4, 14, 12, PAL.purple);
+  R(x, 13, 7, 10, 8, PAL.ink); // void face
+  // glowing red eyes
+  R(x, 15 + s, 10, 3, 2, '#ff3b3b');
+  R(x, 20 + s, 10, 3, 2, '#ff3b3b');
+  // gold cult trim on hood
+  R(x, 9, 2, 18, 2, PAL.goldD);
+  if (cast) {
+    // both arms raised, candle high — revive channel
+    R(x, 4, 8, 5, 12, PAL.purple);
+    R(x, 28, 8, 5, 12, PAL.purple);
+    // purple candle raised
+    R(x, 16, -2 + 2, 4, 8, '#e8e4d8');
+    R(x, 16, 0, 4, 2, PAL.goldD);
+    R(x, 17, -4 + 2, 2, 3, '#b45aff'); // violet flame
+    R(x, 16, -5 + 2, 4, 1, '#d89aff');
+  } else {
+    // one arm out holding the candle forward
+    R(x, 24, 22, 8, 4, PAL.purple);
+    R(x, 30, 14, 4, 10, '#e8e4d8'); // candle
+    R(x, 30, 22, 4, 2, PAL.goldD);
+    R(x, 31, 11, 2, 3, '#b45aff'); // violet flame
+    R(x, 30, 10, 4, 1, '#d89aff');
+    // far arm hidden in sleeve
+    R(x, 6, 22, 5, 12, PAL.purpleD);
+  }
+  return c;
+}
+
 // ---------------- boss: THE WHALE OF WALL STREET ----------------
 function paintBoss(pose: 'idle' | 'swing' | 'flop'): HTMLCanvasElement {
   const [c, x] = mk(110, 122);
@@ -601,6 +743,9 @@ export interface Art {
   ninja: HTMLCanvasElement[]; // walk1 walk2 dash (v3)
   coinsnek: HTMLCanvasElement[]; // walk1 walk2 spit (v3)
   bouncer: HTMLCanvasElement[]; // walk1 walk2 charge block (v3)
+  moltov: HTMLCanvasElement[]; // coil1 coil2 throw (v5)
+  bull: HTMLCanvasElement[]; // walk1 walk2 charge (v5)
+  cultist: HTMLCanvasElement[]; // drift1 drift2 cast (v5)
   boss: Record<'idle' | 'swing' | 'flop', HTMLCanvasElement>;
   golem: Record<'idle' | 'attack' | 'stomp', HTMLCanvasElement>;
   fud: Record<'idle' | 'swing' | 'charge' | 'slam', HTMLCanvasElement>;
@@ -628,6 +773,9 @@ export function buildArt(): Art {
     ninja: [paintGecko(0, false, NINJA_PAL), paintGecko(1, false, NINJA_PAL), paintGecko(0, true, NINJA_PAL)],
     coinsnek: [paintSnek(0, false, COIN_PAL), paintSnek(1, false, COIN_PAL), paintSnek(0, true, COIN_PAL)],
     bouncer: [paintWhale(0, false, false, true), paintWhale(1, false, false, true), paintWhale(0, true, false, true), paintWhale(0, false, true, true)],
+    moltov: [paintMoltov(0, false), paintMoltov(1, false), paintMoltov(0, true)],
+    bull: [paintBull(0, false), paintBull(1, false), paintBull(0, true)],
+    cultist: [paintCultist(0, false), paintCultist(1, false), paintCultist(0, true)],
     boss: { idle: paintBoss('idle'), swing: paintBoss('swing'), flop: paintBoss('flop') },
     golem: { idle: paintGolem('idle'), attack: paintGolem('attack'), stomp: paintGolem('stomp') },
     fud: { idle: paintFud('idle'), swing: paintFud('swing'), charge: paintFud('charge'), slam: paintFud('slam') },

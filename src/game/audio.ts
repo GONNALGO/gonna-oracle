@@ -228,6 +228,14 @@ export class AudioSys {
   uiSelect(): void { this.blip(660, 0.07, 'square', 0.22); this.blip(990, 0.1, 'square', 0.22, 0, 0.07); }
   hurtPlayer(): void { this.blip(300, 0.15, 'sawtooth', 0.3, 100); this.noise(0.1, 0.3, 1800); }
   rankUp(): void { this.blip(784, 0.06, 'square', 0.2); this.blip(1175, 0.1, 'square', 0.2, 0, 0.06); } // v4 combo rank-up
+  // ---- v5 new-enemy SFX ----
+  molotov(): void { this.noise(0.28, 0.28, 2600); this.blip(520, 0.22, 'sine', 0.16, 140); } // bottle whoosh
+  glass(): void { this.blip(1250, 0.05, 'square', 0.2); this.noise(0.12, 0.4, 5200); } // shatter
+  ignite(): void { this.noise(0.45, 0.4, 850); this.blip(190, 0.32, 'sawtooth', 0.2, 55); } // flames catch
+  flameTick(): void { this.noise(0.05, 0.16, 1400); } // standing-in-fire DoT tick
+  clang(): void { this.blip(2350, 0.09, 'square', 0.24); this.blip(1760, 0.16, 'square', 0.18, 420, 0.02); this.noise(0.05, 0.22, 7000); } // riot shield
+  revive(): void { this.blip(523, 0.34, 'sine', 0.26, 261); this.blip(392, 0.44, 'sine', 0.22, 196, 0.16); this.noise(0.55, 0.14, 620); } // eerie resurrection
+  chant(): void { this.blip(175, 0.3, 'sawtooth', 0.18, 88); this.blip(233, 0.24, 'sine', 0.14, 116, 0.08); } // FUD orb cast
   fanfare(): void {
     const seq: [number, number][] = [[523, 0], [659, 0.12], [784, 0.24], [1047, 0.36], [784, 0.54], [1047, 0.66], [1319, 0.84]];
     for (const [f, d] of seq) this.blip(f, 0.16, 'square', 0.28, 0, d);

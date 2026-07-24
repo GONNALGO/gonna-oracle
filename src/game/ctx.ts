@@ -31,5 +31,6 @@ export interface GameCtx {
   spawnEnemy(kind: EnemyKind, side: Facing): void;
   dropItem(kind: ItemKind, x: number, y: number): void;
   dropCoins(x: number, y: number, n: number): void;
-  spawnProj(kind: ProjKind, x: number, y: number, vx: number): void;
+  spawnProj(kind: ProjKind, x: number, y: number, vx: number, tx?: number, ty?: number): void;
+  spawnFlame(x: number, y: number): void; // v5: persistent molotov flame patch
 }

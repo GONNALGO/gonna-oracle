@@ -3,6 +3,13 @@
 interface Particle { on: boolean; x: number; y: number; vx: number; vy: number; life: number; max: number; c: string; s: number; grav: number; }
 interface Popup { on: boolean; x: number; y: number; vy: number; life: number; txt: string; c: string; }
 interface Ring { on: boolean; x: number; y: number; r: number; max: number; life: number; c: string; }
+// v5: persistent molotov flames — lane hazards with damage-over-time (DoT tick
+// is game logic, handled by the engine; this is the pooled visual/state layer)
+interface Flame { on: boolean; x: number; y: number; life: number; max: number; tick: number; seed: number; }
+
+export const FLAME_LIFE = 180; // ~3s at 60Hz
+export const FLAME_RX = 26; // hazard ellipse half-width
+export const FLAME_RY = 9; // hazard ellipse half-height (lane tolerance)
 
 import { drawText } from './font';
 
@@ -10,6 +17,7 @@ export class FX {
   private parts: Particle[] = [];
   private pops: Popup[] = [];
   private rings: Ring[] = [];
+  readonly flames: Flame[] = []; // v5 (readonly ref: engine scans for DoT)
   shakeMag = 0;
   shakeX = 0;
   shakeY = 0;
@@ -19,14 +27,28 @@ export class FX {
     for (let i = 0; i < 220; i++) this.parts.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, c: '#fff', s: 2, grav: 0 });
     for (let i = 0; i < 24; i++) this.pops.push({ on: false, x: 0, y: 0, vy: 0, life: 0, txt: '', c: '#fff' });
     for (let i = 0; i < 12; i++) this.rings.push({ on: false, x: 0, y: 0, r: 0, max: 40, life: 0, c: '#fff' });
+    for (let i = 0; i < 12; i++) this.flames.push({ on: false, x: 0, y: 0, life: 0, max: FLAME_LIFE, tick: 0, seed: 0 });
   }
 
   reset(): void {
     for (const p of this.parts) p.on = false;
     for (const p of this.pops) p.on = false;
     for (const r of this.rings) r.on = false;
+    for (const f of this.flames) f.on = false;
     this.shakeMag = 0;
     this.flash = 0;
+  }
+
+  // v5: ignite a persistent flame patch on a lane (~3s)
+  flame(x: number, y: number): void {
+    const f = this.flames.find((q) => !q.on);
+    if (!f) return;
+    f.on = true;
+    f.x = x;
+    f.y = y;
+    f.max = f.life = FLAME_LIFE;
+    f.tick = 0;
+    f.seed = Math.random() * 6.28;
   }
 
   shake(m: number): void {
@@ -123,6 +145,25 @@ export class FX {
       r.r += (r.max - r.r) * 0.25 + 1;
       if (--r.life <= 0) r.on = false;
     }
+    // v5 flames: shrink at end of life, puff embers from the particle pool
+    for (const f of this.flames) {
+      if (!f.on) continue;
+      if (--f.life <= 0) { f.on = false; continue; }
+      if ((f.life & 7) === 0) {
+        const p = this.parts.find((q) => !q.on);
+        if (p) {
+          p.on = true;
+          p.x = f.x + Math.sin(f.seed + f.life * 0.7) * 16;
+          p.y = f.y - 3;
+          p.vx = (Math.random() - 0.5) * 0.4;
+          p.vy = -0.8 - Math.random() * 0.8;
+          p.max = p.life = 14 + Math.random() * 10;
+          p.c = Math.random() < 0.5 ? '#ff8a3c' : Math.random() < 0.5 ? '#f5c542' : '#e23b3b';
+          p.s = 1;
+          p.grav = -0.02;
+        }
+      }
+    }
     if (this.shakeMag > 0) {
       this.shakeMag *= 0.85;
       if (this.shakeMag < 0.3) this.shakeMag = 0;
@@ -133,6 +174,35 @@ export class FX {
       this.shakeY = 0;
     }
     if (this.flash > 0) this.flash--;
+  }
+
+  // v5: flames burn ON the ground — drawn under the entities (world space)
+  drawFlames(ctx: CanvasRenderingContext2D, camX: number): void {
+    for (const f of this.flames) {
+      if (!f.on) continue;
+      const sx = Math.round(f.x - camX);
+      const fade = Math.min(1, f.life / 40); // die down at the end
+      const grow = Math.min(1, (f.max - f.life) / 12); // catch fire quickly
+      const w = FLAME_RX * grow;
+      // scorch mark
+      ctx.globalAlpha = 0.5 * fade;
+      ctx.fillStyle = '#1a0e08';
+      ctx.beginPath();
+      ctx.ellipse(sx, f.y + 2, w, FLAME_RY, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // flame tongues: deterministic flicker from life+seed, zero alloc
+      ctx.globalAlpha = 0.92 * fade;
+      for (let i = 0; i < 5; i++) {
+        const ph = f.seed + i * 2.4;
+        const fx0 = sx + Math.sin(ph) * (w - 6);
+        const h = (7 + 6 * (0.5 + 0.5 * Math.sin(f.life * 0.35 + ph))) * grow;
+        ctx.fillStyle = i & 1 ? '#e2543a' : '#ff8a3c';
+        ctx.fillRect(Math.round(fx0) - 2, Math.round(f.y - h), 5, Math.round(h));
+        ctx.fillStyle = '#f5c542';
+        ctx.fillRect(Math.round(fx0) - 1, Math.round(f.y - h * 0.6), 3, Math.round(h * 0.6));
+      }
+      ctx.globalAlpha = 1;
+    }
   }
 
   // world-space draw (inside camera transform)

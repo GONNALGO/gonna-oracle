@@ -1,6 +1,6 @@
 // GONNA FIGHT engine: fixed 60Hz logic, scene machine, combat resolution, camera.
 import { AudioSys } from './audio';
-import { FX } from './fx';
+import { FX, FLAME_RX, FLAME_RY } from './fx';
 import { Input } from './input';
 import { buildArt, loadFrames } from './sprites';
 import type { Art } from './sprites';
@@ -121,9 +121,12 @@ export class Game implements GameCtx {
       this.items.push(new Item('coinG', x + rand(-10, 10), clamp(y + rand(-6, 6), LANE_TOP, 205), true));
     }
   }
-  spawnProj(kind: ProjKind, x: number, y: number, vx: number): void {
+  spawnProj(kind: ProjKind, x: number, y: number, vx: number, tx = 0, ty = 0): void {
     const pr = this.projs.find((q) => !q.on);
-    if (pr) pr.spawn(kind, x, y, vx);
+    if (pr) pr.spawn(kind, x, y, vx, tx, ty);
+  }
+  spawnFlame(x: number, y: number): void {
+    this.fx.flame(x, y);
   }
 
   // ---------- debug hooks (window.__gonna) ----------
@@ -188,6 +191,25 @@ export class Game implements GameCtx {
   }
   debugHurtBoss(dmg: number): void {
     if (this.boss) this.boss.hurt({ dmg, kb: 0, down: false, dir: 1 }, this);
+  }
+  // ---- v5 debug ----
+  get flameCount(): number {
+    let n = 0;
+    for (const f of this.fx.flames) if (f.on) n++;
+    return n;
+  }
+  // spawn any enemy right next to the player (skips walk-in), returns it
+  debugSpawn(kind: EnemyKind, dx = 90): Enemy {
+    const x = clamp(this.player.x + dx, this.camX + 16, this.camX + VW - 16);
+    const e = new Enemy(kind, x, this.player.y, 1);
+    e.state = 'seek';
+    e.face = x >= this.player.x ? -1 : 1;
+    this.enemies.push(e);
+    return e;
+  }
+  // compact per-enemy snapshot for headless assertions
+  get enemyInfo(): { kind: string; state: string; hp: number; alive: boolean; x: number; y: number }[] {
+    return this.enemies.map((e) => ({ kind: e.kind, state: e.state, hp: e.hp, alive: e.alive, x: Math.round(e.x), y: Math.round(e.y) }));
   }
 
   // ---------- scene flow ----------
@@ -354,6 +376,23 @@ export class Game implements GameCtx {
     for (const o of this.obstacles) o.update(this);
     for (const pr of this.projs) pr.update(this);
 
+    // v5: molotov flames — damage over time while standing in the fire
+    for (const f of this.fx.flames) {
+      if (!f.on) continue;
+      if (f.tick > 0) f.tick--;
+      if (p.state === 'dead' || p.state === 'down' || p.state === 'getup' || p.state === 'victory') continue;
+      if (p.z > 6 || p.invuln > 0) continue;
+      if (Math.abs(p.x - f.x) < FLAME_RX - 4 && Math.abs(p.y - f.y) < FLAME_RY && f.tick <= 0) {
+        f.tick = 40; // ~1.5 dmg/sec worth of ticks
+        p.hp -= 3;
+        p.flashT = 5;
+        this.fx.popup(p.x, p.y - 66, '-3', '#ff8a3c');
+        this.fx.spark(p.x, p.y - 30, false);
+        this.audio.flameTick();
+        if (p.hp <= 0) p.hurt({ dmg: 1, kb: 0, down: false, dir: 1 }, this);
+      }
+    }
+
     this.resolveCombat();
     this.separateEnemies();
 
@@ -447,7 +486,8 @@ export class Game implements GameCtx {
       for (const e of this.enemies) {
         if (!e.alive) continue;
         if (e.x > this.camX - 30 && e.x < this.camX + VW + 30) {
-          e.hurt({ dmg: 30, kb: 4, down: true, dir: e.x >= p.x ? 1 : -1 }, this);
+          // v5: BYZANTINE SLAM pierces the riot shield (whale guard unchanged)
+          e.hurt({ dmg: 30, kb: 4, down: true, dir: e.x >= p.x ? 1 : -1, pierce: e.kind === 'bull' }, this);
         }
       }
       if (this.boss && this.boss.alive) {
@@ -622,6 +662,8 @@ export class Game implements GameCtx {
     c.drawImage(this.stage.far, Math.round(-this.camX * 0.25), 0);
     c.drawImage(this.stage.mid, Math.round(-this.camX * 0.55), 0);
     c.drawImage(this.stage.ground, Math.round(this.camX), 0, VW, 84, 0, 140, VW, 84);
+
+    this.fx.drawFlames(c, this.camX); // v5: ground fire burns under the fighters
 
     // z-sorted entities (lower Y drawn first)
     const dl = this.drawList;

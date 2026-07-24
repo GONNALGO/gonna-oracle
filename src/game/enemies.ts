@@ -5,11 +5,14 @@ import type { GameCtx } from './ctx';
 import { blockObjects } from './items';
 import type { Obstacle } from './items';
 
-export type EnemyKind = 'gecko' | 'drone' | 'whale' | 'snek' | 'ninja' | 'coinsnek' | 'bouncer';
+export type EnemyKind =
+  | 'gecko' | 'drone' | 'whale' | 'snek' | 'ninja' | 'coinsnek' | 'bouncer'
+  | 'moltov' | 'bull' | 'cultist'; // v5
 
 export type EState =
   | 'enter' | 'seek' | 'attack' | 'recover' | 'reposition'
-  | 'stun' | 'down' | 'getup' | 'held' | 'thrown' | 'block' | 'dead' | 'windup';
+  | 'stun' | 'down' | 'getup' | 'held' | 'thrown' | 'block' | 'dead' | 'windup'
+  | 'channel'; // v5: cultist revive ritual
 
 interface Stats {
   hp: number;
@@ -27,10 +30,19 @@ const STATS: Record<EnemyKind, Stats> = {
   ninja: { hp: 30, spd: 1.25, dmg: 7, range: 30, score: 250 }, // NINJA GECKO (v3)
   coinsnek: { hp: 25, spd: 0.95, dmg: 8, range: 92, score: 250 }, // COIN SNEK (v3)
   bouncer: { hp: 60, spd: 0.55, dmg: 12, range: 64, score: 500 }, // BOUNCER WHALE (v3)
+  moltov: { hp: 30, spd: 1.0, dmg: 4, range: 26, score: 300 }, // MOLTOTOV SNEK (v5): kiter, area denial
+  bull: { hp: 70, spd: 0.5, dmg: 14, range: 40, score: 600 }, // RIOT SHIELD BULL (v5): frontal-immune wall
+  cultist: { hp: 35, spd: 0.9, dmg: 6, range: 120, score: 500 }, // FUD CULTIST (v5): revives + heals
 };
 
 function isBrute(k: EnemyKind): boolean {
   return k === 'whale' || k === 'bouncer';
+}
+
+// v5: a living FUD CULTIST keeps corpses revivable
+function cultistAlive(g: GameCtx): boolean {
+  for (const e of g.enemies) if (e.alive && e.kind === 'cultist') return true;
+  return false;
 }
 
 let eSwing = 10000;
@@ -63,6 +75,9 @@ export class Enemy {
   lieT = 0;
   lastHitId = 0;
   heldObj: Obstacle | null = null; // whale holding a trash can (v2)
+  melee = false; // moltov: close bite vs molotov throw (v5)
+  turnCd = 0; // bull: slow turning — the back stays open ~45 frames (v5)
+  ritualT = 330; // cultist: revive countdown, fires every ~6s (v5)
 
   constructor(kind: EnemyKind, x: number, y: number, side: Facing) {
     this.kind = kind;
@@ -83,6 +98,15 @@ export class Enemy {
     if (!this.alive || this.state === 'dead') return false;
     if (this.state === 'down' && this.z <= 0) return false; // lying: invulnerable (FF style)
     if (this.invuln > 0) return false;
+    // RIOT SHIELD BULL (v5): IMMUNE to frontal damage — clang, spark, no
+    // damage, no stagger. Beatable from behind / pierce (throws, slam, booms).
+    if (this.kind === 'bull' && !hit.pierce && hit.dir !== this.face && this.state !== 'held' && this.state !== 'thrown') {
+      g.audio.clang();
+      g.fx.spark(this.x + this.face * 18, this.y - this.z - 36, false);
+      g.fx.popup(this.x, this.y - this.z - 62, 'CLANG!', '#c8ccd4');
+      g.hitStop(2);
+      return false;
+    }
     // brutes block frontal hits sometimes (thrown objects & explosions pierce)
     if (!hit.pierce && isBrute(this.kind) && this.state === 'seek' && hit.dir !== this.face && chance(0.25)) {
       this.set('block');
@@ -149,6 +173,25 @@ export class Enemy {
     g.audio.swing();
   }
 
+  // v5: raised from the dead by a FUD CULTIST at 50% HP
+  revive(g: GameCtx): void {
+    this.alive = true;
+    this.removeMe = false;
+    this.hp = Math.ceil(this.maxHp * 0.5);
+    this.lieT = 0;
+    this.vx = 0;
+    this.vz = 0;
+    this.z = 0;
+    this.flashT = 0;
+    this.hitPlayer = false;
+    this.invuln = 40;
+    this.set('getup');
+    g.fx.ring(this.x, this.y - 8, 34, '#b45aff');
+    g.fx.ring(this.x, this.y - 8, 20, '#5a3699');
+    g.fx.popup(this.x, this.y - 66, 'REVIVED', '#d89aff');
+    g.fx.debris(this.x, this.y - 20, '#7b4bc9', '#b45aff', 10);
+  }
+
   thrown(dir: Facing, g: GameCtx): void {
     this.set('thrown');
     this.face = dir;
@@ -170,7 +213,9 @@ export class Enemy {
     if (isBrute(this.kind)) return this.state === 'attack' && this.t >= 24 && this.t <= 60;
     if (this.kind === 'drone') return this.state === 'attack' && this.t >= 18;
     if (this.kind === 'ninja') return this.state === 'attack' && this.t >= 6 && this.t <= 24;
-    return false; // coinsnek spits projectiles instead
+    if (this.kind === 'bull') return this.state === 'attack' && this.t >= 20 && this.t <= 56;
+    if (this.kind === 'moltov') return this.state === 'attack' && this.melee && this.t >= 8 && this.t <= 14;
+    return false; // coinsnek/moltov-throw/cultist use projectiles instead
   }
 
   attackReach(): { x0: number; x1: number; laneTol: number; dmg: number; kb: number; down: boolean } {
@@ -180,6 +225,28 @@ export class Enemy {
     }
     if (this.kind === 'drone') {
       return { x0: this.x - 14, x1: this.x + 14, laneTol: 16, dmg: s.dmg, kb: 3, down: true };
+    }
+    if (this.kind === 'bull') {
+      // shield charge: long frontal box, heavy knockdown
+      return {
+        x0: this.face === 1 ? this.x : this.x - 24,
+        x1: this.face === 1 ? this.x + 24 : this.x,
+        laneTol: 14,
+        dmg: s.dmg,
+        kb: 5,
+        down: true,
+      };
+    }
+    if (this.kind === 'moltov') {
+      // frail close-range bite
+      return {
+        x0: this.face === 1 ? this.x : this.x - 26,
+        x1: this.face === 1 ? this.x + 26 : this.x,
+        laneTol: 11,
+        dmg: s.dmg,
+        kb: 1.5,
+        down: false,
+      };
     }
     const reach = this.kind === 'snek' ? 30 : this.kind === 'ninja' ? 28 : 24;
     return {
@@ -199,6 +266,7 @@ export class Enemy {
     if (this.invuln > 0) this.invuln--;
     if (this.flashT > 0) this.flashT--;
     if (this.atkCd > 0) this.atkCd--;
+    if (this.turnCd > 0) this.turnCd--;
     const p = g.player;
     const st = STATS[this.kind];
     const prevX = this.x;
@@ -212,6 +280,79 @@ export class Enemy {
         break;
       }
       case 'seek': {
+        const dx0 = p.x - this.x;
+        // ---- v5: MOLTOTOV SNEK — kite the player, lob fire from afar ----
+        if (this.kind === 'moltov') {
+          this.face = dx0 >= 0 ? 1 : -1;
+          const dy = p.y - this.y;
+          if (Math.abs(dy) > 6) this.y = clamp(this.y + Math.sign(dy) * st.spd * 0.8, LANE_TOP, LANE_BOT);
+          const adx = Math.abs(dx0);
+          if (adx < 70) {
+            this.x -= Math.sign(dx0) * st.spd * 1.25; // frail: flee when close
+          } else if (adx > 150) {
+            this.x += Math.sign(dx0) * st.spd;
+          }
+          this.x = clamp(this.x, g.camX - 30, g.camX + VW + 30);
+          if (this.atkCd <= 0 && p.state !== 'dead' && Math.abs(dy) < 16) {
+            if (adx < 44) {
+              this.melee = true; // desperate bite
+              this.set('attack');
+              this.hitPlayer = false;
+              this.swingId = eSwing++;
+            } else if (adx < 215) {
+              this.melee = false; // molotov lob
+              this.set('attack');
+              this.hitPlayer = false;
+            }
+          }
+          break;
+        }
+        // ---- v5: RIOT SHIELD BULL — slow wall, slow to turn, shield charge ----
+        if (this.kind === 'bull') {
+          const want = dx0 >= 0 ? 1 : -1;
+          if (want !== this.face && this.turnCd <= 0) {
+            this.face = want;
+            this.turnCd = 45; // the blind side stays open a moment
+          }
+          const dy = p.y - this.y;
+          if (Math.abs(dy) > 6) this.y = clamp(this.y + Math.sign(dy) * st.spd * 0.8, LANE_TOP, LANE_BOT);
+          if (Math.abs(dx0) > st.range - 10) this.x += this.face * st.spd;
+          this.x = clamp(this.x, g.camX - 30, g.camX + VW + 30);
+          if (this.atkCd <= 0 && p.state !== 'dead' && Math.abs(dy) < 14 && Math.abs(dx0) < 160) {
+            this.set('attack');
+            this.hitPlayer = false;
+            this.swingId = eSwing++;
+          }
+          break;
+        }
+        // ---- v5: FUD CULTIST — stays far, FUD orbs, revive ritual ~6s ----
+        if (this.kind === 'cultist') {
+          this.face = dx0 >= 0 ? 1 : -1;
+          const dy = p.y - this.y;
+          if (Math.abs(dy) > 8) this.y = clamp(this.y + Math.sign(dy) * st.spd * 0.7, LANE_TOP, LANE_BOT);
+          const adx = Math.abs(dx0);
+          if (adx < 95) {
+            this.x -= Math.sign(dx0) * st.spd * 1.1; // drift away
+          } else if (adx > 185) {
+            this.x += Math.sign(dx0) * st.spd * 0.8;
+          }
+          this.x = clamp(this.x, g.camX - 30, g.camX + VW + 30);
+          // revive countdown
+          this.ritualT--;
+          if (this.ritualT <= 0) {
+            if (this.findRitualTarget(g)) {
+              this.set('channel');
+            } else {
+              this.ritualT = 90; // nothing to do yet: retry soon
+            }
+            break;
+          }
+          if (this.atkCd <= 0 && p.state !== 'dead' && adx < 235 && Math.abs(dy) < 60) {
+            this.set('attack');
+            this.hitPlayer = false;
+          }
+          break;
+        }
         this.face = p.x >= this.x ? 1 : -1;
         const dx = p.x - this.x;
         const dy = p.y - this.y;
@@ -292,6 +433,40 @@ export class Enemy {
             if (this.t % 6 === 0) g.fx.ring(this.x, this.y, 10, '#8a8f9c');
           }
           if (this.t >= 88) { this.set('recover'); this.atkCd = 70 + Math.random() * 40; }
+        } else if (this.kind === 'moltov') {
+          if (this.melee) {
+            // desperate bite (frail in melee)
+            if (this.t >= 22) { this.set('recover'); this.atkCd = 70 + Math.random() * 30; }
+          } else {
+            // wind up, then lob the molotov at the player's position
+            if (this.t < 16) this.flashT = (this.t & 4) < 2 ? 2 : 0;
+            if (this.t === 16) {
+              this.flashT = 0;
+              g.spawnProj('molotov', this.x + this.face * 10, this.y, 0, p.x, p.y);
+              g.audio.molotov();
+            }
+            if (this.t >= 34) { this.set('recover'); this.atkCd = 120 + Math.random() * 50; }
+          }
+        } else if (this.kind === 'bull') {
+          // paw the ground (telegraph), then shield charge along the lane
+          if (this.t < 20) {
+            this.flashT = (this.t & 4) < 2 ? 2 : 0;
+            if (this.t === 1) g.fx.popup(this.x, this.y - 78, '!', '#ff6b6b');
+          } else if (this.t <= 56) {
+            this.flashT = 0;
+            this.x += this.face * 4.2;
+            if (this.t % 6 === 0) g.fx.ring(this.x, this.y, 10, '#c8ccd4');
+          } else if (this.t >= 84) {
+            this.set('recover');
+            this.atkCd = 100 + Math.random() * 40;
+          }
+        } else if (this.kind === 'cultist') {
+          // cast a slow FUD orb
+          if (this.t === 10) {
+            g.spawnProj('fudorb', this.x + this.face * 14, this.y, this.face * 1.7);
+            g.audio.chant();
+          }
+          if (this.t >= 26) { this.set('recover'); this.atkCd = 150 + Math.random() * 60; }
         } else {
           // drone dive
           if (this.t < 18) {
@@ -322,7 +497,7 @@ export class Enemy {
         if (this.kind === 'drone' && this.z < 24) {
           this.z += 1.4; // rise back
         }
-        if (this.t >= (isBrute(this.kind) ? 30 : 18)) this.set('seek');
+        if (this.t >= (isBrute(this.kind) || this.kind === 'bull' ? 30 : 18)) this.set('seek');
         break;
       }
       case 'block': {
@@ -369,7 +544,8 @@ export class Enemy {
         }
         if (this.state === 'dead' && this.z <= 0 && this.vz === 0) {
           this.lieT++;
-          if (this.lieT > 70) this.removeMe = true;
+          // v5: corpses linger (revivable) while a FUD CULTIST still lives
+          if (this.lieT > (cultistAlive(g) ? 400 : 70)) this.removeMe = true;
         }
         break;
       }
@@ -399,6 +575,23 @@ export class Enemy {
         if (this.t > 240) this.escapeHold(g);
         break;
       }
+      case 'channel': {
+        // FUD CULTIST revive ritual: telegraphed "!", then the dead rise
+        if (this.t === 1) {
+          g.fx.popup(this.x, this.y - 74, '!', '#b45aff');
+          g.audio.chant();
+        }
+        this.flashT = (this.t & 6) < 3 ? 2 : 0; // violet surge
+        if (this.t % 10 === 0) g.fx.ring(this.x, this.y - 6, 22, '#5a3699');
+        if (this.t >= 55) {
+          this.flashT = 0;
+          this.doRitual(g);
+          this.ritualT = 360; // every ~6s
+          this.set('recover');
+          this.atkCd = 50;
+        }
+        break;
+      }
     }
 
     // solid lane objects: block horizontal movement (walk around them)
@@ -411,6 +604,42 @@ export class Enemy {
         }
       }
     }
+  }
+
+  // ---- v5: FUD CULTIST ritual ----
+  // true when there is a revivable corpse or a wounded ally nearby
+  private findRitualTarget(g: GameCtx): boolean {
+    for (const e of g.enemies) {
+      if (e === this || e.removeMe) continue;
+      if (Math.abs(e.x - this.x) > 240) continue;
+      if (!e.alive && e.state === 'dead' && e.z <= 0) return true;
+      if (e.alive && e.hp < e.maxHp) return true;
+    }
+    return false;
+  }
+
+  // raise the nearest corpse at 50% HP + mend the living
+  private doRitual(g: GameCtx): void {
+    let best: Enemy | null = null;
+    let bestD = 1e9;
+    for (const e of g.enemies) {
+      if (e === this || e.removeMe || e.alive || e.state !== 'dead' || e.z > 0) continue;
+      const d = Math.abs(e.x - this.x);
+      if (d < 240 && d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    if (best) best.revive(g);
+    for (const e of g.enemies) {
+      if (e === this || e === best || !e.alive || e.hp >= e.maxHp) continue; // best keeps its 50%
+      if (Math.abs(e.x - this.x) > 220) continue;
+      e.hp = Math.min(e.maxHp, e.hp + 12);
+      g.fx.popup(e.x, e.y - 62, '+12', '#b45aff');
+      g.fx.ring(e.x, e.y - 8, 16, '#7b4bc9');
+    }
+    g.audio.revive();
+    g.fx.ring(this.x, this.y - 10, 60, '#7b4bc9');
   }
 
   // whale: pick up a nearby trash can (returns true when grabbed)
@@ -457,19 +686,32 @@ export class Enemy {
       case 'snek':
         if (this.state === 'attack' && this.t >= 6 && this.t <= 24) return a.snek[2];
         return a.snek[wk];
+      case 'moltov':
+        if (this.state === 'attack' && !this.melee && this.t >= 4) return a.moltov[2];
+        return a.moltov[wk];
+      case 'bull':
+        if (this.state === 'attack' && this.t >= 14) return a.bull[2];
+        return a.bull[wk];
+      case 'cultist':
+        if (this.state === 'channel') return a.cultist[2];
+        if (this.state === 'attack' && this.t >= 4 && this.t <= 16) return a.cultist[2];
+        return a.cultist[wk];
     }
   }
 
   draw(ctx2d: CanvasRenderingContext2D, g: GameCtx): void {
     const sx = Math.round(this.x - g.camX);
     const sy = Math.round(this.y - this.z);
-    // fade out corpse
+    // fade out corpse (only in its last ~30 frames; lingers while a cultist lives)
     let alpha = 1;
-    if (this.state === 'dead' && this.lieT > 40) alpha = Math.max(0, 1 - (this.lieT - 40) / 30);
+    if (this.state === 'dead') {
+      const lim = cultistAlive(g) ? 400 : 70;
+      if (this.lieT > lim - 30) alpha = Math.max(0, (lim - this.lieT) / 30);
+    }
     // shadow
     ctx2d.globalAlpha = clamp(0.35 - this.z / 220, 0.06, 0.35) * alpha;
     ctx2d.fillStyle = '#000';
-    const shw = isBrute(this.kind) ? 24 : this.kind === 'snek' || this.kind === 'coinsnek' ? 18 : 14;
+    const shw = isBrute(this.kind) || this.kind === 'bull' ? 24 : this.kind === 'snek' || this.kind === 'coinsnek' || this.kind === 'moltov' ? 18 : 14;
     ctx2d.beginPath();
     ctx2d.ellipse(sx, this.y + 2, shw, 4.5, 0, 0, Math.PI * 2);
     ctx2d.fill();
@@ -498,8 +740,8 @@ export class Enemy {
       ctx2d.drawImage(oi, sx - (oi.width >> 1), Math.round(sy - img.height - oi.height + 6));
     }
 
-    // hp pip bar for brutes
-    if (isBrute(this.kind) && this.alive && this.hp < this.maxHp) {
+    // hp pip bar for brutes (incl. the RIOT SHIELD BULL)
+    if ((isBrute(this.kind) || this.kind === 'bull') && this.alive && this.hp < this.maxHp) {
       ctx2d.fillStyle = '#101018';
       ctx2d.fillRect(sx - 16, sy - 70, 32, 4);
       ctx2d.fillStyle = '#e23b3b';

@@ -578,9 +578,9 @@ export function buildStage(idx: number): StageDef {
       bossTrack: 'boss',
       waves: [
         { triggerX: 120, spawns: ['gecko', 'drone', 'snek'] },
-        { triggerX: 500, spawns: ['whale', 'gecko'] },
-        { triggerX: 920, spawns: ['snek', 'snek', 'drone', 'gecko'] },
-        { triggerX: 1360, spawns: ['whale', 'gecko', 'drone'] },
+        { triggerX: 500, spawns: ['whale', 'gecko', 'moltov'] }, // v5: first MOLTOTOV SNEK (docks burn nicely)
+        { triggerX: 920, spawns: ['snek', 'snek', 'drone', 'gecko', 'moltov'] },
+        { triggerX: 1360, spawns: ['whale', 'gecko', 'drone', 'moltov'] },
       ],
       obstacles: [
         { kind: 'crate', x: 300, y: 172, contains: 'chicken' },
@@ -611,8 +611,8 @@ export function buildStage(idx: number): StageDef {
       bossTrack: 'boss',
       waves: [
         { triggerX: 120, spawns: ['gecko', 'gecko', 'snek'] },
-        { triggerX: 480, spawns: ['whale', 'drone', 'drone'] },
-        { triggerX: 840, spawns: ['whale', 'snek', 'gecko'] },
+        { triggerX: 480, spawns: ['whale', 'drone', 'drone', 'bull'] }, // v5: first RIOT SHIELD BULL
+        { triggerX: 840, spawns: ['whale', 'snek', 'gecko', 'bull'] },
       ],
       obstacles: [
         { kind: 'crate', x: 280, y: 170, contains: 'chicken' },
@@ -642,9 +642,9 @@ export function buildStage(idx: number): StageDef {
       bossTrack: 'boss',
       waves: [
         { triggerX: 120, spawns: ['gecko', 'gecko', 'ninja'] },
-        { triggerX: 480, spawns: ['ninja', 'ninja', 'gecko'] },
-        { triggerX: 840, spawns: ['ninja', 'gecko', 'snek', 'ninja'] },
-        { triggerX: 1120, spawns: ['ninja', 'ninja', 'ninja'] },
+        { triggerX: 480, spawns: ['ninja', 'ninja', 'gecko', 'cultist'] }, // v5: first FUD CULTIST (never alone)
+        { triggerX: 840, spawns: ['ninja', 'gecko', 'snek', 'ninja', 'bull'] },
+        { triggerX: 1120, spawns: ['ninja', 'ninja', 'ninja', 'cultist'] },
       ],
       obstacles: [
         { kind: 'barrel', x: 300, y: 172, contains: 'chicken' },
@@ -673,9 +673,9 @@ export function buildStage(idx: number): StageDef {
       bossTrack: 'boss',
       waves: [
         { triggerX: 120, spawns: ['coinsnek', 'snek', 'gecko'] },
-        { triggerX: 500, spawns: ['bouncer', 'coinsnek'] },
-        { triggerX: 920, spawns: ['coinsnek', 'coinsnek', 'snek', 'ninja'] },
-        { triggerX: 1360, spawns: ['bouncer', 'bouncer', 'coinsnek'] },
+        { triggerX: 500, spawns: ['bouncer', 'coinsnek', 'moltov'] },
+        { triggerX: 920, spawns: ['coinsnek', 'coinsnek', 'snek', 'ninja', 'cultist'] },
+        { triggerX: 1360, spawns: ['bouncer', 'bouncer', 'coinsnek', 'bull'] },
       ],
       obstacles: [
         { kind: 'chips', x: 300, y: 172, contains: 'coinG' },
@@ -703,10 +703,10 @@ export function buildStage(idx: number): StageDef {
     bossKind: 'fud',
     bossTrack: 'boss2',
     waves: [
-      { triggerX: 120, spawns: ['ninja', 'coinsnek', 'whale'] },
-      { triggerX: 440, spawns: ['bouncer', 'ninja', 'drone'] },
-      { triggerX: 800, spawns: ['whale', 'coinsnek', 'ninja', 'snek'] },
-      { triggerX: 1060, spawns: ['bouncer', 'ninja', 'coinsnek'] },
+      { triggerX: 120, spawns: ['ninja', 'coinsnek', 'whale', 'bull'] },
+      { triggerX: 440, spawns: ['bouncer', 'ninja', 'drone', 'cultist'] },
+      { triggerX: 800, spawns: ['whale', 'coinsnek', 'ninja', 'snek', 'moltov'] },
+      { triggerX: 1060, spawns: ['bouncer', 'ninja', 'coinsnek', 'cultist'] },
     ],
     obstacles: [
       { kind: 'drum', x: 280, y: 174, contains: 'none' }, // fuel drums: explosive
