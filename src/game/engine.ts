@@ -15,7 +15,7 @@ import { Proj } from './proj';
 import type { ProjKind } from './proj';
 import { buildStage } from './stages';
 import type { StageDef } from './stages';
-import { clamp, comboRankName, LANE_TOP, rand, VH, VW } from './types';
+import { clamp, comboRankName, LANE_BOT, LANE_TOP, rand, VH, VW } from './types';
 import type { Facing } from './types';
 import type { GameCtx } from './ctx';
 import { drawHud } from './hud';
@@ -502,6 +502,7 @@ export class Game implements GameCtx {
     }
     this.enemies = this.enemies.filter((e) => !e.removeMe);
 
+    this.watchdog(); // v8: never leave a wave soft-locked
     this.updateWaves();
     this.updateCamera();
 
@@ -660,6 +661,60 @@ export class Game implements GameCtx {
           b.x += push;
         }
       }
+    }
+  }
+
+  // ---- v8: unreachable-enemy watchdog (Silvio's safety net) ----
+  // A living enemy that stays unreachable for >4s (outside the walkable band,
+  // outside the stage/camera reach, invalid z, or stuck in 'enter') is snapped
+  // back to a valid lane position near the player in the approach state.
+  // An enemy that keeps becoming unreachable right after being rescued is
+  // hopeless: it is executed WITHOUT score so the wave can always clear.
+  private watchdog(): void {
+    const p = this.player;
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      const yBad = !isFinite(e.y) || e.y < LANE_TOP - 18 || e.y > LANE_BOT + 18;
+      const xBad =
+        !isFinite(e.x) ||
+        e.x < -40 || e.x > this.stageLen + 40 ||
+        e.x < this.camX - 80 || e.x > this.camX + VW + 80;
+      const zBad = !isFinite(e.z) || e.z < -1 || e.z >= 40;
+      const enterStuck = e.state === 'enter' && e.t > 300; // walk-in never legitimately exceeds ~2s
+      if (!(yBad || xBad || zBad || enterStuck)) {
+        e.badT = 0;
+        continue;
+      }
+      e.badT++;
+      if (e.badT <= 240) continue; // 4s of continuous unreachability tolerated
+      e.badT = 0;
+      e.snaps++;
+      if (e.snaps > 2) {
+        // LAST RESORT: unrescuable — execute without score and let the wave clear
+        e.alive = false;
+        e.state = 'dead';
+        e.t = 5; // past the t===1 drop hook: no coins, no KO count
+        e.lieT = 55; // corpse fades out quickly
+        e.vx = 0;
+        e.vz = 0;
+        e.z = 0;
+        e.y = clamp(isFinite(e.y) ? e.y : (LANE_TOP + LANE_BOT) / 2, LANE_TOP, LANE_BOT);
+        e.x = clamp(isFinite(e.x) ? e.x : p.x, 8, this.stageLen - 8);
+        continue;
+      }
+      // snap back to the nearest valid lane position near the player
+      e.x = clamp(p.x + (isFinite(e.x) && e.x < p.x ? -72 : 72), this.camX + 24, this.camX + VW - 24);
+      e.y = clamp(p.y + (e.snaps & 1 ? 14 : -14), LANE_TOP, LANE_BOT);
+      e.z = e.kind === 'drone' ? 24 : 0;
+      e.vx = 0;
+      e.vy = 0;
+      e.vz = 0;
+      e.invuln = 0;
+      e.hitPlayer = false;
+      e.atkCd = 30;
+      e.state = 'seek';
+      e.t = 0;
+      this.fx.ring(e.x, e.y - e.z - 10, 24, '#7fd858');
     }
   }
 

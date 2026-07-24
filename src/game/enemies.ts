@@ -2,7 +2,7 @@
 import { chance, clamp, GRAV, LANE_BOT, LANE_TOP, VW } from './types';
 import type { Facing, HitInfo } from './types';
 import type { GameCtx } from './ctx';
-import { blockObjects } from './items';
+import { blockObjects, blockingAt } from './items';
 import type { Obstacle } from './items';
 
 export type EnemyKind =
@@ -78,6 +78,9 @@ export class Enemy {
   melee = false; // moltov: close bite vs molotov throw (v5)
   turnCd = 0; // bull: slow turning — the back stays open ~45 frames (v5)
   ritualT = 330; // cultist: revive countdown, fires every ~6s (v5)
+  // v8 watchdog bookkeeping (engine): frames spent unreachable + rescue count
+  badT = 0;
+  snaps = 0;
 
   constructor(kind: EnemyKind, x: number, y: number, side: Facing) {
     this.kind = kind;
@@ -167,7 +170,7 @@ export class Enemy {
   }
 
   escapeHold(g: GameCtx): void {
-    if (this.state !== 'held') return;
+    if (!this.alive || this.state !== 'held') return; // v8: never re-animate a corpse
     this.set('stun');
     this.t = 8;
     g.audio.swing();
@@ -193,6 +196,7 @@ export class Enemy {
   }
 
   thrown(dir: Facing, g: GameCtx): void {
+    if (!this.alive) return; // v8: a corpse stays a corpse (no walking dead)
     this.set('thrown');
     this.face = dir;
     this.vx = dir * 6.5;
@@ -527,6 +531,10 @@ export class Enemy {
           } else {
             this.vz = 0;
             this.vx = 0;
+            // v8: a finished knockback slide must LAND inside the walkable
+            // band and the stage (mid-flight may leave both, landing may not)
+            this.y = clamp(this.y, LANE_TOP, LANE_BOT);
+            this.x = clamp(this.x, 8, g.stageLen - 8);
           }
         }
         if (this.state === 'thrown' && this.z <= 0 && this.vz === 0) {
@@ -550,6 +558,8 @@ export class Enemy {
         break;
       }
       case 'getup': {
+        // v8: drones always rise back to hover height while getting up
+        if (this.kind === 'drone' && this.z < 24) this.z += 1.4;
         if (this.t >= 20) { this.set('seek'); this.atkCd = 30; }
         break;
       }
@@ -600,7 +610,19 @@ export class Enemy {
       if (bx !== this.x) {
         this.x = bx;
         if (this.state === 'enter' || this.state === 'seek') {
-          this.y = clamp(this.y + (this.y < (LANE_TOP + LANE_BOT) / 2 ? 1 : -1) * 0.9, LANE_TOP, LANE_BOT);
+          // v8: walk AROUND the blocker — nudge the lane position OUT of the
+          // blocking object's lane band (the old code nudged toward the lane
+          // CENTER, which is inside most objects' bands: the enemy could get
+          // stuck forever off-screen in the spawn corridor -> wave soft-lock)
+          const ob = blockingAt(g.obstacles, this.x, this.y, this.z);
+          if (ob) {
+            const upOK = ob.y - ob.cfg.laneHalf >= LANE_TOP;
+            const downOK = ob.y + ob.cfg.laneHalf <= LANE_BOT;
+            let dirY: number = this.y < ob.y ? -1 : 1;
+            if (dirY < 0 && !upOK) dirY = 1;
+            if (dirY > 0 && !downOK) dirY = -1;
+            this.y = clamp(this.y + dirY * 1.2, LANE_TOP, LANE_BOT);
+          }
         }
       }
     }

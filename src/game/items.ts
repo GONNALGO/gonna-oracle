@@ -55,6 +55,18 @@ export function blockObjects(obs: Obstacle[], oldX: number, newX: number, y: num
   return newX;
 }
 
+// v8: which idle obstacle is blocking this position (same test as blockObjects)
+export function blockingAt(obs: Obstacle[], x: number, y: number, z: number): Obstacle | null {
+  for (const o of obs) {
+    if (o.mode !== 'idle' || o.removeMe) continue;
+    const c = OB_CFG[o.kind];
+    if (z >= c.jumpClear) continue;
+    if (Math.abs(y - o.y) >= c.laneHalf) continue;
+    if (Math.abs(x - o.x) < c.halfW + 7) return o;
+  }
+  return null;
+}
+
 // Oil drum explosion: AoE on adjacent lanes, hurts EVERYONE (player too), chains drums.
 export function explodeAt(g: GameCtx, x: number, y: number, src: Obstacle): void {
   g.audio.explode();
