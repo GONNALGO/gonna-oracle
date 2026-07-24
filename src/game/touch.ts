@@ -177,6 +177,16 @@ export class TouchControls {
   private layout(): void {
     const f = this.fit;
     const m = 10; // edge margin
+    // v6.2: notch / home-indicator safe areas — controls never go under them
+    let sal = 0;
+    let sar = 0;
+    let sab = 0;
+    try {
+      const cs = getComputedStyle(document.documentElement);
+      sal = parseFloat(cs.getPropertyValue('--sal')) || 0;
+      sar = parseFloat(cs.getPropertyValue('--sar')) || 0;
+      sab = parseFloat(cs.getPropertyValue('--sab')) || 0;
+    } catch { /* no CSS env support: zero insets */ }
     // free area starts under the CURRENT game view (taller when ZOOMed)
     const gameBottom = f.fitOffY + VH * f.scale;
     let px: number;
@@ -186,23 +196,23 @@ export class TouchControls {
       const freeH = Math.max(140, f.cssH - gameBottom);
       this.R = Math.min(52, Math.max(34, freeH * 0.14));
       const R = this.R;
-      px = f.cssW - m - 2.6 * R;
+      px = f.cssW - m - sar - 2.6 * R;
       py = gameBottom + freeH * 0.5 - 0.775 * R; // fan vertically centered in free area
       if (py - R < gameBottom + 6) py = gameBottom + 6 + R;
-      if (py + 2.55 * R > f.cssH - m) py = f.cssH - m - 2.55 * R;
+      if (py + 2.55 * R > f.cssH - m - sab) py = f.cssH - m - sab - 2.55 * R;
       // system buttons: finger-sized row at the top of the free area (never over HUD)
       const S = 40;
       const sy = gameBottom + 12;
       this.sysScale = 2;
-      this.pauseR.x = 12; this.pauseR.y = sy; this.pauseR.w = S; this.pauseR.h = S;
-      this.muteR.x = 62; this.muteR.y = sy; this.muteR.w = S; this.muteR.h = S;
-      this.zoomR.x = 112; this.zoomR.y = sy; this.zoomR.w = S; this.zoomR.h = S;
+      this.pauseR.x = 12 + sal; this.pauseR.y = sy; this.pauseR.w = S; this.pauseR.h = S;
+      this.muteR.x = 62 + sal; this.muteR.y = sy; this.muteR.w = S; this.muteR.h = S;
+      this.zoomR.x = 112 + sal; this.zoomR.y = sy; this.zoomR.w = S; this.zoomR.h = S;
     } else {
       // landscape: full-height game view, fan rides the bottom-right corner
       this.R = Math.min(56, Math.max(28, f.cssH * 0.092));
       const R = this.R;
-      px = f.cssW - m - 2.6 * R;
-      py = f.cssH - m - 2.55 * R;
+      px = f.cssW - m - sar - 2.6 * R;
+      py = f.cssH - m - sab - 2.55 * R;
       // system buttons in the v6 top-band gap (game coords -> screen via FIT)
       this.sysScale = Math.max(1, Math.round(f.fitScale));
       for (let i = 0; i < 3; i++) {
