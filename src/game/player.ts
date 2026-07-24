@@ -439,7 +439,7 @@ export class Player {
     switch (this.state) {
       case 'idle': key = IDLE_FR[(this.animT >> 3) & 3]; break;
       case 'walk': key = WALK_FR[Math.floor(this.animT / 6) & 3]; break;
-      case 'punch': key = this.withKnife ? '1_4' : this.combo === 1 ? '1_1' : this.combo === 2 ? '1_2' : '1_3'; break;
+      case 'punch': key = this.withKnife ? '1_2' : this.combo === 1 ? '1_1' : this.combo === 2 ? '1_2' : '1_3'; break;
       case 'kick': key = this.t < 13 ? '1_4' : '1_5'; break;
       case 'jump': key = this.vz > 0 ? ((this.animT & 8) === 0 ? '2_0' : '2_5') : '2_2'; break;
       case 'jumpkick': key = '1_4'; break;
@@ -471,7 +471,7 @@ export class Player {
       ctx2d.drawImage(img, -dw / 2, -dh, dw, dh);
       // knife in hand during slash
       if (this.state === 'punch' && this.withKnife && this.t >= 4 && this.t <= 8) {
-        ctx2d.drawImage(g.art.knife, dw * 0.28, -dh * 0.55, 18, 8);
+        ctx2d.drawImage(g.art.knife, dw * 0.30, -dh * 0.72, 20, 9);
       }
     }
     ctx2d.restore();
