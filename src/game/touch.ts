@@ -460,7 +460,7 @@ export class TouchControls {
         const held = this.input.down[b.btn];
         const a = held ? 0.78 : 0.4; // brighten on press, ~40% resting
         c.globalAlpha = a;
-        // pixel-art round button: dark rim, colored face, top highlight
+        // pixel-art round button: dark rim + colored face, clean
         c.fillStyle = '#0b0d14';
         c.beginPath();
         c.arc(b.x, b.y, b.r + 1, 0, Math.PI * 2);
@@ -469,8 +469,6 @@ export class TouchControls {
         c.beginPath();
         c.arc(b.x, b.y, b.r, 0, Math.PI * 2);
         c.fill();
-        c.fillStyle = 'rgba(255,255,255,0.35)';
-        c.fillRect(Math.round(b.x - b.r + 3), Math.round(b.y - b.r + 2), Math.round(b.r * 2 - 6), 2);
         c.globalAlpha = held ? 1 : 0.85;
         drawText(c, b.label, Math.round(b.x - 3 * this.labelScale), Math.round(b.y - 4 * this.labelScale), this.labelScale, '#ffffff');
         c.globalAlpha = 1;
