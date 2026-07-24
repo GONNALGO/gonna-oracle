@@ -1,19 +1,28 @@
-// v6 — Capcom-grade mobile touch controls.
+// v6.1 — Capcom-grade mobile touch controls, SCREEN-SPACE edition.
 // Active ONLY on touch devices (pointer coarse / ontouchstart). Desktop: this
 // module is never instantiated, zero cost, zero visual change.
+//
+// The canvas is now full-bleed (whole viewport) and the 384x224 game view is
+// letterboxed INSIDE it (see fit.ts). Touch controls therefore live in screen
+// space (CSS px), laid out from the same ViewFit the renderer uses:
 // - FLOATING VIRTUAL JOYSTICK (left thumb): dynamic origin where the thumb
-//   lands on the left half, 8-way with a short dead zone, translucent.
-// - ARCADE BUTTONS (right thumb): PUNCH big, KICK, JUMP, SPECIAL — fan layout,
-//   brighten on press, edge-press + held-state semantics identical to keyboard.
+//   lands on the LEFT HALF OF THE ACTUAL VIEWPORT, 8-way, short dead zone.
+// - ARCADE BUTTONS (right thumb): PUNCH big, KICK, JUMP, SPECIAL — fan layout.
+//   Landscape: fan rides the bottom-right corner over the game view.
+//   Portrait: fan lives in the free lower area and is LARGER (ergonomic mode).
+// - PAUSE / MUTE / ZOOM system buttons: landscape keeps the v6 top-band gap
+//   (never over HUD); portrait moves them into the free area below the game
+//   view so they stay finger-sized. ZOOM toggles FIT/ZOOM (persisted).
 // - Multi-touch tracked per pointerId; joystick independent from buttons.
-// - Small PAUSE + MUTE buttons in the free top band (never over HUD).
 // - Tap anywhere on title/continue/game-over/clear/victory = confirm (start).
 // - Haptics via navigator.vibrate, throttled to max 1 call / 50ms.
 // Everything is drawn as a canvas overlay inside the existing render loop:
 // zero DOM layout thrashing, zero per-frame allocations.
 
 import { drawText } from './font';
-import { VH, VW } from './types';
+import { computeFit } from './fit';
+import type { ViewFit } from './fit';
+import { VH } from './types';
 import type { Input, Btn } from './input';
 
 export function isTouchDevice(): boolean {
@@ -51,7 +60,7 @@ export class Haptics {
   rankUp(): void { this.fire([15, 50, 15]); } // combo rank-up double pulse
 }
 
-// ---------- button layout (internal 384x224 coords, lower-right fan) ----------
+// ---------- screen-space layout (CSS px) ----------
 interface PadBtn {
   x: number;
   y: number;
@@ -59,22 +68,28 @@ interface PadBtn {
   btn: Btn;
   label: string;
 }
-// resting alpha ~40%, fat-finger hit padding baked into the test
-const HIT_PAD = 7;
-const PAD_BTNS: PadBtn[] = [
-  { x: 333, y: 168, r: 18, btn: 'punch', label: 'P' }, // big
-  { x: 300, y: 182, r: 13, btn: 'kick', label: 'K' },
-  { x: 329, y: 201, r: 13, btn: 'jump', label: 'J' },
-  { x: 361, y: 195, r: 11, btn: 'special', label: 'S' }, // small
+interface SysRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+// v6 fan proportions (offsets in units of the PUNCH radius R)
+const FAN: { dx: number; dy: number; rr: number; btn: Btn; label: string }[] = [
+  { dx: 0, dy: 0, rr: 1, btn: 'punch', label: 'P' }, // big
+  { dx: -1.83, dy: 0.78, rr: 0.72, btn: 'kick', label: 'K' },
+  { dx: -0.22, dy: 1.83, rr: 0.72, btn: 'jump', label: 'J' },
+  { dx: 1.56, dy: 1.5, rr: 0.6, btn: 'special', label: 'S' }, // small
 ];
 
-// small top-band system buttons (the gap between score and G-METER HUD)
-const PAUSE_RECT = { x: 244, y: 4, w: 18, h: 13 };
-const MUTE_RECT = { x: 268, y: 4, w: 18, h: 13 };
-
-// ---------- joystick tuning ----------
-const JOY_DEAD = 7; // short dead zone (px, internal)
-const JOY_RANGE = 24; // stick travel clamp
+// landscape: system buttons keep the v6 top-band gap (game coords), between
+// the centered score and the G-METER — never over HUD/G-METER/TIME/combo.
+const SYS_GAME: SysRect[] = [
+  { x: 244, y: 4, w: 18, h: 13 }, // pause
+  { x: 268, y: 4, w: 18, h: 13 }, // mute
+  { x: 292, y: 4, w: 18, h: 13 }, // zoom (ends 310 < 318 G-METER)
+];
 
 export interface TouchHooks {
   sceneName(): string; // current engine scene
@@ -82,6 +97,8 @@ export interface TouchHooks {
   togglePause(): void;
   toggleMute(): void;
   anyTap(): void; // audio unlock + title music, mirrors Input.anyKey
+  zoomOn(): boolean; // v6.1: FIT/ZOOM preference
+  toggleZoom(): void;
 }
 
 export class TouchControls {
@@ -90,8 +107,27 @@ export class TouchControls {
   private hooks: TouchHooks;
   private canvas: HTMLCanvasElement;
   private fullscreenTried = false;
+  private fit: ViewFit = computeFit(384, 224, 1, false, false);
 
-  // joystick state (no per-frame allocation: plain fields)
+  // layout (CSS px) — recomputed on every viewport change, zero per-frame cost
+  private pad: PadBtn[] = [
+    { x: 0, y: 0, r: 1, btn: 'punch', label: 'P' },
+    { x: 0, y: 0, r: 1, btn: 'kick', label: 'K' },
+    { x: 0, y: 0, r: 1, btn: 'jump', label: 'J' },
+    { x: 0, y: 0, r: 1, btn: 'special', label: 'S' },
+  ];
+  private R = 30; // PUNCH radius
+  private hitPad = 10;
+  private labelScale = 2;
+  private pauseR: SysRect = { x: 0, y: 0, w: 0, h: 0 };
+  private muteR: SysRect = { x: 0, y: 0, w: 0, h: 0 };
+  private zoomR: SysRect = { x: 0, y: 0, w: 0, h: 0 };
+  private joyBaseR = 35;
+  private joyTravel = 40;
+  private joyDead = 12;
+  private sysScale = 1; // glyph scale for system buttons
+
+  // joystick state (no per-frame allocation: plain fields, CSS px)
   private joyId = -1;
   private joyOX = 0;
   private joyOY = 0;
@@ -131,13 +167,68 @@ export class TouchControls {
     this.canvas.removeEventListener('contextmenu', this.onCtx);
   }
 
-  // ---------- helpers ----------
-  private toGame(e: PointerEvent, out: { x: number; y: number }): void {
-    const r = this.canvas.getBoundingClientRect();
-    out.x = ((e.clientX - r.left) / r.width) * VW;
-    out.y = ((e.clientY - r.top) / r.height) * VH;
+  // v6.1: same ViewFit the renderer uses — controls follow the same math
+  setViewport(f: ViewFit): void {
+    this.fit = f;
+    if (!this.active) return;
+    this.layout();
   }
 
+  private layout(): void {
+    const f = this.fit;
+    const m = 10; // edge margin
+    // free area starts under the CURRENT game view (taller when ZOOMed)
+    const gameBottom = f.fitOffY + VH * f.scale;
+    let px: number;
+    let py: number;
+    if (f.portrait) {
+      // portrait: controls live in the free lower area — LARGER (ergonomic mode)
+      const freeH = Math.max(140, f.cssH - gameBottom);
+      this.R = Math.min(52, Math.max(34, freeH * 0.14));
+      const R = this.R;
+      px = f.cssW - m - 2.6 * R;
+      py = gameBottom + freeH * 0.5 - 0.775 * R; // fan vertically centered in free area
+      if (py - R < gameBottom + 6) py = gameBottom + 6 + R;
+      if (py + 2.55 * R > f.cssH - m) py = f.cssH - m - 2.55 * R;
+      // system buttons: finger-sized row at the top of the free area (never over HUD)
+      const S = 40;
+      const sy = gameBottom + 12;
+      this.sysScale = 2;
+      this.pauseR.x = 12; this.pauseR.y = sy; this.pauseR.w = S; this.pauseR.h = S;
+      this.muteR.x = 62; this.muteR.y = sy; this.muteR.w = S; this.muteR.h = S;
+      this.zoomR.x = 112; this.zoomR.y = sy; this.zoomR.w = S; this.zoomR.h = S;
+    } else {
+      // landscape: full-height game view, fan rides the bottom-right corner
+      this.R = Math.min(56, Math.max(28, f.cssH * 0.092));
+      const R = this.R;
+      px = f.cssW - m - 2.6 * R;
+      py = f.cssH - m - 2.55 * R;
+      // system buttons in the v6 top-band gap (game coords -> screen via FIT)
+      this.sysScale = Math.max(1, Math.round(f.fitScale));
+      for (let i = 0; i < 3; i++) {
+        const g = SYS_GAME[i];
+        const r = i === 0 ? this.pauseR : i === 1 ? this.muteR : this.zoomR;
+        r.x = f.fitOffX + g.x * f.fitScale;
+        r.y = f.fitOffY + g.y * f.fitScale;
+        r.w = g.w * f.fitScale;
+        r.h = g.h * f.fitScale;
+      }
+    }
+    for (let i = 0; i < 4; i++) {
+      const b = this.pad[i];
+      const d = FAN[i];
+      b.x = px + d.dx * this.R;
+      b.y = py + d.dy * this.R;
+      b.r = d.rr * this.R;
+    }
+    this.hitPad = Math.max(8, this.R * 0.3);
+    this.labelScale = Math.min(3, Math.max(1, Math.round(this.R / 16)));
+    this.joyBaseR = this.R * 1.17;
+    this.joyTravel = this.R * 1.33;
+    this.joyDead = Math.max(10, this.R * 0.39);
+  }
+
+  // ---------- helpers ----------
   private setBtn(b: Btn, isDown: boolean): void {
     const inp = this.input;
     if (isDown) {
@@ -175,13 +266,13 @@ export class TouchControls {
     let nx = 0;
     let ny = 0;
     if (dist > 0.001) {
-      const cl = Math.min(dist, JOY_RANGE) / dist;
+      const cl = Math.min(dist, this.joyTravel) / dist;
       nx = dx * cl;
       ny = dy * cl;
     }
     this.joyDX = nx;
     this.joyDY = ny;
-    const dead = dist < JOY_DEAD;
+    const dead = dist < this.joyDead;
     // 8-way snap: a cardinal wins its octant when it beats the other axis by tan(22.5deg)
     const ax = Math.abs(dx);
     const ay = Math.abs(dy);
@@ -206,27 +297,33 @@ export class TouchControls {
     if (this.joyD) { this.joyD = false; this.setBtn('down', false); }
   }
 
-  // ---------- pointer handlers ----------
-  private pt = { x: 0, y: 0 }; // scratch, no allocation per event
-
+  // ---------- pointer handlers (screen space: canvas is fixed at inset 0) ----------
   private onCtx = (e: Event): void => {
     e.preventDefault(); // no long-press context menu
   };
+
+  private inRect(x: number, y: number, r: SysRect): boolean {
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
 
   private onDown = (e: PointerEvent): void => {
     if (e.pointerType !== 'touch') return; // mouse/pen: leave to desktop behavior
     e.preventDefault();
     this.hooks.anyTap(); // audio unlock + title track (mirrors anyKey)
     if (!this.fullscreenTried) {
+      // v6.1: progressive enhancement only — unsupported on iPhone Safari,
+      // the 100dvh canvas + visualViewport refit carry the experience there.
       this.fullscreenTried = true;
       try {
         const p = document.documentElement.requestFullscreen?.({ navigationUI: 'hide' });
         if (p) p.catch(() => { /* fullscreen refused: fine */ });
       } catch { /* unsupported */ }
+      try {
+        window.scrollTo(0, 1); // legacy chrome-collapse trick
+      } catch { /* ignore */ }
     }
-    this.toGame(e, this.pt);
-    const x = this.pt.x;
-    const y = this.pt.y;
+    const x = e.clientX;
+    const y = e.clientY;
     const scene = this.hooks.sceneName();
 
     // tap anywhere = confirm on non-play scenes
@@ -238,16 +335,23 @@ export class TouchControls {
       return;
     }
 
-    // system buttons (top band)
-    if (x >= PAUSE_RECT.x && x <= PAUSE_RECT.x + PAUSE_RECT.w && y >= PAUSE_RECT.y && y <= PAUSE_RECT.y + PAUSE_RECT.h) {
+    // system buttons
+    if (this.inRect(x, y, this.pauseR)) {
       this.hooks.togglePause();
       this.ptrIds.push(e.pointerId);
       this.ptrBtn.push(null);
       this.ptrJoy.push(false);
       return;
     }
-    if (x >= MUTE_RECT.x && x <= MUTE_RECT.x + MUTE_RECT.w && y >= MUTE_RECT.y && y <= MUTE_RECT.y + MUTE_RECT.h) {
+    if (this.inRect(x, y, this.muteR)) {
       this.hooks.toggleMute();
+      this.ptrIds.push(e.pointerId);
+      this.ptrBtn.push(null);
+      this.ptrJoy.push(false);
+      return;
+    }
+    if (this.inRect(x, y, this.zoomR)) {
+      this.hooks.toggleZoom();
       this.ptrIds.push(e.pointerId);
       this.ptrBtn.push(null);
       this.ptrJoy.push(false);
@@ -262,10 +366,10 @@ export class TouchControls {
     }
 
     // arcade buttons (right thumb fan)
-    for (const b of PAD_BTNS) {
+    for (const b of this.pad) {
       const dx = x - b.x;
       const dy = y - b.y;
-      const rr = b.r + HIT_PAD;
+      const rr = b.r + this.hitPad;
       if (dx * dx + dy * dy <= rr * rr) {
         this.setBtn(b.btn, true);
         this.ptrIds.push(e.pointerId);
@@ -275,8 +379,8 @@ export class TouchControls {
       }
     }
 
-    // floating joystick: thumb lands anywhere on the left half
-    if (x < VW / 2 && this.joyId === -1) {
+    // floating joystick: thumb lands anywhere on the LEFT HALF of the viewport
+    if (x < this.fit.cssW / 2 && this.joyId === -1) {
       this.joyId = e.pointerId;
       this.joyOX = x;
       this.joyOY = y;
@@ -298,8 +402,7 @@ export class TouchControls {
     if (e.pointerType !== 'touch') return;
     if (e.pointerId !== this.joyId) return;
     e.preventDefault();
-    this.toGame(e, this.pt);
-    this.applyJoy(this.pt.x - this.joyOX, this.pt.y - this.joyOY);
+    this.applyJoy(e.clientX - this.joyOX, e.clientY - this.joyOY);
   };
 
   private onUp = (e: PointerEvent): void => {
@@ -316,26 +419,34 @@ export class TouchControls {
     }
   };
 
-  // ---------- canvas overlay draw (called at the end of Game.render) ----------
+  // ---------- canvas overlay draw (screen space, called at the end of render) ----------
   draw(c: CanvasRenderingContext2D): void {
     if (!this.active) return;
+    const f = this.fit;
     const scene = this.hooks.sceneName();
     const inPlay = scene === 'play';
     c.save();
+    c.setTransform(f.dpr, 0, 0, f.dpr, 0, 0); // CSS px space
     c.imageSmoothingEnabled = false;
 
     if (inPlay) {
-      // ---- system buttons: PAUSE + MUTE (top band gap) ----
-      this.sysBtn(c, PAUSE_RECT.x, PAUSE_RECT.y, PAUSE_RECT.w, PAUSE_RECT.h, this.hooks.isPaused());
+      // ---- system buttons: PAUSE + MUTE + ZOOM ----
+      this.sysBtn(c, this.pauseR, this.hooks.isPaused());
       // pause glyph: two bars
+      const pcx = this.pauseR.x + this.pauseR.w / 2;
+      const pcy = this.pauseR.y + this.pauseR.h / 2;
+      const bw = Math.max(3, this.pauseR.w * 0.14);
+      const bh = this.pauseR.h * 0.5;
       c.fillStyle = '#e8ecf4';
-      c.fillRect(PAUSE_RECT.x + 5, PAUSE_RECT.y + 3, 3, 7);
-      c.fillRect(PAUSE_RECT.x + 10, PAUSE_RECT.y + 3, 3, 7);
-      this.sysBtn(c, MUTE_RECT.x, MUTE_RECT.y, MUTE_RECT.w, MUTE_RECT.h, false);
-      drawText(c, 'M', MUTE_RECT.x + 6, MUTE_RECT.y + 3, 1, '#e8ecf4');
+      c.fillRect(Math.round(pcx - bw - 1.5), Math.round(pcy - bh / 2), Math.round(bw), Math.round(bh));
+      c.fillRect(Math.round(pcx + 1.5), Math.round(pcy - bh / 2), Math.round(bw), Math.round(bh));
+      this.sysBtn(c, this.muteR, false);
+      drawText(c, 'M', Math.round(this.muteR.x + this.muteR.w / 2 - 3 * this.sysScale), Math.round(this.muteR.y + this.muteR.h / 2 - 4 * this.sysScale), this.sysScale, '#e8ecf4');
+      this.sysBtn(c, this.zoomR, this.hooks.zoomOn());
+      drawText(c, 'Z', Math.round(this.zoomR.x + this.zoomR.w / 2 - 3 * this.sysScale), Math.round(this.zoomR.y + this.zoomR.h / 2 - 4 * this.sysScale), this.sysScale, this.hooks.zoomOn() ? '#7fd858' : '#e8ecf4');
 
       // ---- arcade buttons ----
-      for (const b of PAD_BTNS) {
+      for (const b of this.pad) {
         const held = this.input.down[b.btn];
         const a = held ? 0.78 : 0.4; // brighten on press, ~40% resting
         c.globalAlpha = a;
@@ -349,9 +460,9 @@ export class TouchControls {
         c.arc(b.x, b.y, b.r, 0, Math.PI * 2);
         c.fill();
         c.fillStyle = 'rgba(255,255,255,0.35)';
-        c.fillRect(b.x - b.r + 3, b.y - b.r + 2, b.r * 2 - 6, 2);
+        c.fillRect(Math.round(b.x - b.r + 3), Math.round(b.y - b.r + 2), Math.round(b.r * 2 - 6), 2);
         c.globalAlpha = held ? 1 : 0.85;
-        drawText(c, b.label, b.x - 3, b.y - 4, 1, '#ffffff');
+        drawText(c, b.label, Math.round(b.x - 3 * this.labelScale), Math.round(b.y - 4 * this.labelScale), this.labelScale, '#ffffff');
         c.globalAlpha = 1;
       }
     }
@@ -360,47 +471,50 @@ export class TouchControls {
     if (this.joyId !== -1) {
       const ox = this.joyOX;
       const oy = this.joyOY;
+      const br = this.joyBaseR;
       c.globalAlpha = 0.35; // translucent base
       c.fillStyle = '#0b0d14';
       c.beginPath();
-      c.arc(ox, oy, 21, 0, Math.PI * 2);
+      c.arc(ox, oy, br + 1, 0, Math.PI * 2);
       c.fill();
       c.strokeStyle = '#8a8f9c';
       c.lineWidth = 1;
       c.beginPath();
-      c.arc(ox + 0.5, oy + 0.5, 20, 0, Math.PI * 2);
+      c.arc(ox + 0.5, oy + 0.5, br, 0, Math.PI * 2);
       c.stroke();
       // 8-way tick marks
       c.fillStyle = '#8a8f9c';
       for (let i = 0; i < 8; i++) {
         const ang = (i * Math.PI) / 4;
-        c.fillRect(Math.round(ox + Math.cos(ang) * 17) - 1, Math.round(oy + Math.sin(ang) * 17) - 1, 2, 2);
+        c.fillRect(Math.round(ox + Math.cos(ang) * (br - 4)) - 1, Math.round(oy + Math.sin(ang) * (br - 4)) - 1, 2, 2);
       }
       // stick knob
+      const kr = br * 0.43;
       c.globalAlpha = 0.55;
       c.fillStyle = '#d4d9e2';
       c.beginPath();
-      c.arc(ox + this.joyDX, oy + this.joyDY, 9, 0, Math.PI * 2);
+      c.arc(ox + this.joyDX, oy + this.joyDY, kr, 0, Math.PI * 2);
       c.fill();
       c.fillStyle = 'rgba(255,255,255,0.4)';
-      c.fillRect(Math.round(ox + this.joyDX) - 6, Math.round(oy + this.joyDY) - 7, 12, 2);
+      c.fillRect(Math.round(ox + this.joyDX - kr * 0.66), Math.round(oy + this.joyDY - kr * 0.78), Math.round(kr * 1.33), 2);
       c.globalAlpha = 1;
     }
 
     c.restore();
   }
 
-  private sysBtn(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, lit: boolean): void {
+  private sysBtn(c: CanvasRenderingContext2D, r: SysRect, lit: boolean): void {
     c.globalAlpha = lit ? 0.75 : 0.35;
     c.fillStyle = '#0b0d14';
-    c.fillRect(x, y, w, h);
-    c.strokeStyle = '#8a8f9c';
+    c.fillRect(r.x, r.y, r.w, r.h);
+    c.strokeStyle = lit ? '#7fd858' : '#8a8f9c';
     c.lineWidth = 1;
-    c.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    c.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
     c.globalAlpha = 1;
   }
 
-  // for tests: current joystick origin in game coords (-1,-1 when idle)
+  // ---------- test hooks ----------
+  // current joystick origin in CSS px (-1,-1 semantics via joyActive)
   get joyActive(): boolean {
     return this.joyId !== -1;
   }
@@ -409,5 +523,12 @@ export class TouchControls {
   }
   get joyOriginY(): number {
     return this.joyOY;
+  }
+  // current screen-space layout (CSS px) for headless assertions
+  get padLayout(): { x: number; y: number; r: number; btn: string }[] {
+    return this.pad;
+  }
+  get sysLayout(): { pause: SysRect; mute: SysRect; zoom: SysRect } {
+    return { pause: this.pauseR, mute: this.muteR, zoom: this.zoomR };
   }
 }

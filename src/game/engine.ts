@@ -21,6 +21,8 @@ import type { GameCtx } from './ctx';
 import { drawHud } from './hud';
 import { drawTextSh } from './font';
 import { Haptics, TouchControls } from './touch';
+import { computeFit } from './fit';
+import type { ViewFit } from './fit';
 import { drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawTitle, drawVictory } from './screens';
 import type { Tally } from './screens';
 
@@ -72,6 +74,15 @@ export class Game implements GameCtx {
   private drawList: Drawable[] = [];
   private holdInput = false; // true while frozen: keep edge-presses buffered
   private paused = false; // v6: touch PAUSE button (play scene only)
+  // v6.1: internal letterbox — canvas is full-bleed, game view fitted by transform
+  fit: ViewFit = computeFit(VW, VH, 1, false, false);
+  zoomOn = false; // portrait ZOOM preference (persisted in localStorage)
+  onFitChange: (() => void) | null = null; // Game.tsx refit callback
+  // per-frame view scratch (zero allocation)
+  private vScale = 1;
+  private vOffX = 0;
+  private vOffY = 0;
+  private vClipW = VW;
 
   private constructor(ctx: CanvasRenderingContext2D, art: Art, frames: Map<string, HTMLImageElement>) {
     this.ctx = ctx;
@@ -79,13 +90,34 @@ export class Game implements GameCtx {
     this.frames = frames;
     for (let i = 0; i < 48; i++) this.projs.push(new Proj());
     this.input.anyKey = () => this.onAnyGesture();
+    try {
+      this.zoomOn = window.localStorage.getItem('gonna.zoom') === '1';
+    } catch { /* storage unavailable: session-only zoom */ }
     this.touch = new TouchControls(ctx.canvas, this.input, this.haptics, {
       sceneName: () => this.scene,
       isPaused: () => this.paused,
       togglePause: () => this.togglePause(),
       toggleMute: () => this.audio.toggleMute(),
       anyTap: () => this.onAnyGesture(),
+      zoomOn: () => this.zoomOn,
+      toggleZoom: () => this.toggleZoom(),
     });
+  }
+
+  // v6.1: called by Game.tsx on boot and every viewport/rotation change
+  setViewport(f: ViewFit): void {
+    this.fit = f;
+    this.touch.setViewport(f);
+  }
+
+  // v6.1: portrait FIT <-> ZOOM toggle (touch ZOOM button)
+  toggleZoom(): void {
+    this.zoomOn = !this.zoomOn;
+    try {
+      window.localStorage.setItem('gonna.zoom', this.zoomOn ? '1' : '0');
+    } catch { /* ignore */ }
+    this.audio.uiSelect();
+    if (this.onFitChange) this.onFitChange();
   }
 
   // audio unlock + title track kickoff, shared by keyboard and touch
@@ -670,29 +702,85 @@ export class Game implements GameCtx {
     this.goArrow = !this.waveActive && !(this.stage.boss && this.bossSpawned) && this.scene === 'play' && this.player.state !== 'dead';
   }
 
+  // v6.1: set a game-view transform + clip; fill=true lays the black base inside the view
+  private applyView(scale: number, offX: number, offY: number, crop: number, clipW: number, fill: boolean): void {
+    const c = this.ctx;
+    const f = this.fit;
+    c.setTransform(
+      f.dpr * scale, 0, 0, f.dpr * scale,
+      f.dpr * (offX - crop * scale), f.dpr * offY,
+    );
+    c.beginPath();
+    c.rect(crop, 0, clipW, VH);
+    c.clip();
+    if (fill) {
+      c.fillStyle = '#000';
+      c.fillRect(crop, 0, clipW, VH);
+    }
+  }
+
+  // world pass view (zoom-aware); overlay/scene passes use the FIT view
+  private worldView(crop: number, fill: boolean): void {
+    this.applyView(this.vScale, this.vOffX, this.vOffY, crop, this.vClipW, fill);
+  }
+  private fitView(fill: boolean): void {
+    const f = this.fit;
+    this.applyView(f.fitScale, f.fitOffX, f.fitOffY, 0, VW, fill);
+  }
+
   // ---------- render ----------
   render(): void {
     const c = this.ctx;
+    const f = this.fit;
     c.imageSmoothingEnabled = false;
-    c.clearRect(0, 0, VW, VH);
+    // full-viewport black base (device px) — the internal letterbox
+    c.save();
+    c.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
+    c.fillStyle = '#000';
+    c.fillRect(0, 0, f.cssW, f.cssH);
+    c.restore();
+
+    // pick the effective view: ZOOM applies only while a stage is on screen
+    const inStage = !!this.stage && this.scene !== 'title' && this.scene !== 'intro' && this.scene !== 'victory';
+    const zoomed = f.zoom && inStage;
+    this.vScale = zoomed ? f.zoomScale : f.fitScale;
+    this.vOffX = zoomed ? 0 : f.fitOffX; // ZOOM centers the cropped window via cropX
+    this.vOffY = f.fitOffY;
+    let crop = 0;
+    if (zoomed) {
+      // zoom camera: player centered, window clamped inside the 384px stage view
+      crop = clamp(this.player.x - this.camX - f.zoomVisW / 2, 0, Math.max(0, VW - f.zoomVisW));
+    }
+    this.vClipW = zoomed ? Math.min(f.zoomVisW + 1, VW - crop) : VW;
 
     if (this.scene === 'title') {
+      c.save();
+      this.fitView(true);
       drawTitle(c, this.frame, this.art);
+      c.restore();
       return;
     }
     if (this.scene === 'intro' && this.stage) {
+      c.save();
+      this.fitView(true);
       drawIntro(c, this.stage.name, this.stage.sub, this.sceneT);
+      c.restore();
       return;
     }
     if (this.scene === 'victory') {
+      c.save();
+      this.fitView(true);
       drawVictory(c, { score: this.score, timeFrames: this.totalFrames, kos: this.kos }, this.sceneT, this.finalVictory);
+      c.restore();
       return;
     }
     if (!this.stage) return;
 
-    // ---- world ----
+    // ---- world (cropped in ZOOM) ----
     const shX = this.fx.shakeX;
     const shY = this.fx.shakeY;
+    c.save();
+    this.worldView(crop, true);
     c.save();
     c.translate(Math.round(shX), Math.round(shY));
     c.drawImage(this.stage.far, Math.round(-this.camX * 0.25), 0);
@@ -720,9 +808,12 @@ export class Game implements GameCtx {
       c.fillRect(-4, -4, VW + 8, VH + 8);
       c.globalAlpha = 1;
     }
-    c.restore();
+    c.restore(); // shake
+    c.restore(); // world view
 
-    // ---- overlays ----
+    // ---- overlays (always the full uncropped view: HUD is never cut by ZOOM) ----
+    c.save();
+    this.fitView(false);
     drawHud(c, this, this.score, this.timeLeft, this.goArrow, this.frame, this.audio.muted);
     if (this.scene === 'clear') drawClear(c, this.tally, this.score);
     if (this.scene === 'gameover') drawGameOver(c, this.sceneT);
@@ -736,6 +827,7 @@ export class Game implements GameCtx {
       drawTextSh(c, 'PAUSA', VW / 2, 96, 3, '#f5c542', 'center');
       drawTextSh(c, 'TAP II TO RESUME', VW / 2, 124, 1, '#c8ccd4', 'center');
     }
+    c.restore(); // overlay view
   }
 
   // rendered after everything, every scene — cheap no-op on desktop

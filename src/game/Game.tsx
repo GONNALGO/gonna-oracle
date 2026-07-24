@@ -1,14 +1,17 @@
-// <Game/> — mounts one 384x224 canvas, letterboxed, pixelated, fixed 60Hz logic.
-// v6: touch hardening — no scroll/zoom on the canvas, gentle non-blocking
-// "RUOTA IL TELEFONO" overlay in portrait on touch devices (desktop untouched).
+// <Game/> — v6.1: TRUE full-bleed canvas. The canvas element always covers the
+// whole viewport (position:fixed, inset:0, 100% x 100dvh); the 384x224 game
+// view is letterboxed INSIDE the canvas by the render transform (see fit.ts).
+// iPhone Safari has no requestFullscreen(): instead we refit on every
+// resize / orientationchange / visualViewport change (+ legacy scrollTo(0,1))
+// so the layout can NEVER get stuck after rotation. Fixed 60Hz logic.
 import { useEffect, useRef } from 'react';
 import { Game } from './engine';
 import { isTouchDevice } from './touch';
+import { computeFit } from './fit';
 import { VH, VW } from './types';
 
 export default function GameCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rotateRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -19,6 +22,32 @@ export default function GameCanvas() {
     let acc = 0;
     let last = performance.now();
     const STEP = 1000 / 60;
+    const timers: number[] = [];
+
+    // refit the canvas backing store + game view to the CURRENT viewport
+    const refit = () => {
+      const vv = window.visualViewport;
+      const w = Math.max(1, Math.round(vv ? vv.width : window.innerWidth));
+      const h = Math.max(1, Math.round(vv ? vv.height : window.innerHeight));
+      const dpr = Math.min(window.devicePixelRatio || 1, 3);
+      const pw = Math.max(1, Math.round(w * dpr));
+      const ph = Math.max(1, Math.round(h * dpr));
+      if (canvas.width !== pw) canvas.width = pw;
+      if (canvas.height !== ph) canvas.height = ph;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      if (game) game.setViewport(computeFit(w, h, dpr, isTouchDevice(), game.zoomOn));
+    };
+    // rotation on iOS settles in steps (chrome collapse) — refit immediately,
+    // then twice more, and nudge the legacy scroll trick. Never stuck.
+    const onOrient = () => {
+      try {
+        window.scrollTo(0, 1);
+      } catch { /* ignore */ }
+      refit();
+      timers.push(window.setTimeout(refit, 80));
+      timers.push(window.setTimeout(refit, 320));
+    };
 
     const loop = (now: number) => {
       if (!alive || !game) return;
@@ -29,7 +58,7 @@ export default function GameCanvas() {
         acc -= STEP;
       }
       game.render();
-      game.renderTouch(); // v6: canvas-overlay touch controls (no-op on desktop)
+      game.renderTouch(); // touch controls overlay (no-op on desktop)
       raf = requestAnimationFrame(loop);
     };
 
@@ -40,85 +69,52 @@ export default function GameCanvas() {
       }
       game = g;
       (window as unknown as { __gonna: Game }).__gonna = g; // test hook
+      g.onFitChange = refit; // ZOOM toggle re-fits immediately
+      refit();
       last = performance.now();
       raf = requestAnimationFrame(loop);
     });
 
-    // v6: portrait rotate hint — touch devices only, non-blocking
-    const mq = window.matchMedia('(orientation: portrait)');
-    const touch = isTouchDevice();
-    const rotateEl = rotateRef.current;
-    const syncRotate = () => {
-      if (rotateEl) rotateEl.style.display = touch && mq.matches ? 'flex' : 'none';
-    };
-    syncRotate();
-    if (mq.addEventListener) mq.addEventListener('change', syncRotate);
-    else mq.addListener(syncRotate);
+    refit(); // size the backing store before boot completes
+    window.addEventListener('resize', onOrient);
+    window.addEventListener('orientationchange', onOrient);
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener('resize', refit);
+      vv.addEventListener('scroll', refit);
+    }
 
     return () => {
       alive = false;
       cancelAnimationFrame(raf);
-      if (mq.removeEventListener) mq.removeEventListener('change', syncRotate);
-      else mq.removeListener(syncRotate);
+      for (const t of timers) window.clearTimeout(t);
+      window.removeEventListener('resize', onOrient);
+      window.removeEventListener('orientationchange', onOrient);
+      if (vv) {
+        vv.removeEventListener('resize', refit);
+        vv.removeEventListener('scroll', refit);
+      }
       if (game) game.destroy();
     };
   }, []);
 
   return (
-    <div
+    <canvas
+      ref={canvasRef}
+      width={VW}
+      height={VH}
       style={{
         position: 'fixed',
         inset: 0,
-        background: '#05060a',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
+        width: '100%',
+        height: '100dvh', // dynamic viewport height: follows iOS chrome collapse
+        imageRendering: 'pixelated',
+        background: '#000',
+        touchAction: 'none', // no scroll / pull-to-refresh / double-tap zoom
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        WebkitTouchCallout: 'none',
       }}
-    >
-      <canvas
-        ref={canvasRef}
-        width={VW}
-        height={VH}
-        style={{
-          width: 'min(100vw, 171.4vh)',
-          height: 'min(58.33vw, 100vh)',
-          imageRendering: 'pixelated',
-          background: '#000',
-          touchAction: 'none', // v6: no scroll / pull-to-refresh / double-tap zoom
-          userSelect: 'none',
-          WebkitUserSelect: 'none',
-          WebkitTouchCallout: 'none',
-        }}
-      />
-      {/* v6: gentle rotate hint (touch + portrait only, never blocks input) */}
-      <div
-        id="rotate-overlay"
-        ref={rotateRef}
-        style={{
-          display: 'none',
-          position: 'fixed',
-          top: 'max(12px, env(safe-area-inset-top))',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 6,
-          padding: '10px 18px',
-          background: 'rgba(5,6,10,0.72)',
-          border: '2px solid #f5c542',
-          borderRadius: 4,
-          pointerEvents: 'none', // non-blocking by design
-          zIndex: 10,
-          fontFamily: 'monospace',
-          color: '#f5c542',
-          letterSpacing: 2,
-          textAlign: 'center',
-        }}
-      >
-        <span style={{ fontSize: 26, lineHeight: 1 }}>&#8635;</span>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>RUOTA IL TELEFONO</span>
-      </div>
-    </div>
+    />
   );
 }
