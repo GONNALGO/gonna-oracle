@@ -174,6 +174,13 @@ export class AudioSys {
     }
   }
 
+  // v6: touch pause — freeze the whole audio clock with the game
+  setPaused(p: boolean): void {
+    if (!this.ctx) return;
+    if (p) void this.ctx.suspend();
+    else if (this.ctx.state === 'suspended') void this.ctx.resume();
+  }
+
   // ---------- SFX primitives ----------
   private blip(freq: number, dur: number, type: OscillatorType, vol: number, slideTo = 0, delay = 0): void {
     if (!this.ctx || !this.sfxGain) return;

@@ -110,6 +110,7 @@ export class Player {
     g.fx.popup(this.x, this.y - 66, '-' + hit.dmg, '#ff6b6b');
     g.fx.shake(3);
     g.hitStop(4);
+    g.haptics.hurt(); // v6: 30ms buzz when the player takes a hit
     if (this.hp <= 0) {
       this.hp = 0;
       this.set('dead');
@@ -159,10 +160,16 @@ export class Player {
     this.comboDmg += dmg;
     if (this.comboHits >= 2) g.addMeter(0.06); // G-meter bonus on chained hits
     const tier = comboRankTier(this.comboHits);
+    let rankedUp = false;
     if (tier > this.rankTier) {
       this.rankTier = tier;
+      rankedUp = true;
       g.audio.rankUp();
     }
+    // v6 haptics: finisher 40ms > rank-up double pulse > plain hit 10ms
+    if (this.finisher && first) g.haptics.finisher();
+    else if (rankedUp) g.haptics.rankUp();
+    else g.haptics.hit();
     if (this.finisher && first) {
       // FINISHER: flash + long hit-stop (+ brief slow-mo once combo >= 5)
       g.fx.flash = 4;
@@ -481,7 +488,10 @@ export class Player {
       if (o.mode !== 'idle' || o.removeMe || !o.cfg.liftable) continue;
       const dx = Math.abs(o.x - this.x);
       if (Math.abs(o.y - this.y) >= 12) continue;
-      if (dx < o.cfg.halfW + 14 && (inp.down.down || dx <= o.cfg.halfW + 8)) return o;
+      // v6 touch: thumbs have no DOWN chord, so the "Z while touching" reach
+      // is relaxed (touching + 4px) and the DOWN reach extends a bit further.
+      const touch = inp.touchMode;
+      if (dx < o.cfg.halfW + (touch ? 16 : 14) && (inp.down.down || dx <= o.cfg.halfW + (touch ? 12 : 8))) return o;
     }
     return null;
   }

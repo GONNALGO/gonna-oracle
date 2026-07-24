@@ -2,6 +2,7 @@
 import type { AudioSys } from './audio';
 import type { FX } from './fx';
 import type { Input } from './input';
+import type { Haptics } from './touch';
 import type { Art } from './sprites';
 import type { Player } from './player';
 import type { Enemy, EnemyKind } from './enemies';
@@ -14,6 +15,7 @@ export interface GameCtx {
   audio: AudioSys;
   fx: FX;
   input: Input;
+  haptics: Haptics; // v6: no-op on desktop, throttled navigator.vibrate on touch
   art: Art;
   frames: Map<string, HTMLImageElement>;
   player: Player;

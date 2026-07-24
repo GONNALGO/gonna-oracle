@@ -19,6 +19,8 @@ import { clamp, comboRankName, LANE_TOP, rand, VH, VW } from './types';
 import type { Facing } from './types';
 import type { GameCtx } from './ctx';
 import { drawHud } from './hud';
+import { drawTextSh } from './font';
+import { Haptics, TouchControls } from './touch';
 import { drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawTitle, drawVictory } from './screens';
 import type { Tally } from './screens';
 
@@ -29,6 +31,8 @@ type Drawable = Player | Enemy | BossLike | Item | Obstacle | Proj;
 export class Game implements GameCtx {
   audio = new AudioSys();
   input = new Input();
+  haptics = new Haptics(); // v6: no-op on desktop
+  touch: TouchControls; // v6: active only on touch devices
   fx = new FX();
   art: Art;
   frames: Map<string, HTMLImageElement>;
@@ -67,19 +71,30 @@ export class Game implements GameCtx {
   private titleTrack = false;
   private drawList: Drawable[] = [];
   private holdInput = false; // true while frozen: keep edge-presses buffered
+  private paused = false; // v6: touch PAUSE button (play scene only)
 
   private constructor(ctx: CanvasRenderingContext2D, art: Art, frames: Map<string, HTMLImageElement>) {
     this.ctx = ctx;
     this.art = art;
     this.frames = frames;
     for (let i = 0; i < 48; i++) this.projs.push(new Proj());
-    this.input.anyKey = () => {
-      this.audio.ensure();
-      if (this.scene === 'title' && !this.titleTrack) {
-        this.titleTrack = true;
-        this.audio.playTrack('title');
-      }
-    };
+    this.input.anyKey = () => this.onAnyGesture();
+    this.touch = new TouchControls(ctx.canvas, this.input, this.haptics, {
+      sceneName: () => this.scene,
+      isPaused: () => this.paused,
+      togglePause: () => this.togglePause(),
+      toggleMute: () => this.audio.toggleMute(),
+      anyTap: () => this.onAnyGesture(),
+    });
+  }
+
+  // audio unlock + title track kickoff, shared by keyboard and touch
+  private onAnyGesture(): void {
+    this.audio.ensure();
+    if (this.scene === 'title' && !this.titleTrack) {
+      this.titleTrack = true;
+      this.audio.playTrack('title');
+    }
   }
 
   static async boot(canvas: HTMLCanvasElement): Promise<Game> {
@@ -91,8 +106,23 @@ export class Game implements GameCtx {
   }
 
   destroy(): void {
+    this.touch.destroy();
     this.input.destroy();
     this.audio.destroy();
+  }
+
+  // v6: touch-only pause (keyboard layout unchanged)
+  togglePause(): void {
+    if (this.scene !== 'play') return;
+    this.paused = !this.paused;
+    this.audio.setPaused(this.paused);
+    this.audio.uiSelect();
+  }
+  get isPaused(): boolean {
+    return this.paused;
+  }
+  get touchActive(): boolean {
+    return this.touch.active;
   }
 
   // ---------- GameCtx ----------
@@ -254,6 +284,10 @@ export class Game implements GameCtx {
 
   // ---------- main loop ----------
   step(): void {
+    if (this.paused) {
+      this.input.postUpdate(); // swallow buffered edges while frozen
+      return;
+    }
     this.frame++;
     const inp = this.input;
     if (inp.pressed.mute) {
@@ -415,6 +449,7 @@ export class Game implements GameCtx {
     for (const e of this.enemies) {
       if (e.state === 'dead' && e.t === 1) {
         this.kos++;
+        this.haptics.ko(); // v6: 20ms KO buzz
         this.dropCoins(e.x, e.y, e.kind === 'whale' || e.kind === 'bouncer' ? 5 : 2 + Math.floor(rand(0, 3)));
         if (e.kind === 'snek') this.dropItem('knife', e.x, e.y);
         else if (e.kind === 'coinsnek') {
@@ -453,6 +488,7 @@ export class Game implements GameCtx {
     if (this.boss && this.boss.removeMe) {
       const wasFinal = this.stage?.bossKind === 'fud';
       this.boss = null;
+      this.haptics.ko(); // v6: boss KO buzz
       if (wasFinal) {
         this.finalVictory = true;
         this.setScene('victory');
@@ -692,5 +728,18 @@ export class Game implements GameCtx {
     if (this.scene === 'gameover') drawGameOver(c, this.sceneT);
     if (this.scene === 'continue') drawContinue(c, this.continueCount, this.sceneT);
     if (this.boss && !this.boss.alive) drawMarketCap(c, this.boss.t, this.boss.deathLine);
+
+    // v6: pause veil (touch PAUSE button)
+    if (this.paused) {
+      c.fillStyle = 'rgba(4,5,10,0.55)';
+      c.fillRect(0, 0, VW, VH);
+      drawTextSh(c, 'PAUSA', VW / 2, 96, 3, '#f5c542', 'center');
+      drawTextSh(c, 'TAP II TO RESUME', VW / 2, 124, 1, '#c8ccd4', 'center');
+    }
+  }
+
+  // rendered after everything, every scene — cheap no-op on desktop
+  renderTouch(): void {
+    this.touch.draw(this.ctx);
   }
 }

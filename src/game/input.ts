@@ -22,6 +22,8 @@ export class Input {
     punch: false, kick: false, jump: false, special: false, start: false, mute: false,
   };
   pressed: Record<Btn, boolean> = { ...this.down };
+  /** v6: true while touch controls are active (relaxed object-lift tolerance) */
+  touchMode = false;
   private onKeyDown: (e: KeyboardEvent) => void;
   private onKeyUp: (e: KeyboardEvent) => void;
   /** fired on any keydown (for AudioContext unlock) */
