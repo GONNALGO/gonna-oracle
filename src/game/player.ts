@@ -1,5 +1,5 @@
-// GONNA — the player. States, combos, grab/throw, jump, special, carry, anchored frames.
-import { clamp, GRAV, LANE_BOT, LANE_TOP, VW } from './types';
+// GONNA — the player. States, free-flow combos (v4), grab/throw, jump, special, carry.
+import { clamp, comboRankTier, GRAV, LANE_BOT, LANE_TOP, VW } from './types';
 import type { Facing, HitInfo } from './types';
 import type { GameCtx } from './ctx';
 import type { Enemy } from './enemies';
@@ -14,6 +14,12 @@ export type PState =
 const SCALE = 0.55; // source frames are ~2x game size
 const IDLE_FR = ['0_0', '0_1', '0_3', '0_5'];
 const WALK_FR = ['3_0', '3_1', '3_2', '3_5'];
+
+// ---- v4 free-flow combo ----
+const CHAIN_WINDOW = 24; // ~400ms at 60Hz opened by every landed hit
+const STRING_MAX = 5; // hits per string; the 5th is always a FINISHER
+const PUNCH_FR = ['1_1', '1_2', '1_3']; // Z branch: fast hits cycle
+const KICK_FR = ['1_4', '1_5']; // X branch: heavy hits cycle
 
 export interface AttackBox {
   x0: number;
@@ -46,8 +52,19 @@ export class Player {
   animT = 0;
   invuln = 0;
   flashT = 0;
-  combo = 0; // current punch index 1..3
-  queued = false; // combo continuation queued
+  // ---- v4 free-flow combo state ----
+  comboHits = 0; // consecutive landed hits (the combo counter)
+  comboDmg = 0; // total damage dealt during the current combo
+  chainT = 0; // frames left in the chain window (refreshed per landed hit)
+  whiffs = 0; // consecutive whiffed swings (2 = combo drop)
+  chainPos = 0; // position of the current swing inside the 5-hit string
+  finisher = false; // current swing is the 5th-hit finisher
+  atkFrame = '1_1'; // sprite frame of the current swing
+  swingLanded = false; // current swing connected with something
+  queuedBtn: 'punch' | 'kick' | null = null; // buffered continuation
+  punchCyc = -1; // punch frame cycle cursor
+  kickCyc = -1; // kick frame cycle cursor
+  rankTier = 0; // highest rank tier reached this combo (sfx trigger)
   swingId = 0;
   held: Enemy | null = null;
   knees = 0;
@@ -64,9 +81,11 @@ export class Player {
     this.knifeUses = 0;
     this.state = 'idle';
     this.t = 0; this.invuln = 0; this.flashT = 0;
-    this.combo = 0; this.queued = false;
+    this.comboHits = 0; this.comboDmg = 0; this.chainT = 0; this.whiffs = 0;
+    this.chainPos = 0; this.finisher = false; this.swingLanded = false;
+    this.queuedBtn = null; this.punchCyc = -1; this.kickCyc = -1; this.rankTier = 0;
     this.held = null; this.knees = 0; this.airAtk = false;
-    this.carrying = null;
+    this.carrying = null; this.withKnife = false;
   }
 
   get onGround(): boolean { return this.z <= 0; }
@@ -84,6 +103,7 @@ export class Player {
     if (this.invuln > 0 || this.state === 'dead' || this.state === 'down' || this.state === 'getup' || this.state === 'victory') return false;
     if (this.state === 'grab' || this.state === 'knee') this.releaseHeld(g, false);
     if (this.carrying) this.setDown(g); // drop the object when hit
+    this.endCombo(g); // taking damage breaks the combo
     this.hp -= hit.dmg;
     this.flashT = 8;
     g.fx.spark(this.x, this.y - 40, true);
@@ -120,6 +140,48 @@ export class Player {
     }
   }
 
+  // ---------- v4 combo bookkeeping ----------
+  // +10% cumulative damage per hit in the chain, capped at +50%
+  get comboMult(): number {
+    return 1 + 0.1 * Math.min(STRING_MAX, this.comboHits);
+  }
+  scaledDmg(base: number): number {
+    return Math.round(base * this.comboMult);
+  }
+
+  // called by the engine each time a punch/kick swing connects with a foe
+  registerHit(g: GameCtx, dmg: number): void {
+    const first = !this.swingLanded;
+    this.swingLanded = true;
+    this.whiffs = 0;
+    this.comboHits++;
+    this.chainT = CHAIN_WINDOW;
+    this.comboDmg += dmg;
+    if (this.comboHits >= 2) g.addMeter(0.06); // G-meter bonus on chained hits
+    const tier = comboRankTier(this.comboHits);
+    if (tier > this.rankTier) {
+      this.rankTier = tier;
+      g.audio.rankUp();
+    }
+    if (this.finisher && first) {
+      // FINISHER: flash + long hit-stop (+ brief slow-mo once combo >= 5)
+      g.fx.flash = 4;
+      g.hitStop(9);
+      if (this.comboHits >= 5) g.slowMo(6);
+    }
+  }
+
+  endCombo(g: GameCtx): void {
+    if (this.comboHits >= 2) {
+      g.fx.popup(this.x, this.y - 86, this.comboHits + ' HITS +' + this.comboDmg, '#f5c542', 80);
+    }
+    this.comboHits = 0;
+    this.comboDmg = 0;
+    this.chainT = 0;
+    this.whiffs = 0;
+    this.rankTier = 0;
+  }
+
   // ---------- attack box for engine ----------
   attackBox(): AttackBox | null {
     const mk = (reach: number, dmg: number, kb: number, down: boolean): AttackBox => ({
@@ -133,13 +195,14 @@ export class Player {
     if (this.state === 'punch') {
       const active = this.t >= 4 && this.t <= 8;
       if (!active) return null;
-      if (this.knifeUses > 0) return mk(50, 15, 2, false);
-      if (this.combo === 3) return mk(38, 12, 3, true);
-      return mk(34, 8, 1.5, false);
+      if (this.withKnife) return this.finisher ? mk(50, 18, 3, true) : mk(50, 15, 2, false);
+      if (this.finisher) return mk(38, 13, 3.5, true);
+      return mk(34, 7, 1.5, false);
     }
     if (this.state === 'kick') {
-      if (this.t < 9 || this.t > 14) return null;
-      return mk(46, 16, 4, true);
+      if (this.t < 7 || this.t > 12) return null;
+      if (this.finisher) return mk(46, 18, 4, true);
+      return mk(44, 11, 2.5, false);
     }
     if (this.state === 'jumpkick') {
       return mk(40, 14, 3, true);
@@ -157,6 +220,11 @@ export class Player {
     this.animT++;
     if (this.invuln > 0) this.invuln--;
     if (this.flashT > 0) this.flashT--;
+    // chain window decay — combo drops when it runs out
+    if (this.chainT > 0) {
+      this.chainT--;
+      if (this.chainT === 0) this.endCombo(g);
+    }
     const inp = g.input;
 
     switch (this.state) {
@@ -197,12 +265,10 @@ export class Player {
             // lift check: DOWN+Z near an object, or Z while touching it
             const o = this.findLiftable(g);
             if (o) this.lift(o, g);
-            else this.startPunch(1, g);
+            else this.startSwing('punch', g);
           }
         } else if (inp.pressed.kick) {
-          this.set('kick');
-          this.swingId = swingCounter++;
-          g.audio.swing();
+          this.startSwing('kick', g);
         }
         break;
       }
@@ -238,18 +304,22 @@ export class Player {
         break;
       }
 
-      case 'punch': {
-        if (inp.pressed.punch && this.t >= 5) this.queued = true;
-        const dur = this.combo === 3 ? 20 : 15;
+      case 'punch':
+      case 'kick': {
+        // free-flow: either button buffers the next hit of the string
+        if (this.t >= 4) {
+          if (inp.pressed.punch) this.queuedBtn = 'punch';
+          else if (inp.pressed.kick) this.queuedBtn = 'kick';
+        }
+        const dur = this.state === 'punch' ? (this.finisher ? 18 : 14) : this.finisher ? 24 : 20;
         if (this.t >= dur) {
-          if (this.queued && this.combo < 3) this.startPunch(this.combo + 1, g);
+          if (!this.swingLanded) {
+            this.whiffs++;
+            if (this.whiffs >= 2) this.endCombo(g); // 2 consecutive whiffs drop the combo
+          }
+          if (this.queuedBtn) this.startSwing(this.queuedBtn, g);
           else this.set('idle');
         }
-        break;
-      }
-
-      case 'kick': {
-        if (this.t >= 26) this.set('idle');
         break;
       }
 
@@ -371,13 +441,28 @@ export class Player {
     }
   }
 
-  private startPunch(n: number, g: GameCtx): void {
-    this.set('punch');
-    this.combo = n;
-    this.queued = false;
-    this.swingId = swingCounter++;
-    this.withKnife = this.knifeUses > 0;
+  // Free-flow swing starter (v4): button picks the branch, chain position the
+  // string slot. Z = fast hit (next punch frame), X = heavy hit (next kick
+  // frame). The 5th landed-hit slot is always the FINISHER.
+  private startSwing(btn: 'punch' | 'kick', g: GameCtx): void {
+    const pos = (this.comboHits % STRING_MAX) + 1;
+    this.chainPos = pos;
+    this.finisher = pos === STRING_MAX;
+    this.withKnife = btn === 'punch' && this.knifeUses > 0;
     if (this.withKnife) this.knifeUses--;
+    if (this.withKnife) {
+      this.atkFrame = '1_2'; // knife stab keeps its own frame
+    } else if (btn === 'punch') {
+      this.punchCyc = (this.punchCyc + 1) % PUNCH_FR.length;
+      this.atkFrame = this.finisher ? PUNCH_FR[PUNCH_FR.length - 1] : PUNCH_FR[this.punchCyc];
+    } else {
+      this.kickCyc = (this.kickCyc + 1) % KICK_FR.length;
+      this.atkFrame = this.finisher ? KICK_FR[KICK_FR.length - 1] : KICK_FR[this.kickCyc];
+    }
+    this.swingLanded = false;
+    this.queuedBtn = null;
+    this.swingId = swingCounter++;
+    this.set(btn);
     g.audio.swing();
   }
 
@@ -439,8 +524,8 @@ export class Player {
     switch (this.state) {
       case 'idle': key = IDLE_FR[(this.animT >> 3) & 3]; break;
       case 'walk': key = WALK_FR[Math.floor(this.animT / 6) & 3]; break;
-      case 'punch': key = this.withKnife ? '1_2' : this.combo === 1 ? '1_1' : this.combo === 2 ? '1_2' : '1_3'; break;
-      case 'kick': key = this.t < 13 ? '1_4' : '1_5'; break;
+      case 'punch': key = this.withKnife ? '1_2' : this.atkFrame; break;
+      case 'kick': key = this.atkFrame; break;
       case 'jump': key = this.vz > 0 ? ((this.animT & 8) === 0 ? '2_0' : '2_5') : '2_2'; break;
       case 'jumpkick': key = '1_4'; break;
       case 'hurt': key = '3_3'; break;
@@ -459,6 +544,10 @@ export class Player {
 
     ctx2d.save();
     if (this.flashT > 0) ctx2d.filter = 'brightness(3)';
+    // finisher gleam while the 5th-hit swing is out
+    else if (this.finisher && (this.state === 'punch' || this.state === 'kick') && this.t <= 14) {
+      ctx2d.filter = 'brightness(1.8)';
+    }
     const lying = (this.state === 'down' || this.state === 'dead') && this.z <= 0 && this.t > 10;
     if (lying) {
       ctx2d.translate(sx, this.y - 4);

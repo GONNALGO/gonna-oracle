@@ -227,6 +227,7 @@ export class AudioSys {
   uiMove(): void { this.blip(440, 0.05, 'square', 0.18); }
   uiSelect(): void { this.blip(660, 0.07, 'square', 0.22); this.blip(990, 0.1, 'square', 0.22, 0, 0.07); }
   hurtPlayer(): void { this.blip(300, 0.15, 'sawtooth', 0.3, 100); this.noise(0.1, 0.3, 1800); }
+  rankUp(): void { this.blip(784, 0.06, 'square', 0.2); this.blip(1175, 0.1, 'square', 0.2, 0, 0.06); } // v4 combo rank-up
   fanfare(): void {
     const seq: [number, number][] = [[523, 0], [659, 0.12], [784, 0.24], [1047, 0.36], [784, 0.54], [1047, 0.66], [1319, 0.84]];
     for (const [f, d] of seq) this.blip(f, 0.16, 'square', 0.28, 0, d);

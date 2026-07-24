@@ -15,7 +15,7 @@ import { Proj } from './proj';
 import type { ProjKind } from './proj';
 import { buildStage } from './stages';
 import type { StageDef } from './stages';
-import { clamp, LANE_TOP, rand, VH, VW } from './types';
+import { clamp, comboRankName, LANE_TOP, rand, VH, VW } from './types';
 import type { Facing } from './types';
 import type { GameCtx } from './ctx';
 import { drawHud } from './hud';
@@ -66,6 +66,7 @@ export class Game implements GameCtx {
   private finalVictory = false;
   private titleTrack = false;
   private drawList: Drawable[] = [];
+  private holdInput = false; // true while frozen: keep edge-presses buffered
 
   private constructor(ctx: CanvasRenderingContext2D, art: Art, frames: Map<string, HTMLImageElement>) {
     this.ctx = ctx;
@@ -97,6 +98,9 @@ export class Game implements GameCtx {
   // ---------- GameCtx ----------
   hitStop(frames: number): void {
     this.freezeT = Math.max(this.freezeT, frames);
+  }
+  slowMo(frames: number): void {
+    this.slowmoT = Math.max(this.slowmoT, frames);
   }
   addScore(n: number): void {
     this.score += n;
@@ -146,6 +150,25 @@ export class Game implements GameCtx {
   }
   get victoryIsFinal(): boolean {
     return this.finalVictory;
+  }
+  // ---- v4 combo debug ----
+  get comboCount(): number {
+    return this.player.comboHits;
+  }
+  get comboRank(): string {
+    return comboRankName(this.player.comboHits);
+  }
+  get comboState(): { hits: number; rank: string; pos: number; window: number; whiffs: number; dmg: number; mult: number } {
+    const p = this.player;
+    return {
+      hits: p.comboHits,
+      rank: comboRankName(p.comboHits),
+      pos: p.chainPos,
+      window: p.chainT,
+      whiffs: p.whiffs,
+      dmg: p.comboDmg,
+      mult: p.comboMult,
+    };
   }
   debugStage(idx: number): void {
     this.stageIdx = idx;
@@ -211,7 +234,10 @@ export class Game implements GameCtx {
   step(): void {
     this.frame++;
     const inp = this.input;
-    if (inp.pressed.mute) this.audio.toggleMute();
+    if (inp.pressed.mute) {
+      this.audio.toggleMute();
+      inp.pressed.mute = false;
+    }
 
     switch (this.scene) {
       case 'title': {
@@ -292,7 +318,10 @@ export class Game implements GameCtx {
         break;
       }
     }
-    inp.postUpdate();
+    // v4: while hit-stop / slow-mo freezes the sim, keep edge-presses buffered
+    // so combo inputs are never swallowed by the freeze.
+    if (this.holdInput) this.holdInput = false;
+    else inp.postUpdate();
   }
 
   // ---------- gameplay ----------
@@ -304,12 +333,14 @@ export class Game implements GameCtx {
     if (this.freezeT > 0) {
       this.freezeT--;
       this.fx.update();
+      this.holdInput = true;
       return;
     }
     if (this.slowmoT > 0) {
       this.slowmoT--;
       if (this.frame % 3 !== 0) {
         this.fx.update();
+        this.holdInput = true;
         return;
       }
     }
@@ -427,17 +458,24 @@ export class Game implements GameCtx {
     // --- player attack box vs enemies / boss / obstacles ---
     const box = p.attackBox();
     if (box) {
+      // v4: punch/kick swings feed the free-flow combo (scaling + counter)
+      const comboAtk = p.state === 'punch' || p.state === 'kick';
+      const dmg = comboAtk ? p.scaledDmg(box.dmg) : box.dmg;
       for (const e of this.enemies) {
         if (!e.alive || e.lastHitId === box.id) continue;
         if (e.x > box.x0 - 8 && e.x < box.x1 + 8 && Math.abs(e.y - box.y) <= box.laneTol + 4 && e.z < 36) {
           e.lastHitId = box.id;
-          e.hurt({ dmg: box.dmg, kb: box.kb, down: box.down, dir: p.face }, this);
+          if (e.hurt({ dmg, kb: box.kb, down: box.down, dir: p.face }, this) && comboAtk) {
+            p.registerHit(this, dmg);
+          }
         }
       }
       if (this.boss && this.boss.alive && this.boss.lastHitId !== box.id) {
         if (this.boss.x > box.x0 - 30 && this.boss.x < box.x1 + 30 && Math.abs(this.boss.y - box.y) <= 26) {
           this.boss.lastHitId = box.id;
-          this.boss.hurt({ dmg: box.dmg, kb: 0, down: false, dir: p.face }, this);
+          if (this.boss.hurt({ dmg, kb: 0, down: false, dir: p.face }, this) && comboAtk) {
+            p.registerHit(this, dmg);
+          }
         }
       }
       for (const o of this.obstacles) {
@@ -445,6 +483,7 @@ export class Game implements GameCtx {
         if (o.x > box.x0 - 10 && o.x < box.x1 + 10 && Math.abs(o.y - box.y) <= 15) {
           o.lastSwing = box.id;
           o.hurt(this);
+          p.swingLanded = true; // contact with an object is not a whiff
         }
       }
     }

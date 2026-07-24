@@ -25,6 +25,7 @@ export interface GameCtx {
   camX: number;
   stageLen: number;
   hitStop(frames: number): void;
+  slowMo(frames: number): void;
   addScore(n: number): void;
   addMeter(n: number): void;
   spawnEnemy(kind: EnemyKind, side: Facing): void;

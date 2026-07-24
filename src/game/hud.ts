@@ -1,7 +1,18 @@
-// HUD: portrait + HP + lives, $GONNA score, meter segments + timer, boss bar, GO arrow.
+// HUD: portrait + HP + lives, $GONNA score, meter segments + timer, boss bar, GO arrow,
+// v4 free-flow combo counter (right side, upper area — never over the boss bar).
 import { drawText, drawTextSh, textWidth } from './font';
-import { VW } from './types';
+import { comboRankName, comboRankTier, VW } from './types';
 import type { GameCtx } from './ctx';
+
+// combo counter display state (module singleton, zero allocation in draw)
+const comboUI = { shown: 0, popT: 99, fade: 0, flashT: 0, tier: 0 };
+
+// color escalation: white -> gold -> GONNA green
+function rankColor(rank: string): string {
+  if (rank === 'LEGENDARY' || rank === 'BYZANTINE') return '#7fd858';
+  if (rank === 'SUPER' || rank === 'GREAT') return '#f5c542';
+  return '#ffffff';
+}
 
 export function drawHud(ctx: CanvasRenderingContext2D, g: GameCtx, score: number, timeLeft: number, goArrow: boolean, animT: number, muted: boolean): void {
   const p = g.player;
@@ -63,6 +74,47 @@ export function drawHud(ctx: CanvasRenderingContext2D, g: GameCtx, score: number
     ctx.fillStyle = '#e23b3b';
     ctx.fillRect(bx, 204, (bw * g.boss.hp) / g.boss.maxHp, 5);
     drawTextSh(ctx, g.boss.name, VW / 2, 193, 1, '#f5c542', 'center');
+  }
+
+  // ---- v4 combo counter: right side, upper area; lives only during a combo ----
+  const hits = p.comboHits;
+  if (hits >= 2) {
+    if (comboUI.shown !== hits) {
+      comboUI.shown = hits;
+      comboUI.popT = 0; // pop scale-in on every hit
+    }
+    const tier = comboRankTier(hits);
+    if (tier > comboUI.tier) comboUI.flashT = 10; // light rank-up flash (no shake)
+    comboUI.tier = tier;
+    comboUI.fade = 1;
+  } else if (comboUI.fade > 0) {
+    comboUI.fade -= 0.045; // gentle fade-out when the combo ends
+    if (comboUI.fade <= 0) {
+      comboUI.fade = 0;
+      comboUI.shown = 0;
+      comboUI.tier = 0;
+    }
+  }
+  comboUI.popT++;
+  if (comboUI.flashT > 0) comboUI.flashT--;
+  if (comboUI.fade > 0 && comboUI.shown >= 2) {
+    const rank = comboRankName(comboUI.shown);
+    let col = rankColor(rank);
+    if (comboUI.flashT > 0 && (comboUI.flashT & 2) !== 0) col = '#ffffff';
+    const pop = comboUI.popT < 6 ? 1 + (6 - comboUI.popT) * 0.12 : 1;
+    const a = Math.min(1, comboUI.fade);
+    const num = String(comboUI.shown);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.translate(VW - 12, 40);
+    ctx.scale(pop, pop);
+    drawTextSh(ctx, num, 0, 0, 3, col, 'right'); // big number, gold shadow accent
+    ctx.restore();
+    ctx.globalAlpha = a;
+    const labelY = 40 + Math.round(21 * pop) + 3;
+    drawTextSh(ctx, 'HITS', VW - 12, labelY, 1, '#c8ccd4', 'right');
+    if (rank) drawTextSh(ctx, rank, VW - 12, labelY + 9, 1, col, 'right');
+    ctx.globalAlpha = 1;
   }
 
   // ---- GO arrow ----

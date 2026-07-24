@@ -31,3 +31,25 @@ export function randInt(lo: number, hi: number): number {
 export function chance(p: number): boolean {
   return Math.random() < p;
 }
+
+// ---- v4 combo ranks: 3 NICE / 5 GREAT / 8 SUPER / 12 BYZANTINE / 20 LEGENDARY ----
+const RANK_TABLE: [number, string][] = [
+  [20, 'LEGENDARY'],
+  [12, 'BYZANTINE'],
+  [8, 'SUPER'],
+  [5, 'GREAT'],
+  [3, 'NICE'],
+];
+
+export function comboRankName(hits: number): string {
+  for (const [n, name] of RANK_TABLE) if (hits >= n) return name;
+  return '';
+}
+
+// 0 = none, 1 = NICE ... 5 = LEGENDARY (monotonic, for rank-up detection)
+export function comboRankTier(hits: number): number {
+  for (let i = 0; i < RANK_TABLE.length; i++) {
+    if (hits >= RANK_TABLE[i][0]) return RANK_TABLE.length - i;
+  }
+  return 0;
+}
