@@ -126,6 +126,7 @@ export class TouchControls {
   private joyTravel = 40;
   private joyDead = 12;
   private sysScale = 1; // glyph scale for system buttons
+  private joyTop = 0; // portrait: joystick zone starts BELOW the II/M/Z row
 
   // joystick state (no per-frame allocation: plain fields, CSS px)
   private joyId = -1;
@@ -142,6 +143,8 @@ export class TouchControls {
   private ptrIds: number[] = [];
   private ptrBtn: (Btn | null)[] = [];
   private ptrJoy: boolean[] = [];
+  private ptrGen: number[] = []; // viewport generation of the pointer's last event
+  private viewGen = 0; // bumped on every REAL viewport change (rotation/resize)
 
   constructor(canvas: HTMLCanvasElement, input: Input, haptics: Haptics, hooks: TouchHooks) {
     this.canvas = canvas;
@@ -156,6 +159,13 @@ export class TouchControls {
     canvas.addEventListener('pointerup', this.onUp, { passive: false });
     canvas.addEventListener('pointercancel', this.onUp, { passive: false });
     canvas.addEventListener('contextmenu', this.onCtx);
+    // Backstop: if iOS steals a gesture (control center, rotation, edge swipe)
+    // the up/cancel can miss the canvas entirely. Capture-phase listeners on
+    // window route ANY up/cancel/lost-capture into the same release logic.
+    // onUp is idempotent, so events that also reach the canvas are harmless.
+    window.addEventListener('pointerup', this.onUp, { capture: true });
+    window.addEventListener('pointercancel', this.onUp, { capture: true });
+    window.addEventListener('lostpointercapture', this.onUp, { capture: true });
   }
 
   destroy(): void {
@@ -165,12 +175,28 @@ export class TouchControls {
     this.canvas.removeEventListener('pointerup', this.onUp);
     this.canvas.removeEventListener('pointercancel', this.onUp);
     this.canvas.removeEventListener('contextmenu', this.onCtx);
+    window.removeEventListener('pointerup', this.onUp, { capture: true });
+    window.removeEventListener('pointercancel', this.onUp, { capture: true });
+    window.removeEventListener('lostpointercapture', this.onUp, { capture: true });
   }
 
   // v6.1: same ViewFit the renderer uses — controls follow the same math
   setViewport(f: ViewFit): void {
+    // a REAL refit (rotation / resize / chrome collapse / zoom flip) invalidates
+    // every screen-space coordinate a held joystick was spawned with
+    const changed =
+      f.cssW !== this.fit.cssW ||
+      f.cssH !== this.fit.cssH ||
+      f.dpr !== this.fit.dpr ||
+      f.portrait !== this.fit.portrait ||
+      f.zoom !== this.fit.zoom;
     this.fit = f;
     if (!this.active) return;
+    if (changed) {
+      // a joystick mid-flight across a refit is ALWAYS dropped, never ghosted
+      this.viewGen++;
+      this.releaseJoy();
+    }
     this.layout();
   }
 
@@ -207,6 +233,9 @@ export class TouchControls {
       this.pauseR.x = 12 + sal; this.pauseR.y = sy; this.pauseR.w = S; this.pauseR.h = S;
       this.muteR.x = 62 + sal; this.muteR.y = sy; this.muteR.w = S; this.muteR.h = S;
       this.zoomR.x = 112 + sal; this.zoomR.y = sy; this.zoomR.w = S; this.zoomR.h = S;
+      // joystick spawn zone starts BELOW the system-buttons row: a thumb
+      // landing next to II/M/Z can never spawn a ghost joystick over them
+      this.joyTop = sy + S + 8;
     } else {
       // landscape: full-height game view, fan rides the bottom-right corner
       this.R = Math.min(56, Math.max(28, f.cssH * 0.092));
@@ -223,6 +252,7 @@ export class TouchControls {
         r.w = g.w * f.fitScale;
         r.h = g.h * f.fitScale;
       }
+      this.joyTop = 0; // landscape: whole left half minus the sys band
     }
     for (let i = 0; i < 4; i++) {
       const b = this.pad[i];
@@ -266,9 +296,42 @@ export class TouchControls {
     this.ptrIds[i] = this.ptrIds[last];
     this.ptrBtn[i] = this.ptrBtn[last];
     this.ptrJoy[i] = this.ptrJoy[last];
+    this.ptrGen[i] = this.ptrGen[last];
     this.ptrIds.length = last;
     this.ptrBtn.length = last;
     this.ptrJoy.length = last;
+    this.ptrGen.length = last;
+  }
+
+  private track(id: number, b: Btn | null, joy: boolean): void {
+    this.ptrIds.push(id);
+    this.ptrBtn.push(b);
+    this.ptrJoy.push(joy);
+    this.ptrGen.push(this.viewGen);
+  }
+
+  // pointer capture: up/cancel can no longer be lost to element boundaries
+  private capture(id: number): void {
+    try {
+      this.canvas.setPointerCapture(id);
+    } catch { /* synthetic events / pointer already gone: tracking still works */ }
+  }
+
+  private uncapture(id: number): void {
+    try {
+      if (this.canvas.hasPointerCapture(id)) this.canvas.releasePointerCapture(id);
+    } catch { /* never captured */ }
+  }
+
+  // joystick spawn zone: portrait = lower free area only, BELOW the II/M/Z
+  // row; landscape = left half excluding the sys-buttons band
+  private inJoyZone(x: number, y: number): boolean {
+    const f = this.fit;
+    if (x >= f.cssW / 2) return false;
+    if (f.portrait) return y >= this.joyTop;
+    if (y >= this.pauseR.y - 6 && y <= this.pauseR.y + this.pauseR.h + 6 &&
+        x >= this.pauseR.x - 6 && x <= this.zoomR.x + this.zoomR.w + 6) return false;
+    return true;
   }
 
   private applyJoy(dx: number, dy: number): void {
@@ -301,10 +364,32 @@ export class TouchControls {
 
   private releaseJoy(): void {
     this.joyId = -1;
+    this.joyDX = 0;
+    this.joyDY = 0;
+    // defensive: clear held directions even if pointer tracking is partial/lost
     if (this.joyL) { this.joyL = false; this.setBtn('left', false); }
     if (this.joyR) { this.joyR = false; this.setBtn('right', false); }
     if (this.joyU) { this.joyU = false; this.setBtn('up', false); }
     if (this.joyD) { this.joyD = false; this.setBtn('down', false); }
+    // sweep any stale joystick ptr entries (ghost whose up/cancel never came)
+    for (let i = this.ptrIds.length - 1; i >= 0; i--) {
+      if (this.ptrJoy[i]) this.removePtr(i);
+    }
+  }
+
+  // scene transitions: force-release joystick + every held button. Any real
+  // finger still down re-taps cleanly; late up/cancel events are no-ops.
+  releaseAll(): void {
+    if (!this.active) return;
+    this.releaseJoy();
+    for (let i = 0; i < this.ptrIds.length; i++) {
+      const b = this.ptrBtn[i];
+      if (b) this.setBtn(b, false);
+    }
+    this.ptrIds.length = 0;
+    this.ptrBtn.length = 0;
+    this.ptrJoy.length = 0;
+    this.ptrGen.length = 0;
   }
 
   // ---------- pointer handlers (screen space: canvas is fixed at inset 0) ----------
@@ -319,6 +404,7 @@ export class TouchControls {
   private onDown = (e: PointerEvent): void => {
     if (e.pointerType !== 'touch') return; // mouse/pen: leave to desktop behavior
     e.preventDefault();
+    this.capture(e.pointerId); // up/cancel always come back to us
     this.hooks.anyTap(); // audio unlock + title track (mirrors anyKey)
     if (!this.fullscreenTried) {
       // v6.1: progressive enhancement only — unsupported on iPhone Safari,
@@ -339,39 +425,29 @@ export class TouchControls {
     // tap anywhere = confirm on non-play scenes
     if (scene !== 'play') {
       this.setBtn('start', true);
-      this.ptrIds.push(e.pointerId);
-      this.ptrBtn.push('start');
-      this.ptrJoy.push(false);
+      this.track(e.pointerId, 'start', false);
       return;
     }
 
     // system buttons
     if (this.inRect(x, y, this.pauseR)) {
       this.hooks.togglePause();
-      this.ptrIds.push(e.pointerId);
-      this.ptrBtn.push(null);
-      this.ptrJoy.push(false);
+      this.track(e.pointerId, null, false);
       return;
     }
     if (this.inRect(x, y, this.muteR)) {
       this.hooks.toggleMute();
-      this.ptrIds.push(e.pointerId);
-      this.ptrBtn.push(null);
-      this.ptrJoy.push(false);
+      this.track(e.pointerId, null, false);
       return;
     }
     if (this.inRect(x, y, this.zoomR)) {
       this.hooks.toggleZoom();
-      this.ptrIds.push(e.pointerId);
-      this.ptrBtn.push(null);
-      this.ptrJoy.push(false);
+      this.track(e.pointerId, null, false);
       return;
     }
     if (this.hooks.isPaused()) {
       // while paused, only PAUSE (handled above) does anything
-      this.ptrIds.push(e.pointerId);
-      this.ptrBtn.push(null);
-      this.ptrJoy.push(false);
+      this.track(e.pointerId, null, false);
       return;
     }
 
@@ -382,34 +458,42 @@ export class TouchControls {
       const rr = b.r + this.hitPad;
       if (dx * dx + dy * dy <= rr * rr) {
         this.setBtn(b.btn, true);
-        this.ptrIds.push(e.pointerId);
-        this.ptrBtn.push(b.btn);
-        this.ptrJoy.push(false);
+        this.track(e.pointerId, b.btn, false);
         return;
       }
     }
 
-    // floating joystick: thumb lands anywhere on the LEFT HALF of the viewport
-    if (x < this.fit.cssW / 2 && this.joyId === -1) {
-      this.joyId = e.pointerId;
-      this.joyOX = x;
-      this.joyOY = y;
-      this.joyDX = 0;
-      this.joyDY = 0;
-      this.ptrIds.push(e.pointerId);
-      this.ptrBtn.push(null);
-      this.ptrJoy.push(true);
-      return;
+    // floating joystick: restricted spawn zone (never over the II/M/Z row)
+    if (this.inJoyZone(x, y)) {
+      if (this.joyId !== -1) {
+        // stale-pointer reclaim: the old joystick pointer is gone from tracking
+        // (its up/cancel was lost to an iOS gesture steal) or it has produced
+        // no events since the last viewport change — force-release the ghost
+        // and adopt this new touch. A LIVE second thumb falls through as stray.
+        // NOTE: no time-based watchdog — a finger held perfectly still sends
+        // no pointermove events and is legitimate.
+        const ji = this.ptrIndex(this.joyId);
+        if (ji === -1 || this.ptrGen[ji] < this.viewGen) this.releaseJoy();
+      }
+      if (this.joyId === -1) {
+        this.joyId = e.pointerId;
+        this.joyOX = x;
+        this.joyOY = y;
+        this.joyDX = 0;
+        this.joyDY = 0;
+        this.track(e.pointerId, null, true);
+        return;
+      }
     }
 
     // stray touch: track so its release is harmless
-    this.ptrIds.push(e.pointerId);
-    this.ptrBtn.push(null);
-    this.ptrJoy.push(false);
+    this.track(e.pointerId, null, false);
   };
 
   private onMove = (e: PointerEvent): void => {
     if (e.pointerType !== 'touch') return;
+    const i = this.ptrIndex(e.pointerId);
+    if (i !== -1) this.ptrGen[i] = this.viewGen; // activity stamp (reclaim check)
     if (e.pointerId !== this.joyId) return;
     e.preventDefault();
     this.applyJoy(e.clientX - this.joyOX, e.clientY - this.joyOY);
@@ -427,6 +511,7 @@ export class TouchControls {
     } else if (e.pointerId === this.joyId) {
       this.releaseJoy();
     }
+    this.uncapture(e.pointerId);
   };
 
   // ---------- canvas overlay draw (screen space, called at the end of render) ----------
@@ -538,5 +623,23 @@ export class TouchControls {
   }
   get sysLayout(): { pause: SysRect; mute: SysRect; zoom: SysRect } {
     return { pause: this.pauseR, mute: this.muteR, zoom: this.zoomR };
+  }
+  // joystick spawn-zone lower bound (portrait: below the II/M/Z row)
+  get joyZoneTop(): number {
+    return this.fit.portrait ? this.joyTop : 0;
+  }
+  // number of currently tracked pointers (ghost sweep assertions)
+  get ptrCount(): number {
+    return this.ptrIds.length;
+  }
+  // debug: simulate a stuck joystick whose up/cancel was lost (iOS steal):
+  // joyId set with NO matching tracked pointer — the reported deadlock
+  debugStickJoy(id: number, x: number, y: number): void {
+    this.joyId = id;
+    this.joyOX = x;
+    this.joyOY = y;
+    this.joyDX = 0;
+    this.joyDY = 0;
+    this.applyJoy(40, 0); // a stuck ghost also holds a direction
   }
 }

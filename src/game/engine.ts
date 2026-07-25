@@ -285,6 +285,7 @@ export class Game implements GameCtx {
     this.loadStage(0);
     this.scene = 'intro';
     this.sceneT = 0;
+    this.touch.releaseAll(); // the confirming tap must not leak into the intro
     this.audio.uiSelect();
   }
 
@@ -312,6 +313,8 @@ export class Game implements GameCtx {
   private setScene(s: Scene): void {
     this.scene = s;
     this.sceneT = 0;
+    // no held control may leak across a scene cut (joystick ghost / stuck button)
+    this.touch.releaseAll();
   }
 
   // ---------- main loop ----------
