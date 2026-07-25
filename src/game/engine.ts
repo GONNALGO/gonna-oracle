@@ -851,7 +851,9 @@ export class Game implements GameCtx {
     c.translate(Math.round(shX), Math.round(shY));
     c.drawImage(this.stage.far, Math.round(-this.camX * 0.25), 0);
     c.drawImage(this.stage.mid, Math.round(-this.camX * 0.55), 0);
+    if (this.stage.back) this.stage.back(c, this.camX, this.frame); // v8: animated billboards/tickers/sea
     c.drawImage(this.stage.ground, Math.round(this.camX), 0, VW, 84, 0, 140, VW, 84);
+    if (this.stage.props) this.stage.props(c, this.camX, this.frame); // v8: sidewalk props (world depth)
 
     this.fx.drawFlames(c, this.camX); // v5: ground fire burns under the fighters
 
@@ -868,6 +870,7 @@ export class Game implements GameCtx {
     for (const d of dl) d.draw(c, this);
 
     this.fx.drawWorld(c);
+    if (this.stage.front) this.stage.front(c, this.camX, this.frame); // v8: weather + foreground silhouettes
     if (this.fx.flash > 0) {
       c.globalAlpha = this.fx.flash / 10;
       c.fillStyle = '#fff';

@@ -49,7 +49,7 @@ await shot('01-title');
 await page.keyboard.press('Enter');
 await sleep(400);
 ok(await G(() => window.__gonna.sceneName === 'intro'), 'S1 intro card after Enter');
-ok(await G(() => window.__gonna.stageTitle.includes('METRO ALGORAND')), 'S1 intro card text');
+ok(await G(() => window.__gonna.stageTitle.includes('GHETTO GONNA')), 'S1 intro card text');
 
 // keeps the player alive during boss fights so boss AI can act freely
 let healStop = false;
