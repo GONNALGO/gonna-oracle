@@ -79,7 +79,7 @@ export function drawTitle(
   ctx.scale(-1, 1);
   ctx.drawImage(art.lizIcon, 0, 0, m[1].w, m[1].h);
   ctx.restore();
-  drawText(ctx, 'V9.0 THE GATE', VW - textWidth('V9.0 THE GATE', 1) - 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, 'V9.0.1 THE GATE', VW - textWidth('V9.0.1 THE GATE', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 
