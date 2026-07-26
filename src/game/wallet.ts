@@ -2,13 +2,15 @@
 // + $GONNA / GONNA NFT eligibility via public indexers (with 24h grace cache).
 // A mock mode (window-injectable, persisted) drives the whole flow in CI.
 
-import { loadSkinMap, skinForAsset } from './skins';
+import { isGonnaName, loadSkinMap, skinForAsset } from './skins';
 import type { SkinId } from './skins';
 
 // ---------- official on-chain data ----------
 export const GONNA_ASA = 2582294183;
 export const GONNA_THRESHOLD = 2_000_000_000; // >= 2B $GONNA (display units)
 export const GONNA_CREATOR = 'GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU';
+// v9.1: SEAL treasury — 0-ALGO record transactions are sent here
+export const SEAL_TREASURY = 'SKRTO5VNF5DJVZUHKNKW44TT6VZJGLWTSVVYECNOY63TFKLK3OMCTLXJK4';
 export const LINK_TINYMAN = 'https://app.tinyman.org/swap?asset_in=0&asset_out=2582294183';
 export const LINK_DOWNBAD = 'https://www.downbad.farm/collection/gonna';
 export const LINK_STATTO = 'https://www.statto.xyz/collections/19186?tab=listings';
@@ -262,7 +264,9 @@ function normalizeMockNfts(list: { id: number; name: string; skin: string }[]): 
   const out: OwnedNft[] = [];
   for (const n of list) {
     const s = String(n.skin).toLowerCase();
-    if (MOCKABLE_SKINS.includes(s)) {
+    // v9.1: the name guard applies to mock holdings too — a rogue card
+    // (CompX Galaxy Card) can never sneak into the fighter list via CI mocks
+    if (MOCKABLE_SKINS.includes(s) && isGonnaName(String(n.name ?? ''))) {
       out.push({ id: n.id, name: n.name || 'GONNA #' + n.id, skin: s as SkinId });
     }
   }
@@ -531,4 +535,50 @@ export async function signTransactions(txGroups: unknown[][]): Promise<Uint8Arra
   const w = state.provider ? libs[state.provider] : null;
   if (!w || !w.signTransaction) throw new Error('wallet not connected');
   return w.signTransaction(txGroups, state.address ?? undefined);
+}
+
+// v9.1: CI mock mode — the mock wallet cannot really sign, but the SEAL flow
+// is still fully exercised (fake signed bytes -> routed algod in tests)
+export function isMock(): boolean {
+  return mock !== null;
+}
+
+// v9.1: per-address NFD segment resolution for the GLOBAL LEADERBOARD.
+// Same garage endpoints/flags as resolveIdentity, but multi-address with a
+// persisted map cache (24h) — the connected-wallet identity cache is separate.
+export interface Segment {
+  name: string;
+  active: boolean;
+}
+const KEY_NFD_SEGS = 'gonna.nfd.segs'; // {addr: {name, active, ts}}
+const segMem = new Map<string, Segment | null>();
+let segStore: Record<string, { name: string; active: boolean; ts: number }> = {};
+try {
+  const raw = lsGet(KEY_NFD_SEGS);
+  if (raw) segStore = JSON.parse(raw) as typeof segStore;
+} catch { /* corrupt: start fresh */ }
+
+export function cachedSegment(address: string): Segment | null | undefined {
+  if (segMem.has(address)) return segMem.get(address) ?? null;
+  const c = segStore[address];
+  if (c && Date.now() - c.ts < NFD_CACHE_MS) {
+    const seg: Segment | null = c.name ? { name: c.name, active: !!c.active } : null;
+    segMem.set(address, seg);
+    return seg;
+  }
+  return undefined; // unknown: resolve live
+}
+
+// resolve one address (cached); cosmetic — failures resolve to null silently
+export async function segmentFor(address: string): Promise<Segment | null> {
+  const hit = cachedSegment(address);
+  if (hit !== undefined) return hit;
+  let seg: Segment | null = null;
+  try {
+    seg = await fetchNfdSegment(address);
+  } catch { /* cosmetic */ }
+  segMem.set(address, seg);
+  segStore[address] = { name: seg ? seg.name : '', active: seg ? seg.active : false, ts: Date.now() };
+  lsSet(KEY_NFD_SEGS, JSON.stringify(segStore));
+  return seg;
 }

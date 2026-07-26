@@ -37,10 +37,14 @@ export class Input {
 
   constructor() {
     this.onKeyDown = (e: KeyboardEvent) => {
+      if (this.anyKey) this.anyKey();
+      // v9.1: a DOM overlay input (SEAL message) owns its keys — the game must
+      // NOT preventDefault Space/arrows/etc. while the player is typing
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA')) return;
       if (!this.downCodes.has(e.code)) this.pressedCodes.add(e.code);
       this.downCodes.add(e.code);
       const b = KEYS[e.code];
-      if (this.anyKey) this.anyKey();
       if (!b) return;
       e.preventDefault();
       if (!this.down[b]) this.pressed[b] = true;
@@ -48,6 +52,8 @@ export class Input {
     };
     this.onKeyUp = (e: KeyboardEvent) => {
       this.downCodes.delete(e.code);
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA')) return;
       const b = KEYS[e.code];
       if (!b) return;
       e.preventDefault();

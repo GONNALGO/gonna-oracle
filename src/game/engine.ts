@@ -23,15 +23,27 @@ import { drawTextSh, textWidth } from './font';
 import { Haptics, TouchControls } from './touch';
 import { computeFit } from './fit';
 import type { ViewFit } from './fit';
-import { drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawTitle, drawVictory, TITLE_CONNECT_BTN, TITLE_FIGHTER_BTN, TITLE_MASCOTS, titleFighterLabelRect } from './screens';
-import type { Tally } from './screens';
+import { drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawSaveRecord, drawTitle, drawVictory, SAVE_MSG_RECT, TITLE_BOARD_BTN, TITLE_CONNECT_BTN, TITLE_FIGHTER_BTN, TITLE_MASCOTS, titleFighterLabelRect } from './screens';
+import type { SaveButton, Tally } from './screens';
 import * as wallet from './wallet';
 import { GateUI, FIGHTER_DISCONNECT_BTN } from './gateui';
 import type { GateAction } from './gateui';
-import { DEFAULT_FIGHTER, loadFighter, loadSkinFrames, loadSkinMap, loadSkinPortraits, saveFighter } from './skins';
+import { DEFAULT_FIGHTER, isGonnaName, loadFighter, loadSkinFrames, loadSkinMap, loadSkinPortraits, saveFighter, SKIN_INFO } from './skins';
 import type { Fighter } from './skins';
+import * as seal from './seal';
+import { BoardUI } from './boardui';
+import type { BoardAction } from './boardui';
 
-type Scene = 'title' | 'intro' | 'play' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter';
+type Scene = 'title' | 'intro' | 'play' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter' | 'save' | 'board';
+
+// v9.1: the run record waiting on the SAVE RECORD screen
+interface SaveRec {
+  score: number;
+  stage: number; // 1-6
+  win: 0 | 1;
+  continues: number;
+  fighter: Fighter;
+}
 
 type Drawable = Player | Enemy | BossLike | Item | Obstacle | Proj;
 
@@ -85,6 +97,17 @@ export class Game implements GameCtx {
   private fighter: Fighter = loadFighter();
   private gateNext = 1; // stage idx waiting behind the gate
   private connectFromTitle = false; // v9.0.1: connect flow started on the title -> land on fighter select
+  // ---- v9.1: SEAL + GLOBAL LEADERBOARD ----
+  private board = new BoardUI();
+  private continuesUsed = 0; // infinite continues, counted (BYZANTINE CLEAR = 0)
+  private saveRec: SaveRec | null = null;
+  private savePhase: 'edit' | 'busy' | 'done' | 'pending' | 'error' = 'edit';
+  private saveErr = '';
+  private saveTxid = '';
+  private saveFocus = 0;
+  private msgInput: HTMLInputElement | null = null; // DOM overlay (native keyboards)
+  private sealReturn = false; // connect flow started from SAVE RECORD -> return there
+  private swipeY: number | null = null; // board swipe scroll
   // v6.1: internal letterbox — canvas is full-bleed, game view fitted by transform
   fit: ViewFit = computeFit(VW, VH, 1, false, false);
   zoomOn = false; // portrait ZOOM preference (persisted in localStorage)
@@ -116,6 +139,8 @@ export class Game implements GameCtx {
     });
     // v9: desktop mouse drives the same canvas-UI hotspots as touch taps
     ctx.canvas.addEventListener('pointerdown', this.onMouseDown);
+    // v9.1: swipe scroll on the leaderboard (mouse drag + touch drag)
+    ctx.canvas.addEventListener('pointermove', this.onPointerMove);
     // v9 boot: wallet session restore + skin assets + persisted fighter
     wallet.init();
     // v9.0.1: the wallet app killed the session -> back to the connect scene
@@ -132,13 +157,24 @@ export class Game implements GameCtx {
 
   private onMouseDown = (e: PointerEvent): void => {
     if (e.pointerType === 'touch') return; // touch goes through TouchControls
+    if (this.scene === 'board') this.swipeY = e.clientY;
     this.uiTap(e.clientX, e.clientY);
+  };
+
+  private onPointerMove = (e: PointerEvent): void => {
+    if (this.scene !== 'board' || this.swipeY === null || (e.buttons & 1) === 0) {
+      if ((e.buttons & 1) === 0) this.swipeY = null;
+      return;
+    }
+    const dyGame = (e.clientY - this.swipeY) / this.fit.fitScale;
+    this.swipeY = e.clientY;
+    this.board.dragBy(dyGame);
   };
 
   // v9: CSS-px tap -> game coords -> scene hotspot. true = consumed.
   private uiTap(x: number, y: number): boolean {
     const s = this.scene;
-    if (s !== 'connect' && s !== 'gate' && s !== 'fighter' && s !== 'title') return false;
+    if (s !== 'connect' && s !== 'gate' && s !== 'fighter' && s !== 'title' && s !== 'save' && s !== 'board') return false;
     const f = this.fit;
     const gx = (x - f.fitOffX) / f.fitScale;
     const gy = (y - f.fitOffY) / f.fitScale;
@@ -152,7 +188,19 @@ export class Game implements GameCtx {
         this.openConnectTitle();
         return true;
       }
+      if (hit(TITLE_BOARD_BTN)) {
+        this.openBoard();
+        return true;
+      }
       return false; // any other title tap stays "press start"
+    }
+    if (s === 'save') {
+      this.tapSave(gx, gy);
+      return true; // never let a tap fall through to "press start"
+    }
+    if (s === 'board') {
+      this.handleBoardAction(this.board.tap(gx, gy));
+      return true;
     }
     this.handleGateAction(this.gate.tap(gx, gy));
     return true; // gate scenes swallow every tap (no accidental start)
@@ -162,6 +210,7 @@ export class Game implements GameCtx {
   setViewport(f: ViewFit): void {
     this.fit = f;
     this.touch.setViewport(f);
+    this.placeMsgInput(); // v9.1: keep the DOM overlay pixel-perfect
   }
 
   // v6.1: portrait FIT <-> ZOOM toggle (touch ZOOM button)
@@ -233,6 +282,13 @@ export class Game implements GameCtx {
     if (a.act === 'move') this.audio.uiMove();
     else if (a.act === 'title') {
       this.connectFromTitle = false;
+      // v9.1: a connect flow started from SAVE RECORD returns there on cancel
+      if (this.sealReturn) {
+        this.sealReturn = false;
+        this.setScene('save');
+        this.audio.uiSelect();
+        return;
+      }
       this.setScene('title');
       this.audio.uiSelect();
       if (!this.titleTrack) {
@@ -265,6 +321,15 @@ export class Game implements GameCtx {
     this.handleGateAction(this.gate.key(this.input));
     const connected = wallet.isConnected();
     const elig = wallet.getEligibility();
+    // v9.1: connecting from SAVE RECORD needs no holdings — any wallet seals
+    if (this.sealReturn) {
+      if (connected) {
+        this.sealReturn = false;
+        this.setScene('save');
+        this.audio.rankUp();
+      }
+      return;
+    }
     if (this.scene === 'connect') {
       if (connected && elig.checked && !elig.busy) {
         if (elig.ok) this.passGateOrFighter();
@@ -294,6 +359,254 @@ export class Game implements GameCtx {
     this.audio.fanfare();
   }
 
+  // ---------- v9.1: GLOBAL LEADERBOARD ----------
+  private openBoard(): void {
+    this.setScene('board');
+    this.board.open();
+    this.audio.uiSelect();
+  }
+
+  private handleBoardAction(a: BoardAction): void {
+    if (a.act === 'move') this.audio.uiMove();
+    else if (a.act === 'title') {
+      this.setScene('title');
+      this.audio.uiSelect();
+      if (!this.titleTrack) {
+        this.titleTrack = true;
+        this.audio.playTrack('title');
+      }
+    }
+  }
+
+  // ---------- v9.1: SAVE RECORD (SEAL) ----------
+  private openSave(win: 0 | 1): void {
+    this.saveRec = {
+      score: this.score,
+      stage: Math.min(6, this.stageIdx + 1),
+      win,
+      continues: this.continuesUsed,
+      fighter: { ...this.fighter },
+    };
+    this.savePhase = 'edit';
+    this.saveErr = '';
+    this.saveTxid = '';
+    this.saveFocus = 0;
+    this.saveBest(); // best score persists locally regardless of the seal
+    this.setScene('save');
+    this.ensureMsgInput();
+    this.audio.uiSelect();
+  }
+
+  private saveBest(): void {
+    try {
+      const raw = window.localStorage.getItem('gonna.best');
+      const prev = raw ? (JSON.parse(raw) as { score?: number }) : null;
+      if (prev && typeof prev.score === 'number' && prev.score >= this.score) return;
+      window.localStorage.setItem(
+        'gonna.best',
+        JSON.stringify({ score: this.score, stage: this.stageIdx + 1, win: this.finalVictory ? 1 : 0, continues: this.continuesUsed, ts: Date.now() }),
+      );
+    } catch { /* storage unavailable */ }
+  }
+
+  private closeSave(): void {
+    this.saveRec = null;
+    this.removeMsgInput();
+  }
+
+  private saveToTitle(): void {
+    this.closeSave();
+    this.setScene('title');
+    this.audio.uiSelect();
+    if (!this.titleTrack) {
+      this.titleTrack = true;
+      this.audio.playTrack('title');
+    }
+  }
+
+  // button set depends on the phase + wallet connection
+  private saveButtons(): SaveButton[] {
+    if (this.savePhase === 'busy') return [];
+    if (this.savePhase === 'done' || this.savePhase === 'pending') {
+      return [
+        { id: 'viewtx', label: 'VIEW TX', x: 92, y: 172, w: 90, h: 18 },
+        { id: 'done', label: 'DONE', x: 202, y: 172, w: 90, h: 18 },
+      ];
+    }
+    if (this.savePhase === 'error') {
+      return [
+        { id: 'retry', label: 'RETRY', x: 92, y: 172, w: 90, h: 18 },
+        { id: 'skip', label: 'SKIP', x: 202, y: 172, w: 90, h: 18 },
+      ];
+    }
+    if (!wallet.isConnected()) {
+      return [
+        { id: 'connect', label: 'CONNECT WALLET TO SEAL', x: 62, y: 172, w: 180, h: 18 },
+        { id: 'skip', label: 'SKIP', x: 262, y: 172, w: 60, h: 18 },
+      ];
+    }
+    return [
+      { id: 'seal', label: 'SEAL ON-CHAIN', x: 92, y: 172, w: 110, h: 18 },
+      { id: 'skip', label: 'SKIP', x: 222, y: 172, w: 70, h: 18 },
+    ];
+  }
+
+  private activateSaveButton(id: string): void {
+    switch (id) {
+      case 'seal':
+      case 'retry':
+        this.doSeal();
+        break;
+      case 'connect':
+        this.sealReturn = true;
+        this.openGateScene('connect', this.gateNext);
+        break;
+      case 'viewtx':
+        if (this.saveTxid) window.open('https://allo.info/tx/' + this.saveTxid, '_blank');
+        break;
+      case 'skip':
+      case 'done':
+        this.saveToTitle();
+        break;
+    }
+  }
+
+  // primary action for ENTER while the message input is focused
+  private activateSavePrimary(): void {
+    const btns = this.saveButtons();
+    if (btns.length === 0) return;
+    this.activateSaveButton(btns[Math.min(this.saveFocus, btns.length - 1)].id);
+  }
+
+  private tapSave(gx: number, gy: number): void {
+    if (this.savePhase === 'busy') return;
+    const btns = this.saveButtons();
+    for (let i = 0; i < btns.length; i++) {
+      const b = btns[i];
+      if (gx >= b.x && gx <= b.x + b.w && gy >= b.y && gy <= b.y + b.h) {
+        this.saveFocus = i;
+        this.audio.uiSelect();
+        this.activateSaveButton(b.id);
+        return;
+      }
+    }
+  }
+
+  private updateSaveScene(): void {
+    this.sceneT++;
+    if (!this.saveRec) {
+      this.saveToTitle();
+      return;
+    }
+    const inp = this.input;
+    const typing = this.msgInput !== null && document.activeElement === this.msgInput;
+    if (inp.pressed.pause) {
+      this.saveToTitle();
+      return;
+    }
+    if (!typing && this.savePhase !== 'busy') {
+      const btns = this.saveButtons();
+      if (btns.length > 0) {
+        if (inp.pressed.left || inp.pressed.up) {
+          this.saveFocus = (this.saveFocus + btns.length - 1) % btns.length;
+          this.audio.uiMove();
+        } else if (inp.pressed.right || inp.pressed.down) {
+          this.saveFocus = (this.saveFocus + 1) % btns.length;
+          this.audio.uiMove();
+        }
+      }
+    }
+    if (inp.pressed.start && this.savePhase !== 'busy') this.activateSavePrimary();
+  }
+
+  private doSeal(): void {
+    if (!this.saveRec || this.savePhase === 'busy') return;
+    const rec = this.saveRec;
+    const msg = this.msgInput ? this.msgInput.value : '';
+    this.savePhase = 'busy';
+    this.saveErr = '';
+    this.audio.rankUp();
+    seal
+      .seal({
+        score: rec.score,
+        stage: rec.stage,
+        win: rec.win,
+        continues: rec.continues,
+        assetId: rec.fighter.assetId,
+        skin: rec.fighter.skin,
+        msg,
+      })
+      .then((o) => {
+        this.saveTxid = o.txid;
+        this.savePhase = o.status === 'sealed' ? 'done' : 'pending';
+        this.saveFocus = 1; // DONE
+        this.audio.fanfare();
+      })
+      .catch((e: unknown) => {
+        console.error('[gonna] seal failed:', e);
+        this.saveErr = (e instanceof Error ? e.message : 'SEAL FAILED').toUpperCase().slice(0, 38);
+        this.savePhase = 'error';
+        this.saveFocus = 0;
+      });
+  }
+
+  // ---------- v9.1: DOM message input (native mobile keyboards, accessible) ----------
+  private ensureMsgInput(): void {
+    if (this.msgInput || typeof document === 'undefined') return;
+    const el = document.createElement('input');
+    el.type = 'text';
+    el.id = 'gonna-seal-msg';
+    el.maxLength = seal.MSG_MAX;
+    el.autocomplete = 'off';
+    el.spellcheck = false;
+    el.setAttribute('autocapitalize', 'characters');
+    el.setAttribute('aria-label', 'Seal message, ASCII only, max 32 characters');
+    el.setAttribute('placeholder', 'TYPE YOUR MESSAGE');
+    el.style.cssText =
+      'position:fixed;z-index:30;box-sizing:border-box;background:transparent;border:none;outline:none;' +
+      'color:#7fd858;font-family:monospace;font-weight:bold;text-transform:uppercase;padding:0 4px;caret-color:#7fd858;';
+    el.addEventListener('input', () => {
+      const clean = seal.cleanMsg(el.value);
+      if (clean !== el.value) el.value = clean;
+    });
+    el.addEventListener('keydown', (e) => {
+      // typing must never drive the game; ENTER confirms, ESC skips
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.activateSavePrimary();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        this.saveToTitle();
+      }
+    });
+    document.body.appendChild(el);
+    this.msgInput = el;
+    this.placeMsgInput();
+    try {
+      el.focus({ preventScroll: true });
+    } catch { /* older browsers */ }
+  }
+
+  private placeMsgInput(): void {
+    const el = this.msgInput;
+    if (!el) return;
+    const f = this.fit;
+    el.style.left = Math.round(f.fitOffX + SAVE_MSG_RECT.x * f.fitScale) + 'px';
+    el.style.top = Math.round(f.fitOffY + SAVE_MSG_RECT.y * f.fitScale) + 'px';
+    el.style.width = Math.round(SAVE_MSG_RECT.w * f.fitScale) + 'px';
+    el.style.height = Math.round(SAVE_MSG_RECT.h * f.fitScale) + 'px';
+    el.style.fontSize = Math.max(10, Math.round(9 * f.fitScale)) + 'px';
+    el.style.letterSpacing = Math.max(0, Math.round(1 * f.fitScale)) + 'px';
+  }
+
+  private removeMsgInput(): void {
+    if (this.msgInput) {
+      this.msgInput.remove();
+      this.msgInput = null;
+    }
+  }
+
   static async boot(canvas: HTMLCanvasElement): Promise<Game> {
     const frames = await loadFrames();
     const art = buildArt();
@@ -304,6 +617,8 @@ export class Game implements GameCtx {
 
   destroy(): void {
     this.ctx.canvas.removeEventListener('pointerdown', this.onMouseDown);
+    this.ctx.canvas.removeEventListener('pointermove', this.onPointerMove);
+    this.removeMsgInput();
     wallet.onSessionEnded(null);
     this.touch.destroy();
     this.input.destroy();
@@ -485,6 +800,7 @@ export class Game implements GameCtx {
     fighterLabel: { x: number; y: number; w: number; h: number } | null;
     fighterBtn: { x: number; y: number; w: number; h: number };
     connectBtn: { x: number; y: number; w: number; h: number };
+    boardBtn: { x: number; y: number; w: number; h: number };
     connectLabel: string;
     mascots: { x: number; y: number; w: number; h: number }[];
   } {
@@ -492,6 +808,7 @@ export class Game implements GameCtx {
       fighterLabel: titleFighterLabelRect(this.fighter.name),
       fighterBtn: TITLE_FIGHTER_BTN,
       connectBtn: TITLE_CONNECT_BTN,
+      boardBtn: TITLE_BOARD_BTN,
       connectLabel: wallet.isConnected() ? wallet.identityLabel(14) : 'CONNECT',
       mascots: TITLE_MASCOTS,
     };
@@ -523,6 +840,58 @@ export class Game implements GameCtx {
   get fxScreen(): { rings: { x: number; y: number; r: number }[]; parts: { x: number; y: number }[]; pops: { x: number; y: number; txt: string }[] } {
     return this.fx.debugScreen(this.camX);
   }
+  // ---- v9.1 SEAL + LEADERBOARD debug (window.__gonna) ----
+  get runInfo(): { score: number; stage: number; continuesUsed: number; win: 0 | 1 } {
+    return { score: this.score, stage: this.stageIdx + 1, continuesUsed: this.continuesUsed, win: this.finalVictory ? 1 : 0 };
+  }
+  get saveInfo(): {
+    phase: string;
+    err: string;
+    txid: string;
+    msg: string;
+    rec: { score: number; stage: number; win: 0 | 1; continues: number; fighter: { skin: string; assetId: number | null; name: string } } | null;
+    buttons: { id: string; label: string; x: number; y: number; w: number; h: number }[];
+  } {
+    const rec = this.saveRec;
+    return {
+      phase: this.savePhase,
+      err: this.saveErr,
+      txid: this.saveTxid,
+      msg: this.msgInput ? this.msgInput.value : '',
+      rec: rec
+        ? { score: rec.score, stage: rec.stage, win: rec.win, continues: rec.continues, fighter: { skin: rec.fighter.skin, assetId: rec.fighter.assetId, name: rec.fighter.name } }
+        : null,
+      buttons: this.scene === 'save' ? this.saveButtons() : [],
+    };
+  }
+  get lastSeal(): seal.SealDebug | null {
+    return seal.sealDebug.last;
+  }
+  get boardInfo(): BoardUI['info'] {
+    return this.board.info;
+  }
+  // name-guard unit check through the REAL loader guard
+  get skinGuardInfo(): { name: string; accepted: boolean }[] {
+    const samples = ['GONNA 123', 'GONNA123', ' GONNA 48', 'gonna 7', 'GONNA #42', 'CompX Galaxy Card', 'GONNA', 'GONNA X', 'GONNAVERSE 5', ''];
+    return samples.map((name) => ({ name, accepted: isGonnaName(name) }));
+  }
+  // CI: synthesize an end-of-run SAVE RECORD screen (deterministic note tests)
+  debugSaveRecord(win: 0 | 1, score = 42420): void {
+    this.score = score;
+    this.openSave(win);
+  }
+  // CI: straight to the game-over jingle (continue screen follows at t>130)
+  debugGameOver(): void {
+    this.setScene('gameover');
+  }
+  // CI: let the continue countdown expire on the next tick
+  debugExpireContinue(): void {
+    if (this.scene === 'continue') this.continueCount = -1;
+  }
+  debugOpenBoard(): void {
+    this.openBoard();
+  }
+
   // CI: fighter-select / gate screen internals
   get gateInfo(): { scene: string; mode: string; cursor: number; rowCount: number; teaser: boolean; flashing: boolean; uiFighter: { skin: string; assetId: number | null; name: string } } {
     const f = this.gate.uiFighter;
@@ -544,6 +913,7 @@ export class Game implements GameCtx {
     this.totalFrames = 0;
     this.stageIdx = 0;
     this.finalVictory = false;
+    this.continuesUsed = 0; // v9.1: per-run counter, reset on a new run
     this.player.lives = 2;
     this.loadStage(0);
     this.scene = 'intro';
@@ -609,6 +979,7 @@ export class Game implements GameCtx {
         this.sceneT++;
         if (inp.pressed.fighter) this.openFighter(); // v9: T = CHOOSE YOUR FIGHTER
         else if (inp.pressed.special) this.openConnectTitle(); // v9.0.1: C = CONNECT WALLET
+        else if (inp.pressedCodes.has('KeyL')) this.openBoard(); // v9.1: L = GLOBAL LEADERBOARD
         else if (inp.pressed.start) this.startNewGame();
         break;
       }
@@ -677,7 +1048,8 @@ export class Game implements GameCtx {
           this.audio.uiMove();
         }
         if (inp.pressed.start) {
-          // continue: respawn with fresh lives
+          // v9.1: infinite continues — the run counts them (BYZANTINE CLEAR = 0)
+          this.continuesUsed++;
           this.player.lives = 2;
           this.player.hp = this.player.maxHp;
           this.player.state = 'getup';
@@ -688,18 +1060,30 @@ export class Game implements GameCtx {
           if (this.stage) this.audio.playTrack(this.boss ? this.stage.bossTrack : this.stage.track);
           this.audio.uiSelect();
         } else if (this.continueCount < 0) {
-          this.setScene('title');
-          this.audio.playTrack('title');
+          this.openSave(0); // v9.1: run over -> SAVE RECORD
         }
         break;
       }
       case 'victory': {
         this.sceneT++;
         if (this.sceneT > 120 && inp.pressed.start) {
-          this.setScene('title');
-          this.audio.playTrack('title');
-          this.audio.uiSelect();
+          if (this.finalVictory) {
+            this.openSave(1); // v9.1: final boss beaten -> SAVE RECORD
+          } else {
+            this.setScene('title');
+            this.audio.playTrack('title');
+            this.audio.uiSelect();
+          }
         }
+        break;
+      }
+      case 'save': {
+        this.updateSaveScene();
+        break;
+      }
+      case 'board': {
+        this.sceneT++;
+        this.handleBoardAction(this.board.key(inp));
         break;
       }
     }
@@ -1095,7 +1479,8 @@ export class Game implements GameCtx {
     const inStage =
       !!this.stage &&
       s !== 'title' && s !== 'intro' && s !== 'victory' &&
-      s !== 'connect' && s !== 'gate' && s !== 'fighter'; // v9
+      s !== 'connect' && s !== 'gate' && s !== 'fighter' && // v9
+      s !== 'save' && s !== 'board'; // v9.1
     const zoomed = f.zoom && inStage;
     this.vScale = zoomed ? f.zoomScale : f.fitScale;
     this.vOffX = zoomed ? 0 : f.fitOffX; // ZOOM centers the cropped window via cropX
@@ -1141,6 +1526,40 @@ export class Game implements GameCtx {
       c.save();
       this.fitView(true);
       drawVictory(c, { score: this.score, timeFrames: this.totalFrames, kos: this.kos }, this.sceneT, this.finalVictory);
+      c.restore();
+      return;
+    }
+    // v9.1: SAVE RECORD + GLOBAL LEADERBOARD (full-screen canvas scenes)
+    if (this.scene === 'save') {
+      c.save();
+      this.fitView(true);
+      const rec = this.saveRec;
+      if (rec) {
+        const btns = this.saveButtons();
+        const info = SKIN_INFO[rec.fighter.skin];
+        drawSaveRecord(c, this.frame, {
+          score: rec.score,
+          stage: rec.stage,
+          win: rec.win,
+          continues: rec.continues,
+          fighterName: rec.fighter.name,
+          skinLabel: info.label,
+          skinAccent: info.accent,
+          phase: this.savePhase,
+          err: this.saveErr,
+          txid: this.saveTxid,
+          msgLen: this.msgInput ? this.msgInput.value.length : 0,
+          buttons: btns,
+          focus: Math.min(this.saveFocus, Math.max(0, btns.length - 1)),
+        });
+      }
+      c.restore();
+      return;
+    }
+    if (this.scene === 'board') {
+      c.save();
+      this.fitView(true);
+      this.board.draw(c, this.frame, this.frames, this.touchActive);
       c.restore();
       return;
     }
@@ -1190,7 +1609,7 @@ export class Game implements GameCtx {
     drawHud(c, this, this.score, this.timeLeft, this.goArrow, this.frame, this.audio.muted);
     if (this.scene === 'clear') drawClear(c, this.tally, this.score);
     if (this.scene === 'gameover') drawGameOver(c, this.sceneT);
-    if (this.scene === 'continue') drawContinue(c, this.continueCount, this.sceneT);
+    if (this.scene === 'continue') drawContinue(c, this.continueCount, this.sceneT, this.continuesUsed);
     if (this.boss && !this.boss.alive) drawMarketCap(c, this.boss.t, this.boss.deathLine);
 
     // v6/v7: pause veil (touch II button, desktop P/ESC)

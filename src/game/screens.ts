@@ -20,8 +20,12 @@ export function mosaicBorder(ctx: CanvasRenderingContext2D): void {
 // v9: FIGHTER mini-button rect on the title (tap hotspot, game coords)
 // v9.0.1: CONNECT WALLET button next to it; mascots moved up into the logo glow
 // so they can never sit on top of the FIGHTER label / button text (IMG_6420).
+// v9.1: L BOARD button (GLOBAL LEADERBOARD) on the left; the FIGHTER label
+// shifts right to stay clear of it.
 export const TITLE_FIGHTER_BTN = { x: VW - 96, y: 150, w: 88, h: 18 };
 export const TITLE_CONNECT_BTN = { x: VW - 192, y: 150, w: 88, h: 18 };
+export const TITLE_BOARD_BTN = { x: 8, y: 150, w: 56, h: 18 };
+export const TITLE_FIGHTER_LABEL_X = 72;
 export const TITLE_MASCOTS = [
   { x: 56, y: 58, w: 24, h: 20 },
   { x: VW - 80, y: 58, w: 24, h: 20 },
@@ -29,7 +33,7 @@ export const TITLE_MASCOTS = [
 // CI/no-overlap assertion helper: exact bbox of the "FIGHTER: <name>" label
 export function titleFighterLabelRect(name: string): { x: number; y: number; w: number; h: number } | null {
   if (!name) return null;
-  return { x: 8, y: 156, w: textWidth('FIGHTER: ' + name, 1), h: 7 };
+  return { x: TITLE_FIGHTER_LABEL_X, y: 156, w: textWidth('FIGHTER: ' + name, 1), h: 7 };
 }
 
 function drawTitleBtn(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w: number; h: number }, label: string, t: number, color = '#f5c542'): void {
@@ -65,8 +69,9 @@ export function drawTitle(
   // v9: current fighter + CHOOSE YOUR FIGHTER entry (T / mini-button)
   // v9.0.1: CONNECT WALLET entry (C / mini-button); shows the short address once connected
   if (fighterName) {
-    drawText(ctx, 'FIGHTER: ' + fighterName, 8, 156, 1, '#f5c542');
+    drawText(ctx, 'FIGHTER: ' + fighterName, TITLE_FIGHTER_LABEL_X, 156, 1, '#f5c542');
   }
+  drawTitleBtn(ctx, TITLE_BOARD_BTN, touch ? 'BOARD' : 'L BOARD', t, '#7fd858');
   drawTitleBtn(ctx, TITLE_CONNECT_BTN, connectLabel || (touch ? 'CONNECT' : 'C CONNECT'), t, connectColor);
   drawTitleBtn(ctx, TITLE_FIGHTER_BTN, touch ? 'FIGHTER' : 'T FIGHTER', t);
   // controls
@@ -80,7 +85,7 @@ export function drawTitle(
   ctx.scale(-1, 1);
   ctx.drawImage(art.lizIcon, 0, 0, m[1].w, m[1].h);
   ctx.restore();
-  drawText(ctx, 'V9.0.3 THE GATE', VW - textWidth('V9.0.3 THE GATE', 1) - 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, 'V9.1 SEAL', VW - textWidth('V9.1 SEAL', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 
@@ -122,12 +127,15 @@ export function drawGameOver(ctx: CanvasRenderingContext2D, t: number): void {
   if (t > 30) drawTextSh(ctx, 'GAME OVER', VW / 2, 100, 4, '#e23b3b', 'center');
 }
 
-export function drawContinue(ctx: CanvasRenderingContext2D, count: number, t: number): void {
+// v9.1: continues are infinite — the run simply counts them (BYZANTINE CLEAR
+// = win with 0 continues, crowned on the leaderboard)
+export function drawContinue(ctx: CanvasRenderingContext2D, count: number, t: number, continuesUsed = 0): void {
   ctx.fillStyle = 'rgba(5,6,10,0.88)';
   ctx.fillRect(0, 0, VW, VH);
   mosaicBorder(ctx);
   drawTextSh(ctx, 'CONTINUE?', VW / 2, 70, 3, '#ffffff', 'center');
   drawTextSh(ctx, String(count), VW / 2, 104, 5, count <= 3 ? '#e23b3b' : '#f5c542', 'center');
+  drawText(ctx, 'CONTINUES USED: ' + continuesUsed, VW / 2, 142, 1, '#8a8f9c', 'center');
   if ((t & 16) !== 0) drawTextSh(ctx, 'PRESS ENTER', VW / 2, 160, 1, '#7fd858', 'center');
 }
 
@@ -211,4 +219,111 @@ export function drawMarketCap(ctx: CanvasRenderingContext2D, t: number, line = '
   if (t > 20 && (t & 8) !== 0) {
     drawTextSh(ctx, line, VW / 2, 60, 2, '#f5c542', 'center');
   }
+}
+
+// v9.1: 👑-style pixel crown for BYZANTINE CLEAR runs (win + 0 continues)
+export function drawCrown(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  ctx.fillStyle = '#f5c542';
+  ctx.fillRect(x, y + 4, 11, 2);
+  ctx.fillRect(x, y + 1, 2, 3);
+  ctx.fillRect(x + 4, y, 3, 4);
+  ctx.fillRect(x + 9, y + 1, 2, 3);
+  ctx.fillStyle = '#b8860b';
+  ctx.fillRect(x + 1, y + 5, 9, 1);
+}
+
+// ---------- v9.1 SAVE RECORD (SEAL) ----------
+export interface SaveButton {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+export interface SaveView {
+  score: number;
+  stage: number; // 1-6
+  win: 0 | 1;
+  continues: number;
+  fighterName: string;
+  skinLabel: string;
+  skinAccent: string;
+  phase: 'edit' | 'busy' | 'done' | 'pending' | 'error';
+  err: string;
+  txid: string;
+  msgLen: number;
+  buttons: SaveButton[];
+  focus: number;
+}
+// the DOM message input overlays this exact rect (engine keeps it in sync)
+export const SAVE_MSG_RECT = { x: 62, y: 108, w: 260, h: 20 };
+
+export function drawSaveRecord(ctx: CanvasRenderingContext2D, t: number, v: SaveView): void {
+  ctx.fillStyle = '#070a14';
+  ctx.fillRect(0, 0, VW, VH);
+  for (let i = 0; i < 28; i++) {
+    const sx = (i * 137 + ((t >> 3) * (1 + (i & 3)))) % VW;
+    const sy = (i * 71) % VH;
+    ctx.fillStyle = (i & 1) ? '#101a30' : '#14202a';
+    ctx.fillRect(sx, sy, 1, 1);
+  }
+  mosaicBorder(ctx);
+  drawTextSh(ctx, 'SAVE RECORD', VW / 2, 10, 2, '#f5c542', 'center', '#b8860b');
+  const byzantine = v.win === 1 && v.continues === 0;
+  if (byzantine) {
+    drawCrown(ctx, VW / 2 - 52, 30);
+    drawText(ctx, 'BYZANTINE CLEAR!', VW / 2 - 36, 30, 1, '#f5c542');
+  }
+
+  // run stats
+  const lx = 96;
+  const rx = 288;
+  drawText(ctx, 'SCORE', lx, 46, 1, '#8a8f9c');
+  drawText(ctx, String(v.score).padStart(8, '0'), rx, 46, 1, '#f5c542', 'right');
+  drawText(ctx, 'STAGE REACHED', lx, 58, 1, '#8a8f9c');
+  drawText(ctx, v.stage + ' / 6', rx, 58, 1, '#f2f2f2', 'right');
+  drawText(ctx, 'CONTINUES USED', lx, 70, 1, '#8a8f9c');
+  drawText(ctx, String(v.continues), rx, 70, 1, v.continues === 0 ? '#7fd858' : '#f2f2f2', 'right');
+  drawText(ctx, 'FIGHTER', lx, 82, 1, '#8a8f9c');
+  drawText(ctx, v.fighterName, rx, 82, 1, v.skinAccent, 'right');
+
+  // message input (DOM overlay sits on this exact box)
+  drawText(ctx, 'MESSAGE (OPTIONAL)', SAVE_MSG_RECT.x, 98, 1, '#8a8f9c');
+  drawText(ctx, v.msgLen + '/32', SAVE_MSG_RECT.x + SAVE_MSG_RECT.w, 98, 1, '#5a5f6c', 'right');
+  ctx.fillStyle = '#0d1118';
+  ctx.fillRect(SAVE_MSG_RECT.x, SAVE_MSG_RECT.y, SAVE_MSG_RECT.w, SAVE_MSG_RECT.h);
+  ctx.strokeStyle = (t & 16) !== 0 ? '#f5c542' : '#b8860b';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(SAVE_MSG_RECT.x + 0.5, SAVE_MSG_RECT.y + 0.5, SAVE_MSG_RECT.w - 1, SAVE_MSG_RECT.h - 1);
+  drawText(ctx, 'ASCII ONLY - ON-CHAIN FOREVER', VW / 2, 134, 1, '#5a5f6c', 'center');
+
+  // phase line
+  if (v.phase === 'busy') {
+    if ((t & 8) !== 0) drawTextSh(ctx, 'SEALING... SIGN IN YOUR WALLET', VW / 2, 148, 1, '#f5c542', 'center');
+  } else if (v.phase === 'done') {
+    drawTextSh(ctx, 'SEALED!', VW / 2, 144, 2, '#7fd858', 'center');
+    drawText(ctx, 'TX ' + v.txid.slice(0, 16) + '...', VW / 2, 164, 1, '#8a8f9c', 'center');
+  } else if (v.phase === 'pending') {
+    drawTextSh(ctx, 'SUBMITTED - CONFIRM PENDING', VW / 2, 146, 1, '#f5c542', 'center');
+    drawText(ctx, 'TX ' + v.txid.slice(0, 16) + '...', VW / 2, 160, 1, '#8a8f9c', 'center');
+  } else if (v.phase === 'error') {
+    drawTextSh(ctx, v.err || 'SEAL FAILED', VW / 2, 148, 1, '#e23b3b', 'center');
+  }
+
+  // buttons
+  for (let i = 0; i < v.buttons.length; i++) {
+    const b = v.buttons[i];
+    const lit = i === v.focus;
+    ctx.fillStyle = lit ? '#1a2a14' : '#0d1118';
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = lit ? '#f5c542' : '#3a3f4c';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+    drawTextSh(ctx, b.label, b.x + b.w / 2, b.y + Math.floor((b.h - 7) / 2), 1, lit ? '#f5c542' : '#c8ccd4', 'center');
+    if (lit && (t & 16) !== 0) drawText(ctx, '>', b.x + 3, b.y + Math.floor((b.h - 7) / 2), 1, '#7fd858');
+  }
+
+  drawText(ctx, 'SEAL = 0-ALGO TX TO THE GONNA TREASURY', VW / 2, 200, 1, '#5a5f6c', 'center');
+  if ((t & 32) !== 0) drawText(ctx, 'ENTER CONFIRM - ESC SKIP', VW / 2, VH - 10, 1, '#8a8f9c', 'center');
 }

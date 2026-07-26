@@ -29,14 +29,32 @@ export interface NftSkinEntry {
 let skinMap: Record<string, NftSkinEntry> | null = null;
 let skinMapPromise: Promise<Record<string, NftSkinEntry>> | null = null;
 
+// v9.1 NAME GUARD: only real collection names can EVER be fighters.
+// On-chain naming is "GONNA 123" / "GONNA123" / even " GONNA 48" (leading
+// space) — anything else (e.g. the user's rogue "CompX Galaxy Card", ASA
+// 3193890311) is rejected even if the map is regenerated with junk in it.
+const GONNA_NAME = /^\s*GONNA\s*#?\s?\d+$/i;
+export function isGonnaName(name: string): boolean {
+  return GONNA_NAME.test(name);
+}
+
+function guardSkinMap(m: Record<string, NftSkinEntry>): Record<string, NftSkinEntry> {
+  const out: Record<string, NftSkinEntry> = {};
+  for (const k of Object.keys(m)) {
+    const e = m[k];
+    if (e && typeof e.name === 'string' && isGonnaName(e.name)) out[k] = e;
+  }
+  return out;
+}
+
 export function loadSkinMap(): Promise<Record<string, NftSkinEntry>> {
   if (skinMap) return Promise.resolve(skinMap);
   if (!skinMapPromise) {
     skinMapPromise = fetch('data/gonna-nft-skins.json')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('skin map http ' + r.status))))
       .then((m: Record<string, NftSkinEntry>) => {
-        skinMap = m;
-        return m;
+        skinMap = guardSkinMap(m); // v9.1: junk names never enter the map
+        return skinMap;
       })
       .catch((e) => {
         skinMapPromise = null; // retryable
@@ -50,6 +68,7 @@ export function skinForAsset(assetId: number): { name: string; skin: SkinId } | 
   if (!skinMap) return null;
   const e = skinMap[String(assetId)];
   if (!e) return null;
+  if (!isGonnaName(e.name)) return null; // v9.1: belt and braces — junk never fights
   const s = e.skin.toLowerCase();
   if (!isSkin(s)) return null;
   return { name: e.name, skin: s };
