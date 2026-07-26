@@ -99,6 +99,10 @@ export interface TouchHooks {
   anyTap(): void; // audio unlock + title music, mirrors Input.anyKey
   zoomOn(): boolean; // v6.1: FIT/ZOOM preference
   toggleZoom(): void;
+  // v9: canvas-UI scenes (connect/gate/fighter + title FIGHTER button).
+  // Called with CSS-px tap coords on non-play scenes BEFORE the generic
+  // "tap = start" fallback; returning true consumes the tap.
+  uiTap(cssX: number, cssY: number): boolean;
 }
 
 export class TouchControls {
@@ -424,6 +428,11 @@ export class TouchControls {
 
     // tap anywhere = confirm on non-play scenes
     if (scene !== 'play') {
+      // v9: canvas-UI hotspots (connect/gate/fighter + title FIGHTER) consume first
+      if (this.hooks.uiTap(x, y)) {
+        this.track(e.pointerId, null, false);
+        return;
+      }
       this.setBtn('start', true);
       this.track(e.pointerId, 'start', false);
       return;

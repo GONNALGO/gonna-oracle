@@ -139,8 +139,7 @@ async function loadLib(provider: WalletProvider): Promise<WalletLib> {
   if (lib) return lib;
   if (provider === 'pera') {
     const mod = await import('@perawallet/connect');
-    const PeraWalletConnect = mod.default;
-    lib = new PeraWalletConnect({ chainId: 416001 }) as unknown as WalletLib; // mainnet
+    lib = new mod.PeraWalletConnect({ chainId: 416001 }) as unknown as WalletLib; // mainnet
   } else {
     const mod = await import('@blockshake/defly-connect');
     lib = new mod.DeflyWalletConnect({ chainId: 416001 }) as unknown as WalletLib;

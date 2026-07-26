@@ -22,7 +22,7 @@ export function drawHud(ctx: CanvasRenderingContext2D, g: GameCtx, score: number
   ctx.strokeStyle = '#f5c542';
   ctx.lineWidth = 1;
   ctx.strokeRect(4.5, 4.5, 19, 21);
-  const port = g.frames.get('0_0');
+  const port = (g.pframes ?? g.frames).get('0_0'); // v9: skin portrait
   if (port) ctx.drawImage(port, 6, 6, 16 * (port.width / port.height), 16);
   // HP bar
   ctx.fillStyle = '#101018';

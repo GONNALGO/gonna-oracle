@@ -550,7 +550,7 @@ export class Player {
       case 'special': key = '2_0'; break;
       case 'victory': key = (this.animT & 8) === 0 ? '2_0' : '2_1'; break;
     }
-    const img = g.frames.get(key);
+    const img = (g.pframes ?? g.frames).get(key); // v9: selected skin frames
     if (!img) return;
     const dw = img.width * SCALE;
     const dh = img.height * SCALE;

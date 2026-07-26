@@ -1,7 +1,7 @@
 // Keyboard input: Arrows/WASD move, Z/J punch, X/K kick, SPACE/L jump, C/U special,
 // ENTER start/confirm, M mute, P/ESC pause. Edge-triggered "pressed" + level "down".
 
-export type Btn = 'left' | 'right' | 'up' | 'down' | 'punch' | 'kick' | 'jump' | 'special' | 'start' | 'mute' | 'pause';
+export type Btn = 'left' | 'right' | 'up' | 'down' | 'punch' | 'kick' | 'jump' | 'special' | 'start' | 'mute' | 'pause' | 'fighter';
 
 const KEYS: Record<string, Btn> = {
   ArrowLeft: 'left', KeyA: 'left',
@@ -15,12 +15,13 @@ const KEYS: Record<string, Btn> = {
   Enter: 'start',
   KeyM: 'mute',
   KeyP: 'pause', Escape: 'pause',
+  KeyT: 'fighter', // v9: CHOOSE YOUR FIGHTER from the title screen
 };
 
 export class Input {
   down: Record<Btn, boolean> = {
     left: false, right: false, up: false, down: false,
-    punch: false, kick: false, jump: false, special: false, start: false, mute: false, pause: false,
+    punch: false, kick: false, jump: false, special: false, start: false, mute: false, pause: false, fighter: false,
   };
   pressed: Record<Btn, boolean> = { ...this.down };
   /** v6: true while touch controls are active (relaxed object-lift tolerance) */

@@ -448,7 +448,7 @@ export class GateUI {
   }
 
   // ================================================================ DRAW
-  draw(ctx: CanvasRenderingContext2D, t: number, art: Art, frames: Map<string, HTMLImageElement>): void {
+  draw(ctx: CanvasRenderingContext2D, t: number, _art: Art, frames: Map<string, HTMLImageElement>): void {
     this.hots = [];
     ctx.fillStyle = '#070a14';
     ctx.fillRect(0, 0, VW, VH);

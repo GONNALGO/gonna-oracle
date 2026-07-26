@@ -18,6 +18,7 @@ export interface GameCtx {
   haptics: Haptics; // v6: no-op on desktop, throttled navigator.vibrate on touch
   art: Art;
   frames: Map<string, HTMLImageElement>;
+  pframes: Map<string, HTMLImageElement> | null; // v9: selected skin frames (null = base GONNA)
   player: Player;
   enemies: Enemy[];
   boss: BossLike | null;

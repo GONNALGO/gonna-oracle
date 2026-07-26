@@ -17,7 +17,10 @@ export function mosaicBorder(ctx: CanvasRenderingContext2D): void {
   }
 }
 
-export function drawTitle(ctx: CanvasRenderingContext2D, t: number, art: Art): void {
+// v9: FIGHTER mini-button rect on the title (tap hotspot, game coords)
+export const TITLE_FIGHTER_BTN = { x: VW - 96, y: 148, w: 88, h: 18 };
+
+export function drawTitle(ctx: CanvasRenderingContext2D, t: number, art: Art, fighterName = '', touch = false): void {
   ctx.fillStyle = '#070a14';
   ctx.fillRect(0, 0, VW, VH);
   // glow behind logo
@@ -30,6 +33,19 @@ export function drawTitle(ctx: CanvasRenderingContext2D, t: number, art: Art): v
   if ((t & 32) !== 0) {
     drawTextSh(ctx, 'INSERT COIN - PRESS ENTER', VW / 2, 148, 1, '#ffffff', 'center');
   }
+  // v9: current fighter + CHOOSE YOUR FIGHTER entry (T / mini-button)
+  if (fighterName) {
+    drawText(ctx, 'FIGHTER: ' + fighterName, 8, 152, 1, '#f5c542');
+  }
+  {
+    const b = TITLE_FIGHTER_BTN;
+    ctx.fillStyle = '#0d1118';
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = (t & 16) !== 0 ? '#f5c542' : '#b8860b';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+    drawText(ctx, touch ? 'FIGHTER' : 'T FIGHTER', b.x + b.w / 2, b.y + 6, 1, '#f5c542', 'center');
+  }
   // controls
   drawText(ctx, 'ARROWS/WASD MOVE  SPACE JUMP  C SPECIAL', VW / 2, 172, 1, '#8a8f9c', 'center');
   drawText(ctx, 'Z PUNCH  X KICK  P PAUSE  M MUTE', VW / 2, 184, 1, '#8a8f9c', 'center');
@@ -40,7 +56,7 @@ export function drawTitle(ctx: CanvasRenderingContext2D, t: number, art: Art): v
   ctx.scale(-1, 1);
   ctx.drawImage(art.lizIcon, 0, 0, 24, 20);
   ctx.restore();
-  drawText(ctx, 'V2.0 BYZANTINE', VW - textWidth('V2.0 BYZANTINE', 1) - 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, 'V9.0 THE GATE', VW - textWidth('V9.0 THE GATE', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 

@@ -23,10 +23,15 @@ import { drawTextSh } from './font';
 import { Haptics, TouchControls } from './touch';
 import { computeFit } from './fit';
 import type { ViewFit } from './fit';
-import { drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawTitle, drawVictory } from './screens';
+import { drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawTitle, drawVictory, TITLE_FIGHTER_BTN } from './screens';
 import type { Tally } from './screens';
+import * as wallet from './wallet';
+import { GateUI } from './gateui';
+import type { GateAction } from './gateui';
+import { loadFighter, loadSkinFrames, loadSkinMap, loadSkinPortraits, saveFighter } from './skins';
+import type { Fighter } from './skins';
 
-type Scene = 'title' | 'intro' | 'play' | 'clear' | 'gameover' | 'continue' | 'victory';
+type Scene = 'title' | 'intro' | 'play' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter';
 
 type Drawable = Player | Enemy | BossLike | Item | Obstacle | Proj;
 
@@ -74,6 +79,11 @@ export class Game implements GameCtx {
   private drawList: Drawable[] = [];
   private holdInput = false; // true while frozen: keep edge-presses buffered
   private paused = false; // v6: touch PAUSE button (play scene only)
+  // ---- v9: THE GATE + CHOOSE YOUR FIGHTER ----
+  pframes: Map<string, HTMLImageElement> | null = null; // GameCtx: selected skin frames
+  private gate = new GateUI();
+  private fighter: Fighter = loadFighter();
+  private gateNext = 1; // stage idx waiting behind the gate
   // v6.1: internal letterbox — canvas is full-bleed, game view fitted by transform
   fit: ViewFit = computeFit(VW, VH, 1, false, false);
   zoomOn = false; // portrait ZOOM preference (persisted in localStorage)
@@ -101,7 +111,39 @@ export class Game implements GameCtx {
       anyTap: () => this.onAnyGesture(),
       zoomOn: () => this.zoomOn,
       toggleZoom: () => this.toggleZoom(),
+      uiTap: (x, y) => this.uiTap(x, y),
     });
+    // v9: desktop mouse drives the same canvas-UI hotspots as touch taps
+    ctx.canvas.addEventListener('pointerdown', this.onMouseDown);
+    // v9 boot: wallet session restore + skin assets + persisted fighter
+    wallet.init();
+    void loadSkinMap().catch(() => { /* gate falls back to $GONNA-only checks */ });
+    loadSkinPortraits();
+    this.applySkinFrames();
+  }
+
+  private onMouseDown = (e: PointerEvent): void => {
+    if (e.pointerType === 'touch') return; // touch goes through TouchControls
+    this.uiTap(e.clientX, e.clientY);
+  };
+
+  // v9: CSS-px tap -> game coords -> scene hotspot. true = consumed.
+  private uiTap(x: number, y: number): boolean {
+    const s = this.scene;
+    if (s !== 'connect' && s !== 'gate' && s !== 'fighter' && s !== 'title') return false;
+    const f = this.fit;
+    const gx = (x - f.fitOffX) / f.fitScale;
+    const gy = (y - f.fitOffY) / f.fitScale;
+    if (s === 'title') {
+      const b = TITLE_FIGHTER_BTN;
+      if (gx >= b.x && gx <= b.x + b.w && gy >= b.y && gy <= b.y + b.h) {
+        this.openFighter();
+        return true;
+      }
+      return false; // any other title tap stays "press start"
+    }
+    this.handleGateAction(this.gate.tap(gx, gy));
+    return true; // gate scenes swallow every tap (no accidental start)
   }
 
   // v6.1: called by Game.tsx on boot and every viewport/rotation change
@@ -129,6 +171,86 @@ export class Game implements GameCtx {
     }
   }
 
+  // ---------- v9 gate / fighter flow ----------
+  private openFighter(): void {
+    this.setScene('fighter');
+    this.gate.open('fighter');
+    this.audio.uiSelect();
+  }
+
+  private openGateScene(s: 'connect' | 'gate', nextStage: number): void {
+    this.gateNext = nextStage;
+    this.setScene(s);
+    this.gate.open(s);
+    this.audio.uiSelect();
+  }
+
+  private applySkinFrames(): void {
+    const skin = this.fighter.skin;
+    if (skin === 'gonna') {
+      this.pframes = null;
+      return;
+    }
+    loadSkinFrames(skin)
+      .then((m) => {
+        if (this.fighter.skin === skin) this.pframes = m;
+      })
+      .catch(() => {
+        this.pframes = null; // frames missing: stay on the base GONNA
+      });
+  }
+
+  private applyFighter(f: Fighter): void {
+    this.fighter = f;
+    saveFighter(f);
+    this.applySkinFrames();
+  }
+
+  private handleGateAction(a: GateAction): void {
+    if (a.act === 'move') this.audio.uiMove();
+    else if (a.act === 'title') {
+      this.setScene('title');
+      this.audio.uiSelect();
+      if (!this.titleTrack) {
+        this.titleTrack = true;
+        this.audio.playTrack('title');
+      }
+    } else if (a.act === 'fighter') {
+      this.applyFighter(a.fighter);
+      this.audio.uiSelect();
+      this.audio.rankUp(); // gold confirm arpeggio
+      // let the gold flash breathe, then back to the title
+      window.setTimeout(() => {
+        if (this.scene === 'fighter') this.setScene('title');
+      }, 450);
+    }
+  }
+
+  // gate scenes poll the wallet: seamless continue as soon as eligible
+  private updateGateScene(): void {
+    this.sceneT++;
+    this.gate.tick();
+    this.handleGateAction(this.gate.key(this.input));
+    const connected = wallet.isConnected();
+    const elig = wallet.getEligibility();
+    if (this.scene === 'connect') {
+      if (connected && elig.checked && !elig.busy) {
+        if (elig.ok) this.passGate();
+        else this.openGateScene('gate', this.gateNext);
+      }
+    } else if (this.scene === 'gate') {
+      if (!connected) this.openGateScene('connect', this.gateNext); // disconnected: start over
+      else if (elig.checked && elig.ok) this.passGate();
+    }
+  }
+
+  private passGate(): void {
+    this.loadStage(this.gateNext);
+    this.stageIdx = this.gateNext;
+    this.setScene('intro');
+    this.audio.fanfare();
+  }
+
   static async boot(canvas: HTMLCanvasElement): Promise<Game> {
     const frames = await loadFrames();
     const art = buildArt();
@@ -138,6 +260,7 @@ export class Game implements GameCtx {
   }
 
   destroy(): void {
+    this.ctx.canvas.removeEventListener('pointerdown', this.onMouseDown);
     this.touch.destroy();
     this.input.destroy();
     this.audio.destroy();
@@ -274,6 +397,41 @@ export class Game implements GameCtx {
     return this.enemies.map((e) => ({ kind: e.kind, state: e.state, hp: e.hp, alive: e.alive, x: Math.round(e.x), y: Math.round(e.y) }));
   }
 
+  // ---- v9 wallet / fighter debug (window.__gonna) ----
+  get walletInfo(): { provider: string | null; address: string | null; connecting: boolean; mocked: boolean } {
+    const w = wallet.getWallet();
+    return { provider: w.provider, address: w.address, connecting: w.connecting, mocked: w.mocked };
+  }
+  get eligibilityInfo(): { checked: boolean; ok: boolean; algo: number; gonna: number; nftCount: number; source: string | null; busy: boolean; error: boolean } {
+    const e = wallet.getEligibility();
+    return { checked: e.checked, ok: e.ok, algo: e.algo, gonna: e.gonna, nftCount: e.nfts.length, source: e.source, busy: e.busy, error: e.error };
+  }
+  get ownedNfts(): { id: number; name: string; skin: string }[] {
+    return wallet.getEligibility().nfts.map((n) => ({ id: n.id, name: n.name, skin: n.skin }));
+  }
+  get fighterInfo(): { skin: string; assetId: number | null; name: string } {
+    return { skin: this.fighter.skin, assetId: this.fighter.assetId, name: this.fighter.name };
+  }
+  // CI: inject a wallet state (null = disconnect). Persisted for reload tests.
+  debugMockWallet(m: wallet.MockWallet | null): void {
+    wallet.setMock(m);
+    if (this.scene === 'fighter') this.gate.open('fighter'); // rebuild for the new holdings
+  }
+  debugOpenFighter(): void {
+    this.openFighter();
+  }
+  // CI: jump straight to the end-of-stage-1 tally so one Enter hits the gate
+  debugGateCheck(): void {
+    this.stageIdx = 0;
+    this.loadStage(0);
+    this.tally = { timeBonus: 0, coinBonus: 0, shown: true, count: 1 };
+    this.tallyApplied = true;
+    this.setScene('clear');
+  }
+  debugRefreshEligibility(): void {
+    void wallet.refreshEligibility(true);
+  }
+
   // ---------- scene flow ----------
   private startNewGame(): void {
     this.score = 0;
@@ -343,7 +501,19 @@ export class Game implements GameCtx {
     switch (this.scene) {
       case 'title': {
         this.sceneT++;
-        if (inp.pressed.start) this.startNewGame();
+        if (inp.pressed.fighter) this.openFighter(); // v9: T = CHOOSE YOUR FIGHTER
+        else if (inp.pressed.start) this.startNewGame();
+        break;
+      }
+      case 'connect':
+      case 'gate': {
+        this.updateGateScene();
+        break;
+      }
+      case 'fighter': {
+        this.sceneT++;
+        this.gate.tick();
+        this.handleGateAction(this.gate.key(inp));
         break;
       }
       case 'intro': {
@@ -370,10 +540,17 @@ export class Game implements GameCtx {
             this.audio.uiSelect(); // v7: the victory track plays under the tally
           }
         } else if (inp.pressed.start) {
-          this.stageIdx++;
-          this.loadStage(this.stageIdx);
-          this.setScene('intro');
-          this.audio.uiSelect();
+          const next = this.stageIdx + 1;
+          // v9: THE GATE — the Stage 1 -> 2 transition belongs to holders
+          if (next === 1 && !wallet.isEligible()) {
+            this.audio.uiSelect();
+            this.openGateScene(wallet.isConnected() ? 'gate' : 'connect', next);
+          } else {
+            this.stageIdx = next;
+            this.loadStage(next);
+            this.setScene('intro');
+            this.audio.uiSelect();
+          }
         }
         break;
       }
@@ -807,7 +984,11 @@ export class Game implements GameCtx {
     c.restore();
 
     // pick the effective view: ZOOM applies only while a stage is on screen
-    const inStage = !!this.stage && this.scene !== 'title' && this.scene !== 'intro' && this.scene !== 'victory';
+    const s = this.scene;
+    const inStage =
+      !!this.stage &&
+      s !== 'title' && s !== 'intro' && s !== 'victory' &&
+      s !== 'connect' && s !== 'gate' && s !== 'fighter'; // v9
     const zoomed = f.zoom && inStage;
     this.vScale = zoomed ? f.zoomScale : f.fitScale;
     this.vOffX = zoomed ? 0 : f.fitOffX; // ZOOM centers the cropped window via cropX
@@ -822,7 +1003,15 @@ export class Game implements GameCtx {
     if (this.scene === 'title') {
       c.save();
       this.fitView(true);
-      drawTitle(c, this.frame, this.art);
+      drawTitle(c, this.frame, this.art, this.fighter.name, this.touchActive);
+      c.restore();
+      return;
+    }
+    // v9: THE GATE + CHOOSE YOUR FIGHTER (full-screen canvas scenes)
+    if (this.scene === 'connect' || this.scene === 'gate' || this.scene === 'fighter') {
+      c.save();
+      this.fitView(true);
+      this.gate.draw(c, this.frame, this.art, this.frames);
       c.restore();
       return;
     }
