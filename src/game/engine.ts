@@ -23,7 +23,7 @@ import { drawTextSh } from './font';
 import { Haptics, TouchControls } from './touch';
 import { computeFit } from './fit';
 import type { ViewFit } from './fit';
-import { drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawTitle, drawVictory, TITLE_FIGHTER_BTN } from './screens';
+import { drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawTitle, drawVictory, TITLE_CONNECT_BTN, TITLE_FIGHTER_BTN, TITLE_MASCOTS, titleFighterLabelRect } from './screens';
 import type { Tally } from './screens';
 import * as wallet from './wallet';
 import { GateUI } from './gateui';
@@ -84,6 +84,7 @@ export class Game implements GameCtx {
   private gate = new GateUI();
   private fighter: Fighter = loadFighter();
   private gateNext = 1; // stage idx waiting behind the gate
+  private connectFromTitle = false; // v9.0.1: connect flow started on the title -> land on fighter select
   // v6.1: internal letterbox — canvas is full-bleed, game view fitted by transform
   fit: ViewFit = computeFit(VW, VH, 1, false, false);
   zoomOn = false; // portrait ZOOM preference (persisted in localStorage)
@@ -117,6 +118,13 @@ export class Game implements GameCtx {
     ctx.canvas.addEventListener('pointerdown', this.onMouseDown);
     // v9 boot: wallet session restore + skin assets + persisted fighter
     wallet.init();
+    // v9.0.1: the wallet app killed the session -> back to the connect scene
+    wallet.onSessionEnded(() => {
+      if (this.scene === 'gate' || this.scene === 'fighter') {
+        this.connectFromTitle = false;
+        this.openGateScene('connect', this.gateNext);
+      }
+    });
     void loadSkinMap().catch(() => { /* gate falls back to $GONNA-only checks */ });
     loadSkinPortraits();
     this.applySkinFrames();
@@ -135,9 +143,13 @@ export class Game implements GameCtx {
     const gx = (x - f.fitOffX) / f.fitScale;
     const gy = (y - f.fitOffY) / f.fitScale;
     if (s === 'title') {
-      const b = TITLE_FIGHTER_BTN;
-      if (gx >= b.x && gx <= b.x + b.w && gy >= b.y && gy <= b.y + b.h) {
+      const hit = (b: { x: number; y: number; w: number; h: number }) => gx >= b.x && gx <= b.x + b.w && gy >= b.y && gy <= b.y + b.h;
+      if (hit(TITLE_FIGHTER_BTN)) {
         this.openFighter();
+        return true;
+      }
+      if (hit(TITLE_CONNECT_BTN)) {
+        this.openConnectTitle();
         return true;
       }
       return false; // any other title tap stays "press start"
@@ -185,6 +197,17 @@ export class Game implements GameCtx {
     this.audio.uiSelect();
   }
 
+  // v9.0.1: CONNECT WALLET from the title — connected? straight to fighter select.
+  private openConnectTitle(): void {
+    this.audio.uiSelect();
+    if (wallet.isConnected()) {
+      this.openFighter();
+      return;
+    }
+    this.connectFromTitle = true;
+    this.openGateScene('connect', 1);
+  }
+
   private applySkinFrames(): void {
     const skin = this.fighter.skin;
     if (skin === 'gonna') {
@@ -209,6 +232,7 @@ export class Game implements GameCtx {
   private handleGateAction(a: GateAction): void {
     if (a.act === 'move') this.audio.uiMove();
     else if (a.act === 'title') {
+      this.connectFromTitle = false;
       this.setScene('title');
       this.audio.uiSelect();
       if (!this.titleTrack) {
@@ -235,16 +259,27 @@ export class Game implements GameCtx {
     const elig = wallet.getEligibility();
     if (this.scene === 'connect') {
       if (connected && elig.checked && !elig.busy) {
-        if (elig.ok) this.passGate();
+        if (elig.ok) this.passGateOrFighter();
         else this.openGateScene('gate', this.gateNext);
       }
     } else if (this.scene === 'gate') {
       if (!connected) this.openGateScene('connect', this.gateNext); // disconnected: start over
-      else if (elig.checked && elig.ok) this.passGate();
+      else if (elig.checked && elig.ok) this.passGateOrFighter();
     }
   }
 
+  // title-started connect flow lands on CHOOSE YOUR FIGHTER; the mid-game gate loads the stage
+  private passGateOrFighter(): void {
+    if (this.connectFromTitle) {
+      this.connectFromTitle = false;
+      this.openFighter();
+      return;
+    }
+    this.passGate();
+  }
+
   private passGate(): void {
+    this.connectFromTitle = false;
     this.loadStage(this.gateNext);
     this.stageIdx = this.gateNext;
     this.setScene('intro');
@@ -261,6 +296,7 @@ export class Game implements GameCtx {
 
   destroy(): void {
     this.ctx.canvas.removeEventListener('pointerdown', this.onMouseDown);
+    wallet.onSessionEnded(null);
     this.touch.destroy();
     this.input.destroy();
     this.audio.destroy();
@@ -431,6 +467,23 @@ export class Game implements GameCtx {
   debugRefreshEligibility(): void {
     void wallet.refreshEligibility(true);
   }
+  // v9.0.1 CI: title layout bboxes (no-overlap assertion) + live fx in SCREEN coords
+  get titleLayout(): {
+    fighterLabel: { x: number; y: number; w: number; h: number } | null;
+    fighterBtn: { x: number; y: number; w: number; h: number };
+    connectBtn: { x: number; y: number; w: number; h: number };
+    mascots: { x: number; y: number; w: number; h: number }[];
+  } {
+    return {
+      fighterLabel: titleFighterLabelRect(this.fighter.name),
+      fighterBtn: TITLE_FIGHTER_BTN,
+      connectBtn: TITLE_CONNECT_BTN,
+      mascots: TITLE_MASCOTS,
+    };
+  }
+  get fxScreen(): { rings: { x: number; y: number; r: number }[]; parts: { x: number; y: number }[]; pops: { x: number; y: number; txt: string }[] } {
+    return this.fx.debugScreen(this.camX);
+  }
   // CI: fighter-select / gate screen internals
   get gateInfo(): { scene: string; mode: string; cursor: number; rowCount: number; teaser: boolean; flashing: boolean; uiFighter: { skin: string; assetId: number | null; name: string } } {
     const f = this.gate.uiFighter;
@@ -516,6 +569,7 @@ export class Game implements GameCtx {
       case 'title': {
         this.sceneT++;
         if (inp.pressed.fighter) this.openFighter(); // v9: T = CHOOSE YOUR FIGHTER
+        else if (inp.pressed.special) this.openConnectTitle(); // v9.0.1: C = CONNECT WALLET
         else if (inp.pressed.start) this.startNewGame();
         break;
       }
@@ -1017,7 +1071,13 @@ export class Game implements GameCtx {
     if (this.scene === 'title') {
       c.save();
       this.fitView(true);
-      drawTitle(c, this.frame, this.art, this.fighter.name, this.touchActive);
+      // v9.0.1: the CONNECT button shows the short address once connected
+      const connectLabel = wallet.isConnected()
+        ? wallet.shortAddress()
+        : this.touchActive
+          ? 'CONNECT'
+          : 'C CONNECT';
+      drawTitle(c, this.frame, this.art, this.fighter.name, this.touchActive, connectLabel);
       c.restore();
       return;
     }
@@ -1025,7 +1085,7 @@ export class Game implements GameCtx {
     if (this.scene === 'connect' || this.scene === 'gate' || this.scene === 'fighter') {
       c.save();
       this.fitView(true);
-      this.gate.draw(c, this.frame, this.art, this.frames);
+      this.gate.draw(c, this.frame, this.art, this.frames, this.touchActive);
       c.restore();
       return;
     }
@@ -1072,7 +1132,7 @@ export class Game implements GameCtx {
     dl.sort((a, b) => a.y - b.y);
     for (const d of dl) d.draw(c, this);
 
-    this.fx.drawWorld(c);
+    this.fx.drawWorld(c, this.camX); // v9.0.1 BUG C: world coords -> screen
     if (this.stage.front) this.stage.front(c, this.camX, this.frame); // v8: weather + foreground silhouettes
     if (this.fx.flash > 0) {
       c.globalAlpha = this.fx.flash / 10;

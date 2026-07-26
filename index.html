@@ -15,6 +15,12 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="GONNA" />
     <title>GONNA FIGHT</title>
+    <script>
+      /* v9.0.1 hotfix: the wallet SDKs (WalletConnect/bowser inside the lazy
+         Pera/Defly chunks) reference Node's `global`. Define it before any
+         chunk can evaluate, exactly like the garage's esbuild --define:global=window. */
+      window.global = window.global || window;
+    </script>
     <style>
       /* v6 mobile hardening: no scroll, no pull-to-refresh, no double-tap zoom */
       html,

@@ -18,9 +18,37 @@ export function mosaicBorder(ctx: CanvasRenderingContext2D): void {
 }
 
 // v9: FIGHTER mini-button rect on the title (tap hotspot, game coords)
-export const TITLE_FIGHTER_BTN = { x: VW - 96, y: 148, w: 88, h: 18 };
+// v9.0.1: CONNECT WALLET button next to it; mascots moved up into the logo glow
+// so they can never sit on top of the FIGHTER label / button text (IMG_6420).
+export const TITLE_FIGHTER_BTN = { x: VW - 96, y: 150, w: 88, h: 18 };
+export const TITLE_CONNECT_BTN = { x: VW - 192, y: 150, w: 88, h: 18 };
+export const TITLE_MASCOTS = [
+  { x: 56, y: 58, w: 24, h: 20 },
+  { x: VW - 80, y: 58, w: 24, h: 20 },
+];
+// CI/no-overlap assertion helper: exact bbox of the "FIGHTER: <name>" label
+export function titleFighterLabelRect(name: string): { x: number; y: number; w: number; h: number } | null {
+  if (!name) return null;
+  return { x: 8, y: 156, w: textWidth('FIGHTER: ' + name, 1), h: 7 };
+}
 
-export function drawTitle(ctx: CanvasRenderingContext2D, t: number, art: Art, fighterName = '', touch = false): void {
+function drawTitleBtn(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w: number; h: number }, label: string, t: number): void {
+  ctx.fillStyle = '#0d1118';
+  ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.strokeStyle = (t & 16) !== 0 ? '#f5c542' : '#b8860b';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+  drawText(ctx, label, b.x + b.w / 2, b.y + 6, 1, '#f5c542', 'center');
+}
+
+export function drawTitle(
+  ctx: CanvasRenderingContext2D,
+  t: number,
+  art: Art,
+  fighterName = '',
+  touch = false,
+  connectLabel = '',
+): void {
   ctx.fillStyle = '#070a14';
   ctx.fillRect(0, 0, VW, VH);
   // glow behind logo
@@ -31,30 +59,25 @@ export function drawTitle(ctx: CanvasRenderingContext2D, t: number, art: Art, fi
   drawTextSh(ctx, 'FIGHT', VW / 2, 84, 6, '#f5c542', 'center', '#b8860b');
   drawTextSh(ctx, 'A GONNAVERSE PRODUCTION', VW / 2, 128, 1, '#c8ccd4', 'center');
   if ((t & 32) !== 0) {
-    drawTextSh(ctx, 'INSERT COIN - PRESS ENTER', VW / 2, 148, 1, '#ffffff', 'center');
+    drawTextSh(ctx, 'INSERT COIN - PRESS ENTER', VW / 2, 140, 1, '#ffffff', 'center');
   }
   // v9: current fighter + CHOOSE YOUR FIGHTER entry (T / mini-button)
+  // v9.0.1: CONNECT WALLET entry (C / mini-button); shows the short address once connected
   if (fighterName) {
-    drawText(ctx, 'FIGHTER: ' + fighterName, 8, 152, 1, '#f5c542');
+    drawText(ctx, 'FIGHTER: ' + fighterName, 8, 156, 1, '#f5c542');
   }
-  {
-    const b = TITLE_FIGHTER_BTN;
-    ctx.fillStyle = '#0d1118';
-    ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.strokeStyle = (t & 16) !== 0 ? '#f5c542' : '#b8860b';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
-    drawText(ctx, touch ? 'FIGHTER' : 'T FIGHTER', b.x + b.w / 2, b.y + 6, 1, '#f5c542', 'center');
-  }
+  drawTitleBtn(ctx, TITLE_CONNECT_BTN, connectLabel || (touch ? 'CONNECT' : 'C CONNECT'), t);
+  drawTitleBtn(ctx, TITLE_FIGHTER_BTN, touch ? 'FIGHTER' : 'T FIGHTER', t);
   // controls
   drawText(ctx, 'ARROWS/WASD MOVE  SPACE JUMP  C SPECIAL', VW / 2, 172, 1, '#8a8f9c', 'center');
   drawText(ctx, 'Z PUNCH  X KICK  P PAUSE  M MUTE', VW / 2, 184, 1, '#8a8f9c', 'center');
-  // lizard mascots
-  ctx.drawImage(art.lizIcon, 60, 140, 24, 20);
+  // lizard mascots (flanking the logo, clear of every label/button below)
+  const m = TITLE_MASCOTS;
+  ctx.drawImage(art.lizIcon, m[0].x, m[0].y, m[0].w, m[0].h);
   ctx.save();
-  ctx.translate(VW - 60, 140);
+  ctx.translate(m[1].x + m[1].w, m[1].y); // mirrored: image lands inside the declared rect
   ctx.scale(-1, 1);
-  ctx.drawImage(art.lizIcon, 0, 0, 24, 20);
+  ctx.drawImage(art.lizIcon, 0, 0, m[1].w, m[1].h);
   ctx.restore();
   drawText(ctx, 'V9.0 THE GATE', VW - textWidth('V9.0 THE GATE', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');

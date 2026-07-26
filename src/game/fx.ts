@@ -205,13 +205,16 @@ export class FX {
     }
   }
 
-  // world-space draw (inside camera transform)
-  drawWorld(ctx: CanvasRenderingContext2D): void {
+  // world-space draw. v9.0.1 BUG C: all fx store WORLD coordinates (spawned at
+  // entity.x) and entities draw at x-camX — camX MUST be subtracted here too,
+  // else every spark/ring/popup renders camX px to the right (wave 1 = first
+  // camLock > 0, later waves push the strays off-screen so they looked "fine").
+  drawWorld(ctx: CanvasRenderingContext2D, camX: number): void {
     for (const p of this.parts) {
       if (!p.on) continue;
       ctx.globalAlpha = Math.min(1, p.life / (p.max * 0.5));
       ctx.fillStyle = p.c;
-      ctx.fillRect(p.x | 0, p.y | 0, p.s, p.s);
+      ctx.fillRect((p.x - camX) | 0, p.y | 0, p.s, p.s);
     }
     ctx.globalAlpha = 1;
     for (const r of this.rings) {
@@ -220,16 +223,25 @@ export class FX {
       ctx.strokeStyle = r.c;
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.ellipse(r.x, r.y, r.r, r.r * 0.45, 0, 0, Math.PI * 2);
+      ctx.ellipse(r.x - camX, r.y, r.r, r.r * 0.45, 0, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
     for (const p of this.pops) {
       if (!p.on) continue;
       ctx.globalAlpha = Math.min(1, p.life / 20);
-      drawText(ctx, p.txt, p.x, p.y, 1, '#101018', 'center');
-      drawText(ctx, p.txt, p.x - 1, p.y - 1, 1, p.c, 'center');
+      drawText(ctx, p.txt, p.x - camX, p.y, 1, '#101018', 'center');
+      drawText(ctx, p.txt, p.x - camX - 1, p.y - 1, 1, p.c, 'center');
     }
     ctx.globalAlpha = 1;
+  }
+
+  // CI introspection (v9.0.1 wave-1 regression test): live fx in SCREEN coords
+  debugScreen(camX: number): { rings: { x: number; y: number; r: number }[]; parts: { x: number; y: number }[]; pops: { x: number; y: number; txt: string }[] } {
+    return {
+      rings: this.rings.filter((r) => r.on).map((r) => ({ x: r.x - camX, y: r.y, r: r.r })),
+      parts: this.parts.filter((p) => p.on).map((p) => ({ x: p.x - camX, y: p.y })),
+      pops: this.pops.filter((p) => p.on).map((p) => ({ x: p.x - camX, y: p.y, txt: p.txt })),
+    };
   }
 }

@@ -135,6 +135,7 @@ export class GateUI {
   private focus = 0; // keyboard focus over buttons
   private hots: Hot[] = []; // tap hotspots, rebuilt every draw
   private status = ''; // status / error line
+  private touch = false; // touch device: show the wallet-app rescue hint
   private teaser: SkinId | null = null;
   private confirmT = 0; // gold confirm flash
   private fighter: Fighter = loadFighter();
@@ -365,7 +366,9 @@ export class GateUI {
           .then(() => {
             this.status = 'WALLET CONNECTED - CHECKING HOLDINGS...';
           })
-          .catch(() => {
+          .catch((err: unknown) => {
+            // v9.0.1: never swallow the real error again (global-polyfill bug hid here)
+            console.error('[gonna] wallet connect failed:', err);
             this.status = 'CONNECTION CANCELLED - TRY AGAIN';
           });
         return { act: 'move' };
@@ -491,8 +494,9 @@ export class GateUI {
   }
 
   // ================================================================ DRAW
-  draw(ctx: CanvasRenderingContext2D, t: number, _art: Art, frames: Map<string, HTMLImageElement>): void {
+  draw(ctx: CanvasRenderingContext2D, t: number, _art: Art, frames: Map<string, HTMLImageElement>, touch = false): void {
     this.hots = [];
+    this.touch = touch;
     ctx.fillStyle = '#070a14';
     ctx.fillRect(0, 0, VW, VH);
     // starfield shimmer backdrop
@@ -547,7 +551,13 @@ export class GateUI {
     drawTextSh(ctx, '>= 2B $GONNA', VW / 2 + 24, 92, 1, '#7fd858');
 
     const w = wallet.getWallet();
-    if (w.connecting && (t & 8) !== 0) drawText(ctx, 'WAITING FOR WALLET...', VW / 2, 110, 1, '#f5c542', 'center');
+    const pend = wallet.getPending();
+    if (pend && this.touch && (t & 8) !== 0) {
+      // v9.0.1 mobile rescue hint: the wallet app opens via deep link
+      drawText(ctx, 'OPEN YOUR WALLET APP - APPROVE AND COME BACK', VW / 2, 110, 1, '#f5c542', 'center');
+    } else if (w.connecting && (t & 8) !== 0) {
+      drawText(ctx, 'WAITING FOR WALLET...', VW / 2, 110, 1, '#f5c542', 'center');
+    }
 
     this.pushBtn({ id: 'pera', label: 'CONNECT PERA', x: 72, y: 116, w: 110, h: 20 });
     this.pushBtn({ id: 'defly', label: 'CONNECT DEFLY', x: 202, y: 116, w: 110, h: 20 });

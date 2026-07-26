@@ -60,6 +60,7 @@ interface WalletLib {
   reconnectSession(): Promise<string[]>;
   disconnect(): Promise<void> | void;
   signTransaction?: (txGroups: unknown[][], signerAddress?: string) => Promise<Uint8Array[]>;
+  connector?: { on?: (event: string, cb: (...args: unknown[]) => void) => void } | null;
 }
 
 const state: WalletState = { provider: null, address: null, connecting: false, mocked: false };
@@ -68,7 +69,12 @@ const elig: Eligibility = {
   nfts: [], ts: 0, source: null, busy: false, error: false,
 };
 
-let lib: WalletLib | null = null; // live wallet instance (pera or defly)
+// v9.0.1: per-provider singletons (garage pattern) — a single shared instance
+// returned the wrong wallet when the user switched providers mid-session.
+const libs: Partial<Record<WalletProvider, WalletLib>> = {};
+let pendingProvider: WalletProvider | null = null; // connect in flight (mobile app-switch)
+let visHookInstalled = false;
+let sessionListener: (() => void) | null = null; // engine hook: session killed by the wallet app
 let mock: MockWallet | null = null;
 
 function lsGet(k: string): string | null {
@@ -134,33 +140,90 @@ function applyElig(p: Partial<Eligibility>): void {
   Object.assign(elig, p, { busy: false, error: false });
 }
 
-// ---------- wallet libraries (lazy) ----------
+// ---------- wallet libraries (lazy, per-provider instances) ----------
 async function loadLib(provider: WalletProvider): Promise<WalletLib> {
-  if (lib) return lib;
+  const cached = libs[provider];
+  if (cached) return cached;
+  let w: WalletLib;
   if (provider === 'pera') {
     const mod = await import('@perawallet/connect');
-    lib = new mod.PeraWalletConnect({ chainId: 416001 }) as unknown as WalletLib; // mainnet
+    w = new mod.PeraWalletConnect({ chainId: 416001, shouldShowSignTxnToast: false }) as unknown as WalletLib; // mainnet
   } else {
     const mod = await import('@blockshake/defly-connect');
-    lib = new mod.DeflyWalletConnect({ chainId: 416001 }) as unknown as WalletLib;
+    w = new mod.DeflyWalletConnect({ chainId: 416001, shouldShowSignTxnToast: false }) as unknown as WalletLib;
   }
-  return lib;
+  libs[provider] = w;
+  return w;
+}
+
+// the wallet app killed the session: reset everything and notify the engine
+function sessionEnded(): void {
+  state.provider = null;
+  state.address = null;
+  lsDel(KEY_WALLET);
+  lsDel(KEY_ELIG);
+  applyElig({ checked: false, ok: false, algo: 0, gonna: 0, nfts: [], ts: 0, source: null });
+  if (sessionListener) sessionListener();
+}
+
+// garage pattern: react to a disconnect coming from the wallet app itself
+function watchDisconnect(w: WalletLib): void {
+  try {
+    w.connector?.on?.('disconnect', () => sessionEnded());
+  } catch { /* connector not ready yet */ }
+}
+
+function applySession(provider: WalletProvider, w: WalletLib, accounts: string[]): void {
+  state.provider = provider;
+  state.address = accounts[0];
+  lsSet(KEY_WALLET, JSON.stringify({ provider, address: state.address }));
+  watchDisconnect(w);
+  void refreshEligibility(true);
+}
+
+// v9.0.1 MOBILE RESCUE (garage pattern): the wallet app opens via deep link and
+// the browser tab goes to the background; when the player comes back mid-connect,
+// resume the approved session instead of leaving the gate stuck on WAITING.
+function installVisibilityRescue(): void {
+  if (visHookInstalled || typeof document === 'undefined') return;
+  visHookInstalled = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || !pendingProvider || mock) return;
+    const provider = pendingProvider;
+    void (async () => {
+      try {
+        const w = await loadLib(provider);
+        const accounts = await w.reconnectSession();
+        if (accounts && accounts.length > 0) applySession(provider, w, accounts);
+      } catch { /* not approved (yet): the pending connect() promise still runs */ }
+    })();
+  });
+}
+
+// which provider has a connect in flight (null = none) — drives the touch hint
+export function getPending(): WalletProvider | null {
+  return pendingProvider;
+}
+
+// engine subscribes: wallet-app disconnect kicks gate/fighter back to connect
+export function onSessionEnded(cb: (() => void) | null): void {
+  sessionListener = cb;
 }
 
 export async function connect(provider: WalletProvider): Promise<string> {
   if (mock) return state.address!; // CI: already "connected"
   state.connecting = true;
+  pendingProvider = provider;
+  installVisibilityRescue();
   try {
     const w = await loadLib(provider);
     const accounts = await w.connect();
     if (!accounts || accounts.length === 0) throw new Error('no account selected');
-    state.provider = provider;
-    state.address = accounts[0];
-    lsSet(KEY_WALLET, JSON.stringify({ provider, address: state.address }));
-    void refreshEligibility(true);
-    return state.address;
+    applySession(provider, w, accounts);
+    return state.address!;
   } finally {
     state.connecting = false;
+    pendingProvider = null;
   }
 }
 
@@ -169,15 +232,11 @@ export async function disconnect(): Promise<void> {
     setMock(null);
     return;
   }
+  const w = state.provider ? libs[state.provider] : null;
   try {
-    if (lib) await lib.disconnect();
+    if (w) await w.disconnect();
   } catch { /* wallet already gone */ }
-  lib = null;
-  state.provider = null;
-  state.address = null;
-  lsDel(KEY_WALLET);
-  lsDel(KEY_ELIG);
-  applyElig({ checked: false, ok: false, algo: 0, gonna: 0, nfts: [], ts: 0, source: null });
+  sessionEnded();
 }
 
 // boot: restore a persisted session (mock in CI, wallet lib otherwise)
@@ -206,6 +265,7 @@ export function init(): void {
       const accounts = await w.reconnectSession();
       if (!accounts || accounts.length === 0) throw new Error('session expired');
       state.address = accounts[0];
+      watchDisconnect(w);
     } catch {
       // keep the persisted address in a soft state; the user can reconnect
     }
@@ -325,6 +385,7 @@ export function shortAddress(): string {
 // v9.1 readiness: raw transaction signing through the active wallet session
 export async function signTransactions(txGroups: unknown[][]): Promise<Uint8Array[]> {
   if (mock) throw new Error('mock wallet cannot sign');
-  if (!lib || !lib.signTransaction) throw new Error('wallet not connected');
-  return lib.signTransaction(txGroups, state.address ?? undefined);
+  const w = state.provider ? libs[state.provider] : null;
+  if (!w || !w.signTransaction) throw new Error('wallet not connected');
+  return w.signTransaction(txGroups, state.address ?? undefined);
 }
