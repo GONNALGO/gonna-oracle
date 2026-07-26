@@ -16,9 +16,14 @@ export const LINK_STATTO = 'https://www.statto.xyz/collections/19186?tab=listing
 const INDEXERS = ['https://mainnet-idx.algonode.cloud', 'https://mainnet-idx.4160.nodely.dev'];
 const GRACE_MS = 24 * 60 * 60 * 1000; // indexer down -> cache valid 24h
 const KEY_WALLET = 'gonna.wallet'; // {provider, address}
-const KEY_ELIG = 'gonna.elig'; // {address, ok, algo, gonna, gonnaDecimals, nfts, ts}
+// v9.0.2: bumped from 'gonna.elig' — the pre-unwrap bug poisoned v1 caches
+// (ok:false + 24h grace). The old key is never read again.
+const KEY_ELIG = 'gonna.elig.v2'; // {address, ok, algo, gonna, gonnaDecimals, nfts, ts}
+const KEY_ELIG_OLD = 'gonna.elig';
 const KEY_MOCK = 'gonna.mockwallet'; // CI mock state
 const KEY_DECIMALS = 'gonna.asa.decimals';
+const KEY_NFD = 'gonna.nfd'; // {address, name, active, ts} — 24h per-address
+const NFD_CACHE_MS = 24 * 60 * 60 * 1000;
 
 export type WalletProvider = 'pera' | 'defly';
 
@@ -77,6 +82,16 @@ let visHookInstalled = false;
 let sessionListener: (() => void) | null = null; // engine hook: session killed by the wallet app
 let mock: MockWallet | null = null;
 
+// ---------- v9.0.2 NFD identity (.algo segments, cosmetic — never blocks) ----------
+export interface Identity {
+  address: string | null;
+  segment: string | null; // e.g. nat.gonna.algo (null = plain address)
+  active: boolean; // segment is not expired
+  source: 'nfd' | 'cache' | 'address' | null; // how the current label was produced
+}
+const identity: Identity = { address: null, segment: null, active: false, source: null };
+let nfdRun = 0; // race token: a stale resolution never overwrites a newer address
+
 function lsGet(k: string): string | null {
   try {
     return window.localStorage.getItem(k);
@@ -116,13 +131,131 @@ export function setMock(m: MockWallet | null): void {
       ts: Date.now(),
       source: 'mock',
     });
+    resolveIdentity(state.address!); // cosmetic NFD lookup (CI: routes to empty)
   } else {
     lsDel(KEY_MOCK);
     state.mocked = false;
     state.provider = null;
     state.address = null;
     applyElig({ checked: false, ok: false, algo: 0, gonna: 0, nfts: [], ts: 0, source: null });
+    clearIdentity();
   }
+}
+
+// ---------- NFD segment resolution (garage resolveNFD pattern) ----------
+// Live-verified 2026-07-27 against https://api.nf.domains:
+//  - /nfd/lookup?address=ADDR returns an OBJECT KEYED BY ADDRESS (not an array):
+//    {"ADDR": {name, owner, caAlgo, state:"owned", expired:false, ...}} — and it
+//    HIDES expired segments (ouichef.gonna.algo did not appear for its owner).
+//  - /nfd/v2/search?owner=ADDR&view=brief&limit=N returns {total, nfds:[...]}
+//    INCLUDING expired ones. Active/inactive flag = `expired` (bool), backed by
+//    `state` ("owned" vs "expired"). Confirmed live: malicious.gonna.algo
+//    (state owned, expired false) vs ouichef.gonna.algo (state expired, expired true).
+interface NfdEntry {
+  name?: string;
+  owner?: string;
+  caAlgo?: string[];
+  expired?: boolean;
+  state?: string;
+}
+
+function nfdEntries(d: unknown): NfdEntry[] {
+  if (Array.isArray(d)) return d as NfdEntry[];
+  if (d && typeof d === 'object') {
+    const o = d as Record<string, unknown>;
+    if (Array.isArray(o.nfds)) return o.nfds as NfdEntry[];
+    // keyed-by-address shape from /nfd/lookup
+    return Object.values(o).filter((v): v is NfdEntry => !!v && typeof v === 'object' && typeof (v as NfdEntry).name === 'string');
+  }
+  return [];
+}
+
+async function fetchNfdSegment(address: string): Promise<{ name: string; active: boolean } | null> {
+  const gather = async (url: string): Promise<NfdEntry[]> => {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('http ' + r.status);
+    const d: unknown = await r.json();
+    return nfdEntries(d).filter((n) => n.owner === address || (Array.isArray(n.caAlgo) && n.caAlgo.includes(address)));
+  };
+  // both garage endpoints in parallel: lookup is the primary, search is the
+  // fallback AND the only one that surfaces expired .gonna.algo segments
+  const [a, b] = await Promise.allSettled([
+    gather('https://api.nf.domains/nfd/lookup?address=' + address),
+    gather('https://api.nf.domains/nfd/v2/search?owner=' + address + '&view=brief&limit=10'),
+  ]);
+  const all = [...(a.status === 'fulfilled' ? a.value : []), ...(b.status === 'fulfilled' ? b.value : [])];
+  if (all.length === 0) return null;
+  // prefer .gonna.algo segments (the GONNAVERSE identity), then active ones
+  const score = (n: NfdEntry): number => (n.name?.toLowerCase().endsWith('.gonna.algo') ? 2 : 0) + (n.expired ? 0 : 1);
+  const seen = new Set<string>();
+  let best: NfdEntry | null = null;
+  for (const n of all) {
+    const key = String(n.name).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!best || score(n) > score(best)) best = n;
+  }
+  if (!best || !best.name) return null;
+  return { name: best.name.toLowerCase(), active: !best.expired };
+}
+
+function applyIdentity(address: string | null, segment: string | null, active: boolean, source: Identity['source']): void {
+  identity.address = address;
+  identity.segment = segment;
+  identity.active = active;
+  identity.source = source;
+}
+
+// resolve async + update when ready: the canvas redraws every frame, so the
+// label simply appears in place — the gate/fighter screens never wait on NFD.
+export function resolveIdentity(address: string): void {
+  const run = ++nfdRun;
+  applyIdentity(address, null, false, null); // address label until resolved
+  try {
+    const raw = lsGet(KEY_NFD);
+    if (raw) {
+      const c = JSON.parse(raw) as { address: string; name: string | null; active: boolean; ts: number };
+      if (c.address === address && Date.now() - c.ts < NFD_CACHE_MS) {
+        applyIdentity(address, c.name, !!c.active, 'cache');
+        return;
+      }
+    }
+  } catch { /* corrupt cache: resolve live */ }
+  void (async () => {
+    let seg: { name: string; active: boolean } | null = null;
+    try {
+      seg = await fetchNfdSegment(address);
+    } catch { /* cosmetic: silently fall back to the address */ }
+    if (run !== nfdRun || state.address !== address) return; // wallet changed mid-flight
+    applyIdentity(address, seg ? seg.name : null, seg ? seg.active : false, seg ? 'nfd' : 'address');
+    lsSet(KEY_NFD, JSON.stringify({ address, name: seg ? seg.name : null, active: seg ? seg.active : false, ts: Date.now() }));
+  })();
+}
+
+function clearIdentity(): void {
+  nfdRun++;
+  applyIdentity(null, null, false, null);
+}
+
+export function getIdentity(): Identity {
+  return identity;
+}
+
+// label for the pixel UI: segment name (truncated) or the short address
+export function identityLabel(maxChars = 28): string {
+  if (identity.segment) return truncatePixel(identity.segment, maxChars);
+  return shortAddress();
+}
+
+// green = active segment, gray = inactive segment; null = caller default (plain address)
+export function identityColor(): string | null {
+  if (!identity.segment) return null;
+  return identity.active ? '#7fd858' : '#8a8f9c';
+}
+
+export function truncatePixel(s: string, maxChars: number): string {
+  if (s.length <= maxChars) return s;
+  return s.slice(0, Math.max(1, maxChars - 3)) + '...';
 }
 
 function normalizeMockNfts(list: { id: number; name: string; skin: string }[]): OwnedNft[] {
@@ -163,6 +296,7 @@ function sessionEnded(): void {
   lsDel(KEY_WALLET);
   lsDel(KEY_ELIG);
   applyElig({ checked: false, ok: false, algo: 0, gonna: 0, nfts: [], ts: 0, source: null });
+  clearIdentity();
   if (sessionListener) sessionListener();
 }
 
@@ -178,6 +312,7 @@ function applySession(provider: WalletProvider, w: WalletLib, accounts: string[]
   state.address = accounts[0];
   lsSet(KEY_WALLET, JSON.stringify({ provider, address: state.address }));
   watchDisconnect(w);
+  resolveIdentity(state.address!);
   void refreshEligibility(true);
 }
 
@@ -241,6 +376,7 @@ export async function disconnect(): Promise<void> {
 
 // boot: restore a persisted session (mock in CI, wallet lib otherwise)
 export function init(): void {
+  lsDel(KEY_ELIG_OLD); // v9.0.2: drop the poisoned pre-unwrap cache once
   const rawMock = lsGet(KEY_MOCK);
   if (rawMock) {
     try {
@@ -259,6 +395,7 @@ export function init(): void {
   state.provider = saved.provider;
   state.address = saved.address;
   loadCachedElig(saved.address); // instant UI from the last good check
+  resolveIdentity(saved.address); // cosmetic NFD label, updates when ready
   void (async () => {
     try {
       const w = await loadLib(saved.provider);
@@ -325,10 +462,16 @@ export async function refreshEligibility(force: boolean): Promise<Eligibility> {
   elig.busy = true;
   elig.error = false;
   try {
-    const [dec, acct] = await Promise.all([
+    const [dec, resp] = await Promise.all([
       gonnaDecimals(),
-      idxFetch('/v2/accounts/' + state.address) as Promise<{ amount: number; assets?: { 'asset-id': number; amount: number }[] }>,
+      idxFetch('/v2/accounts/' + state.address),
     ]);
+    // v9.0.2 BUG FIX: the indexer WRAPS the account —
+    // GET /v2/accounts/{addr} returns {account: {...}, 'current-round': N}.
+    // Reading amount/assets on the wrapper produced ALGO NaN / GONNA 0 / NFT 0.
+    const wrapped = resp as { account?: { amount?: number; assets?: { 'asset-id': number; amount: number }[] } };
+    const acct = (wrapped.account ?? (resp as { amount?: number; assets?: { 'asset-id': number; amount: number }[] }));
+    if (!Number.isFinite(Number(acct.amount))) throw new Error('bad account payload');
     const assets = acct.assets ?? [];
     const holding = assets.find((a) => a['asset-id'] === GONNA_ASA);
     const gonna = holding ? holding.amount / Math.pow(10, dec) : 0;
@@ -343,7 +486,7 @@ export async function refreshEligibility(force: boolean): Promise<Eligibility> {
     applyElig({
       checked: true,
       ok: nfts.length >= 1 || gonna >= GONNA_THRESHOLD,
-      algo: acct.amount / 1e6,
+      algo: Number(acct.amount) / 1e6,
       gonna,
       gonnaDecimals: dec,
       nfts,

@@ -32,13 +32,13 @@ export function titleFighterLabelRect(name: string): { x: number; y: number; w: 
   return { x: 8, y: 156, w: textWidth('FIGHTER: ' + name, 1), h: 7 };
 }
 
-function drawTitleBtn(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w: number; h: number }, label: string, t: number): void {
+function drawTitleBtn(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w: number; h: number }, label: string, t: number, color = '#f5c542'): void {
   ctx.fillStyle = '#0d1118';
   ctx.fillRect(b.x, b.y, b.w, b.h);
   ctx.strokeStyle = (t & 16) !== 0 ? '#f5c542' : '#b8860b';
   ctx.lineWidth = 1;
   ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
-  drawText(ctx, label, b.x + b.w / 2, b.y + 6, 1, '#f5c542', 'center');
+  drawText(ctx, label, b.x + b.w / 2, b.y + 6, 1, color, 'center');
 }
 
 export function drawTitle(
@@ -48,6 +48,7 @@ export function drawTitle(
   fighterName = '',
   touch = false,
   connectLabel = '',
+  connectColor = '#f5c542',
 ): void {
   ctx.fillStyle = '#070a14';
   ctx.fillRect(0, 0, VW, VH);
@@ -66,7 +67,7 @@ export function drawTitle(
   if (fighterName) {
     drawText(ctx, 'FIGHTER: ' + fighterName, 8, 156, 1, '#f5c542');
   }
-  drawTitleBtn(ctx, TITLE_CONNECT_BTN, connectLabel || (touch ? 'CONNECT' : 'C CONNECT'), t);
+  drawTitleBtn(ctx, TITLE_CONNECT_BTN, connectLabel || (touch ? 'CONNECT' : 'C CONNECT'), t, connectColor);
   drawTitleBtn(ctx, TITLE_FIGHTER_BTN, touch ? 'FIGHTER' : 'T FIGHTER', t);
   // controls
   drawText(ctx, 'ARROWS/WASD MOVE  SPACE JUMP  C SPECIAL', VW / 2, 172, 1, '#8a8f9c', 'center');
@@ -79,7 +80,7 @@ export function drawTitle(
   ctx.scale(-1, 1);
   ctx.drawImage(art.lizIcon, 0, 0, m[1].w, m[1].h);
   ctx.restore();
-  drawText(ctx, 'V9.0.1 THE GATE', VW - textWidth('V9.0.1 THE GATE', 1) - 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, 'V9.0.2 THE GATE', VW - textWidth('V9.0.2 THE GATE', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 

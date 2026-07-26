@@ -448,6 +448,11 @@ export class Game implements GameCtx {
   get fighterInfo(): { skin: string; assetId: number | null; name: string } {
     return { skin: this.fighter.skin, assetId: this.fighter.assetId, name: this.fighter.name };
   }
+  // v9.0.2 CI: NFD identity shown in place of the address (segment/addr + active flag)
+  get identityInfo(): { address: string | null; segment: string | null; active: boolean; source: string | null; label: string } {
+    const id = wallet.getIdentity();
+    return { address: id.address, segment: id.segment, active: id.active, source: id.source, label: wallet.identityLabel(26) };
+  }
   // CI: inject a wallet state (null = disconnect). Persisted for reload tests.
   debugMockWallet(m: wallet.MockWallet | null): void {
     wallet.setMock(m);
@@ -479,7 +484,7 @@ export class Game implements GameCtx {
       fighterLabel: titleFighterLabelRect(this.fighter.name),
       fighterBtn: TITLE_FIGHTER_BTN,
       connectBtn: TITLE_CONNECT_BTN,
-      connectLabel: wallet.isConnected() ? wallet.shortAddress() : 'CONNECT',
+      connectLabel: wallet.isConnected() ? wallet.identityLabel(13) : 'CONNECT',
       mascots: TITLE_MASCOTS,
     };
   }
@@ -1074,12 +1079,14 @@ export class Game implements GameCtx {
       c.save();
       this.fitView(true);
       // v9.0.1: the CONNECT button shows the short address once connected
+      // v9.0.2: it shows the NFD segment instead (green active / gray inactive)
+      const idColor = wallet.identityColor();
       const connectLabel = wallet.isConnected()
-        ? wallet.shortAddress()
+        ? wallet.identityLabel(13)
         : this.touchActive
           ? 'CONNECT'
           : 'C CONNECT';
-      drawTitle(c, this.frame, this.art, this.fighter.name, this.touchActive, connectLabel);
+      drawTitle(c, this.frame, this.art, this.fighter.name, this.touchActive, connectLabel, idColor ?? '#f5c542');
       c.restore();
       return;
     }

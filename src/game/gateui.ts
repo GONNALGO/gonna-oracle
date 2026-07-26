@@ -54,10 +54,29 @@ export function drawAlgoLogo(ctx: CanvasRenderingContext2D, x: number, y: number
 }
 
 export function fmtCompact(n: number): string {
+  if (!Number.isFinite(n)) return 'ERR'; // v9.0.2: NaN must NEVER reach the canvas
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
   if (n >= 1e3) return Math.floor(n).toLocaleString('en-US');
   return n % 1 === 0 ? String(n) : n.toFixed(2);
+}
+
+// v9.0.2: balance text that can never be NaN — '...' while the indexer is
+// busy with nothing to show yet, 'ERR' when the fetch failed with no cache.
+function balText(v: number, e: wallet.Eligibility): string {
+  if (!Number.isFinite(v)) return 'ERR';
+  if (e.busy && !e.checked) return '...';
+  if (e.error && !e.checked) return 'ERR';
+  return fmtCompact(v);
+}
+
+// v9.0.2: wallet identity = NFD segment (green active / gray inactive) or
+// the short address, truncated to fit the panel strip
+function drawIdentity(ctx: CanvasRenderingContext2D, y: number): string {
+  const label = wallet.identityLabel(26);
+  const color = wallet.identityColor() ?? '#8a8f9c';
+  drawText(ctx, label, VW - 14, y, 1, color, 'right');
+  return label;
 }
 
 // ---------- wallet panel (connect/gate/fighter screens) ----------
@@ -73,15 +92,15 @@ export function drawWalletPanel(ctx: CanvasRenderingContext2D, y: number, t: num
   drawTextSh(ctx, 'GONNA', 14, y + 4, 1, '#7fd858');
   drawAlgoLogo(ctx, 54, y + 4, 1, '#f2f2f2');
   drawText(ctx, 'ALGORAND', 63, y + 4, 1, '#c8ccd4');
-  drawText(ctx, wallet.shortAddress(), VW - 14, y + 4, 1, '#8a8f9c', 'right');
-  if (w.mocked) drawText(ctx, 'CI', VW - 14 - textWidth(wallet.shortAddress(), 1) - 10, y + 4, 1, '#5a5f6c');
+  const idLabel = drawIdentity(ctx, y + 4);
+  if (w.mocked) drawText(ctx, 'CI', VW - 14 - textWidth(idLabel, 1) - 10, y + 4, 1, '#5a5f6c');
   // balances
   drawText(ctx, 'ALGO', 14, y + 16, 1, '#8a8f9c');
-  drawText(ctx, fmtCompact(e.algo), 46, y + 16, 1, '#f2f2f2');
+  drawText(ctx, balText(e.algo, e), 46, y + 16, 1, '#f2f2f2');
   drawText(ctx, '$GONNA', 96, y + 16, 1, '#8a8f9c');
-  drawText(ctx, fmtCompact(e.gonna), 138, y + 16, 1, e.gonna >= wallet.GONNA_THRESHOLD ? '#7fd858' : '#f5c542');
+  drawText(ctx, balText(e.gonna, e), 138, y + 16, 1, e.gonna >= wallet.GONNA_THRESHOLD ? '#7fd858' : '#f5c542');
   drawText(ctx, 'NFT', 196, y + 16, 1, '#8a8f9c');
-  drawText(ctx, String(e.nfts.length), 218, y + 16, 1, e.nfts.length > 0 ? '#7fd858' : '#f2f2f2');
+  drawText(ctx, e.busy && !e.checked ? '...' : String(e.nfts.length), 218, y + 16, 1, e.nfts.length > 0 ? '#7fd858' : '#f2f2f2');
   if (e.source === 'cache') drawText(ctx, 'CACHED', 244, y + 16, 1, '#b8860b');
   if (e.busy && (t & 16) !== 0) drawText(ctx, 'SYNC...', 296, y + 16, 1, '#8a8f9c');
   // owned-NFT sprite strip (garage style)
@@ -116,14 +135,14 @@ function drawWalletPanelCompact(ctx: CanvasRenderingContext2D, y: number, t: num
   drawTextSh(ctx, 'GONNA', 14, y + 4, 1, '#7fd858');
   drawAlgoLogo(ctx, 54, y + 4, 1, '#f2f2f2');
   drawText(ctx, 'ALGORAND', 63, y + 4, 1, '#c8ccd4');
-  drawText(ctx, wallet.shortAddress(), VW - 14, y + 4, 1, '#8a8f9c', 'right');
-  if (w.mocked) drawText(ctx, 'CI', VW - 14 - textWidth(wallet.shortAddress(), 1) - 10, y + 4, 1, '#5a5f6c');
+  const idLabel = drawIdentity(ctx, y + 4);
+  if (w.mocked) drawText(ctx, 'CI', VW - 14 - textWidth(idLabel, 1) - 10, y + 4, 1, '#5a5f6c');
   drawText(ctx, 'ALGO', 14, y + 15, 1, '#8a8f9c');
-  drawText(ctx, fmtCompact(e.algo), 46, y + 15, 1, '#f2f2f2');
+  drawText(ctx, balText(e.algo, e), 46, y + 15, 1, '#f2f2f2');
   drawText(ctx, '$GONNA', 96, y + 15, 1, '#8a8f9c');
-  drawText(ctx, fmtCompact(e.gonna), 138, y + 15, 1, e.gonna >= wallet.GONNA_THRESHOLD ? '#7fd858' : '#f5c542');
+  drawText(ctx, balText(e.gonna, e), 138, y + 15, 1, e.gonna >= wallet.GONNA_THRESHOLD ? '#7fd858' : '#f5c542');
   drawText(ctx, 'NFT', 196, y + 15, 1, '#8a8f9c');
-  drawText(ctx, String(e.nfts.length), 218, y + 15, 1, e.nfts.length > 0 ? '#7fd858' : '#f2f2f2');
+  drawText(ctx, e.busy && !e.checked ? '...' : String(e.nfts.length), 218, y + 15, 1, e.nfts.length > 0 ? '#7fd858' : '#f2f2f2');
   if (e.source === 'cache') drawText(ctx, 'CACHED', 244, y + 15, 1, '#b8860b');
   if (e.busy && (t & 16) !== 0) drawText(ctx, 'SYNC...', 296, y + 15, 1, '#8a8f9c');
 }
@@ -586,9 +605,9 @@ export class GateUI {
     const nftOk = e.nfts.length >= 1;
     const gonnaOk = e.gonna >= wallet.GONNA_THRESHOLD;
     drawText(ctx, 'GONNA NFTS', 96, 68, 1, '#8a8f9c');
-    drawText(ctx, String(e.nfts.length) + ' / 1', VW - 96, 68, 1, nftOk ? '#7fd858' : '#e23b3b', 'right');
+    drawText(ctx, (e.busy && !e.checked ? '...' : String(e.nfts.length)) + ' / 1', VW - 96, 68, 1, nftOk ? '#7fd858' : '#e23b3b', 'right');
     drawText(ctx, '$GONNA', 96, 80, 1, '#8a8f9c');
-    drawText(ctx, fmtCompact(e.gonna) + ' / 2.00B', VW - 96, 80, 1, gonnaOk ? '#7fd858' : '#e23b3b', 'right');
+    drawText(ctx, balText(e.gonna, e) + ' / 2.00B', VW - 96, 80, 1, gonnaOk ? '#7fd858' : '#e23b3b', 'right');
     if (e.busy && (t & 8) !== 0) drawText(ctx, 'CONSULTING THE INDEXER...', VW / 2, 94, 1, '#f5c542', 'center');
     else if (this.status) drawText(ctx, this.status, VW / 2, 94, 1, '#f5c542', 'center');
 
