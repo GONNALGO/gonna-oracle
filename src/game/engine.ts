@@ -484,7 +484,7 @@ export class Game implements GameCtx {
       fighterLabel: titleFighterLabelRect(this.fighter.name),
       fighterBtn: TITLE_FIGHTER_BTN,
       connectBtn: TITLE_CONNECT_BTN,
-      connectLabel: wallet.isConnected() ? wallet.identityLabel(13) : 'CONNECT',
+      connectLabel: wallet.isConnected() ? wallet.identityLabel(14) : 'CONNECT',
       mascots: TITLE_MASCOTS,
     };
   }
@@ -1082,7 +1082,7 @@ export class Game implements GameCtx {
       // v9.0.2: it shows the NFD segment instead (green active / gray inactive)
       const idColor = wallet.identityColor();
       const connectLabel = wallet.isConnected()
-        ? wallet.identityLabel(13)
+        ? wallet.identityLabel(14) // 14 chars * 6px = 84px: fits the 88px button
         : this.touchActive
           ? 'CONNECT'
           : 'C CONNECT';
