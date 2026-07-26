@@ -22,6 +22,7 @@ export type GateAction =
   | { act: 'none' }
   | { act: 'move' } // cursor moved: blip
   | { act: 'title' } // back to title
+  | { act: 'disconnect' } // v9.0.3: wallet disconnected from the fighter screen
   | { act: 'fighter'; fighter: Fighter }; // fighter confirmed: apply + title
 
 interface Btn {
@@ -41,6 +42,11 @@ interface Hot {
   id: string;
   data: number; // cursor index / tile index
 }
+
+// v9.0.3: DISCONNECT lives INSIDE the compact wallet strip, row 2 right side —
+// clear of the identity label (row 1) and of every balance (row 2 left/middle).
+// The whole 384-wide strip is visible in portrait FIT, so this fits mobile too.
+export const FIGHTER_DISCONNECT_BTN = { x: VW - 80, y: VH - 14, w: 66, h: 10 };
 
 // ---------- tiny pixel ALGORAND logo (blocky A, neon-sign style) ----------
 const ALGO_ROWS = ['001100', '011110', '110011', '110011', '111111', '110011', '110011'];
@@ -144,7 +150,9 @@ function drawWalletPanelCompact(ctx: CanvasRenderingContext2D, y: number, t: num
   drawText(ctx, 'NFT', 196, y + 15, 1, '#8a8f9c');
   drawText(ctx, e.busy && !e.checked ? '...' : String(e.nfts.length), 218, y + 15, 1, e.nfts.length > 0 ? '#7fd858' : '#f2f2f2');
   if (e.source === 'cache') drawText(ctx, 'CACHED', 244, y + 15, 1, '#b8860b');
-  if (e.busy && (t & 16) !== 0) drawText(ctx, 'SYNC...', 296, y + 15, 1, '#8a8f9c');
+  // v9.0.3: no SYNC... here — row 2 right side belongs to the DISCONNECT
+  // button now (the full gate panel keeps the blinking sync indicator).
+  void t;
 }
 
 // ---------- the scene controller ----------
@@ -293,6 +301,10 @@ export class GateUI {
 
   private keyFighter(inp: Input): GateAction {
     if (inp.pressed.pause || inp.pressed.fighter) return { act: 'title' };
+    // v9.0.3: D = DISCONNECT (switch wallets). KeyD also maps to WASD 'right',
+    // so it is consumed here BEFORE any cursor nav; when disconnected it falls
+    // through and stays a plain right-move as before.
+    if (wallet.isConnected() && inp.pressedCodes.has('KeyD')) return this.activate('disconnect');
     if (this.athleteMode()) {
       const n = this.rows.length;
       if (n === 0) return { act: 'none' };
@@ -413,6 +425,12 @@ export class GateUI {
         return { act: 'move' };
       case 'disconnect':
         void wallet.disconnect();
+        if (this.scene === 'fighter') {
+          // v9.0.3: back to the free default GONNA; the engine routes to the
+          // CONNECT scene (primary use case = switching wallets, not ragequit)
+          this.fighter = { ...DEFAULT_FIGHTER };
+          return { act: 'disconnect' };
+        }
         return { act: 'move' };
       case 'back':
         return { act: 'title' };
@@ -638,10 +656,24 @@ export class GateUI {
     else this.drawSkinGrid(ctx, t, frames);
 
     // wallet strip (compact) when connected
-    if (wallet.isConnected()) drawWalletPanelCompact(ctx, VH - 28, t);
-    else drawText(ctx, 'HOLDERS UNLOCK NFT ATHLETES - PASS THE GATE', VW / 2, VH - 10, 1, '#5a5f6c', 'center');
+    if (wallet.isConnected()) {
+      drawWalletPanelCompact(ctx, VH - 28, t);
+      // v9.0.3: DISCONNECT button in the strip (tap / click / D key)
+      const b = FIGHTER_DISCONNECT_BTN;
+      this.pushBtn({ id: 'disconnect', label: 'DISCONNECT', x: b.x, y: b.y, w: b.w, h: b.h });
+      ctx.fillStyle = '#0d1118';
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.strokeStyle = '#b8860b';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+      drawText(ctx, 'DISCONNECT', b.x + b.w / 2, b.y + 2, 1, '#f5c542', 'center');
+    } else {
+      drawText(ctx, 'HOLDERS UNLOCK NFT ATHLETES - PASS THE GATE', VW / 2, VH - 10, 1, '#5a5f6c', 'center');
+    }
 
-    if ((t & 32) !== 0) drawText(ctx, 'ENTER FIGHT - ESC BACK', VW - 10, VH - 38, 1, '#8a8f9c', 'right');
+    if ((t & 32) !== 0) {
+      drawText(ctx, wallet.isConnected() ? 'ENTER FIGHT - D DISCONNECT - ESC BACK' : 'ENTER FIGHT - ESC BACK', VW - 10, VH - 38, 1, '#8a8f9c', 'right');
+    }
     if (this.teaser) this.drawTeaser(ctx, t, frames);
   }
 

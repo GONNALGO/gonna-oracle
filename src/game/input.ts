@@ -24,6 +24,10 @@ export class Input {
     punch: false, kick: false, jump: false, special: false, start: false, mute: false, pause: false, fighter: false,
   };
   pressed: Record<Btn, boolean> = { ...this.down };
+  /** v9.0.3: raw edge-triggered key CODES (scene shortcuts that share a mapped
+   *  key, e.g. KeyD = DISCONNECT on the fighter screen while WASD D = right) */
+  pressedCodes = new Set<string>();
+  private downCodes = new Set<string>();
   /** v6: true while touch controls are active (relaxed object-lift tolerance) */
   touchMode = false;
   private onKeyDown: (e: KeyboardEvent) => void;
@@ -33,6 +37,8 @@ export class Input {
 
   constructor() {
     this.onKeyDown = (e: KeyboardEvent) => {
+      if (!this.downCodes.has(e.code)) this.pressedCodes.add(e.code);
+      this.downCodes.add(e.code);
       const b = KEYS[e.code];
       if (this.anyKey) this.anyKey();
       if (!b) return;
@@ -41,6 +47,7 @@ export class Input {
       this.down[b] = true;
     };
     this.onKeyUp = (e: KeyboardEvent) => {
+      this.downCodes.delete(e.code);
       const b = KEYS[e.code];
       if (!b) return;
       e.preventDefault();
@@ -53,6 +60,7 @@ export class Input {
   // call at END of each logic step to clear edge triggers
   postUpdate(): void {
     for (const k of Object.keys(this.pressed) as Btn[]) this.pressed[k] = false;
+    this.pressedCodes.clear();
   }
 
   destroy(): void {

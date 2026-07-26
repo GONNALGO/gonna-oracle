@@ -19,16 +19,16 @@ import { clamp, comboRankName, LANE_BOT, LANE_TOP, rand, VH, VW } from './types'
 import type { Facing } from './types';
 import type { GameCtx } from './ctx';
 import { drawHud } from './hud';
-import { drawTextSh } from './font';
+import { drawTextSh, textWidth } from './font';
 import { Haptics, TouchControls } from './touch';
 import { computeFit } from './fit';
 import type { ViewFit } from './fit';
 import { drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawTitle, drawVictory, TITLE_CONNECT_BTN, TITLE_FIGHTER_BTN, TITLE_MASCOTS, titleFighterLabelRect } from './screens';
 import type { Tally } from './screens';
 import * as wallet from './wallet';
-import { GateUI } from './gateui';
+import { GateUI, FIGHTER_DISCONNECT_BTN } from './gateui';
 import type { GateAction } from './gateui';
-import { loadFighter, loadSkinFrames, loadSkinMap, loadSkinPortraits, saveFighter } from './skins';
+import { DEFAULT_FIGHTER, loadFighter, loadSkinFrames, loadSkinMap, loadSkinPortraits, saveFighter } from './skins';
 import type { Fighter } from './skins';
 
 type Scene = 'title' | 'intro' | 'play' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter';
@@ -239,6 +239,14 @@ export class Game implements GameCtx {
         this.titleTrack = true;
         this.audio.playTrack('title');
       }
+    } else if (a.act === 'disconnect') {
+      // v9.0.3: DISCONNECT from CHOOSE YOUR FIGHTER — wallet.disconnect() was
+      // already fired by the gate UI; here the fighter goes back to the free
+      // default GONNA and the flow lands on CONNECT (switching wallets), so a
+      // successful reconnect returns straight to the fighter select.
+      this.applyFighter({ ...DEFAULT_FIGHTER });
+      this.connectFromTitle = true;
+      this.openGateScene('connect', 1);
     } else if (a.act === 'fighter') {
       this.applyFighter(a.fighter);
       this.audio.uiSelect();
@@ -486,6 +494,30 @@ export class Game implements GameCtx {
       connectBtn: TITLE_CONNECT_BTN,
       connectLabel: wallet.isConnected() ? wallet.identityLabel(14) : 'CONNECT',
       mascots: TITLE_MASCOTS,
+    };
+  }
+  // v9.0.3 CI: fighter-screen wallet-strip bboxes (no-overlap assertions).
+  // All rects mirror the exact draw positions in gateui.drawFighter.
+  get fighterLayout(): {
+    panel: { x: number; y: number; w: number; h: number } | null;
+    disconnectBtn: { x: number; y: number; w: number; h: number } | null;
+    identityRect: { x: number; y: number; w: number; h: number } | null;
+    balanceRow: { x: number; y: number; w: number; h: number } | null;
+  } {
+    const on = this.scene === 'fighter' && wallet.isConnected();
+    if (!on) return { panel: null, disconnectBtn: null, identityRect: null, balanceRow: null };
+    const py = VH - 28; // compact panel top
+    const idLabel = wallet.identityLabel(26);
+    const idW = textWidth(idLabel, 1);
+    const e = wallet.getEligibility();
+    const nftTxt = e.busy && !e.checked ? '...' : String(e.nfts.length);
+    let balEnd = 218 + textWidth(nftTxt, 1);
+    if (e.source === 'cache') balEnd = Math.max(balEnd, 244 + textWidth('CACHED', 1));
+    return {
+      panel: { x: 8, y: py, w: VW - 16, h: 26 },
+      disconnectBtn: { ...FIGHTER_DISCONNECT_BTN },
+      identityRect: { x: VW - 14 - idW, y: py + 4, w: idW, h: 7 },
+      balanceRow: { x: 14, y: py + 15, w: balEnd - 14, h: 7 },
     };
   }
   get fxScreen(): { rings: { x: number; y: number; r: number }[]; parts: { x: number; y: number }[]; pops: { x: number; y: number; txt: string }[] } {
