@@ -472,12 +472,14 @@ export class Game implements GameCtx {
     fighterLabel: { x: number; y: number; w: number; h: number } | null;
     fighterBtn: { x: number; y: number; w: number; h: number };
     connectBtn: { x: number; y: number; w: number; h: number };
+    connectLabel: string;
     mascots: { x: number; y: number; w: number; h: number }[];
   } {
     return {
       fighterLabel: titleFighterLabelRect(this.fighter.name),
       fighterBtn: TITLE_FIGHTER_BTN,
       connectBtn: TITLE_CONNECT_BTN,
+      connectLabel: wallet.isConnected() ? wallet.shortAddress() : 'CONNECT',
       mascots: TITLE_MASCOTS,
     };
   }

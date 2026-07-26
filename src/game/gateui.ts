@@ -367,8 +367,12 @@ export class GateUI {
             this.status = 'WALLET CONNECTED - CHECKING HOLDINGS...';
           })
           .catch((err: unknown) => {
-            // v9.0.1: never swallow the real error again (global-polyfill bug hid here)
-            console.error('[gonna] wallet connect failed:', err);
+            // v9.0.1: log REAL errors (the global-polyfill bug hid here); a user
+            // closing the wallet modal is a normal cancel, not an error (garage rule)
+            const e = err as { data?: { type?: string }; message?: string } | null;
+            if (e?.data?.type !== 'CONNECT_MODAL_CLOSED' && e?.message !== 'CONNECT_MODAL_CLOSED') {
+              console.error('[gonna] wallet connect failed:', err);
+            }
             this.status = 'CONNECTION CANCELLED - TRY AGAIN';
           });
         return { act: 'move' };
