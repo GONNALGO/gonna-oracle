@@ -74,7 +74,7 @@ export function drawWalletPanel(ctx: CanvasRenderingContext2D, y: number, t: num
   drawAlgoLogo(ctx, 54, y + 4, 1, '#f2f2f2');
   drawText(ctx, 'ALGORAND', 63, y + 4, 1, '#c8ccd4');
   drawText(ctx, wallet.shortAddress(), VW - 14, y + 4, 1, '#8a8f9c', 'right');
-  if (w.mocked) drawText(ctx, 'CI', VW - 14 - textWidth(wallet.shortAddress(), 1) - 8, y + 4, 1, '#5a5f6c');
+  if (w.mocked) drawText(ctx, 'CI', VW - 14 - textWidth(wallet.shortAddress(), 1) - 10, y + 4, 1, '#5a5f6c');
   // balances
   drawText(ctx, 'ALGO', 14, y + 16, 1, '#8a8f9c');
   drawText(ctx, fmtCompact(e.algo), 46, y + 16, 1, '#f2f2f2');
@@ -102,6 +102,30 @@ export function drawWalletPanel(ctx: CanvasRenderingContext2D, y: number, t: num
     }
   }
   if (nfts.length > max) drawText(ctx, '+' + (nfts.length - max), 14 + max * 26, y + 28, 1, '#8a8f9c');
+}
+
+// compact 2-row variant for the fighter select (the list/grid IS the garage)
+function drawWalletPanelCompact(ctx: CanvasRenderingContext2D, y: number, t: number): void {
+  const w = wallet.getWallet();
+  const e = wallet.getEligibility();
+  ctx.fillStyle = '#0a0e18';
+  ctx.fillRect(8, y, VW - 16, 26);
+  ctx.strokeStyle = '#b8860b';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(8.5, y + 0.5, VW - 17, 25);
+  drawTextSh(ctx, 'GONNA', 14, y + 4, 1, '#7fd858');
+  drawAlgoLogo(ctx, 54, y + 4, 1, '#f2f2f2');
+  drawText(ctx, 'ALGORAND', 63, y + 4, 1, '#c8ccd4');
+  drawText(ctx, wallet.shortAddress(), VW - 14, y + 4, 1, '#8a8f9c', 'right');
+  if (w.mocked) drawText(ctx, 'CI', VW - 14 - textWidth(wallet.shortAddress(), 1) - 10, y + 4, 1, '#5a5f6c');
+  drawText(ctx, 'ALGO', 14, y + 15, 1, '#8a8f9c');
+  drawText(ctx, fmtCompact(e.algo), 46, y + 15, 1, '#f2f2f2');
+  drawText(ctx, '$GONNA', 96, y + 15, 1, '#8a8f9c');
+  drawText(ctx, fmtCompact(e.gonna), 138, y + 15, 1, e.gonna >= wallet.GONNA_THRESHOLD ? '#7fd858' : '#f5c542');
+  drawText(ctx, 'NFT', 196, y + 15, 1, '#8a8f9c');
+  drawText(ctx, String(e.nfts.length), 218, y + 15, 1, e.nfts.length > 0 ? '#7fd858' : '#f2f2f2');
+  if (e.source === 'cache') drawText(ctx, 'CACHED', 244, y + 15, 1, '#b8860b');
+  if (e.busy && (t & 16) !== 0) drawText(ctx, 'SYNC...', 296, y + 15, 1, '#8a8f9c');
 }
 
 // ---------- the scene controller ----------
@@ -165,6 +189,11 @@ export class GateUI {
       const idx = SKINS.indexOf(this.fighter.skin);
       this.gridCur = idx >= 0 ? idx : 0;
       if (!this.unlockedSkins().has(SKINS[this.gridCur])) this.gridCur = 0;
+      // a fresh holder still on the free default starts on HIS unlocked skin
+      if (this.fighter.assetId === null) {
+        const first = wallet.getEligibility().nfts[0];
+        if (first) this.gridCur = SKINS.indexOf(first.skin);
+      }
       this.syncGridFighter();
     }
   }
@@ -513,9 +542,9 @@ export class GateUI {
 
     drawText(ctx, 'STAGE 1 IS FREE FOR ALL.', VW / 2, 66, 1, '#c8ccd4', 'center');
     drawText(ctx, 'THE GONNAVERSE BEYOND IS FOR HOLDERS:', VW / 2, 78, 1, '#c8ccd4', 'center');
-    drawTextSh(ctx, '>= 1 GONNA NFT', VW / 2 - 90, 92, 1, '#7fd858');
-    drawTextSh(ctx, 'OR', VW / 2, 92, 1, '#8a8f9c', 'center');
-    drawTextSh(ctx, '>= 2B $GONNA', VW / 2 + 14, 92, 1, '#7fd858');
+    drawTextSh(ctx, '>= 1 GONNA NFT', VW / 2 - 100, 92, 1, '#7fd858');
+    drawTextSh(ctx, 'OR', VW / 2 - 2, 92, 1, '#8a8f9c', 'center');
+    drawTextSh(ctx, '>= 2B $GONNA', VW / 2 + 24, 92, 1, '#7fd858');
 
     const w = wallet.getWallet();
     if (w.connecting && (t & 8) !== 0) drawText(ctx, 'WAITING FOR WALLET...', VW / 2, 110, 1, '#f5c542', 'center');
@@ -576,10 +605,10 @@ export class GateUI {
     else this.drawSkinGrid(ctx, t, frames);
 
     // wallet strip (compact) when connected
-    if (wallet.isConnected()) drawWalletPanel(ctx, VH - 44, t, frames);
+    if (wallet.isConnected()) drawWalletPanelCompact(ctx, VH - 28, t);
     else drawText(ctx, 'HOLDERS UNLOCK NFT ATHLETES - PASS THE GATE', VW / 2, VH - 10, 1, '#5a5f6c', 'center');
 
-    if ((t & 32) !== 0) drawText(ctx, 'ENTER FIGHT - ESC BACK', VW / 2, VH - 52, 1, '#8a8f9c', 'center');
+    if ((t & 32) !== 0) drawText(ctx, 'ENTER FIGHT - ESC BACK', VW - 10, VH - 38, 1, '#8a8f9c', 'right');
     if (this.teaser) this.drawTeaser(ctx, t, frames);
   }
 
@@ -623,12 +652,11 @@ export class GateUI {
         drawTextSh(ctx, '>', 126, ay, 2, '#c8ccd4');
       }
     }
-    // name plate
-    drawTextSh(ctx, f.name, 75, 178, 1, '#f5c542', 'center');
-    drawText(ctx, info.label, 75, 188, 1, info.accent, 'center');
+    // name plate (left) + FIGHT button (right), both clear of the wallet strip
+    drawTextSh(ctx, f.name, athlete ? 54 : 75, 178, 1, '#f5c542', 'center');
+    drawText(ctx, info.label, athlete ? 54 : 75, 188, 1, info.accent, 'center');
     if (athlete) {
-      // FIGHT button under the name plate
-      const b: Btn = { id: 'fight', label: 'FIGHT!', x: 30, y: 198, w: 90, h: 22 };
+      const b: Btn = { id: 'fight', label: 'FIGHT!', x: 92, y: 174, w: 50, h: 20 };
       this.pushBtn(b);
       ctx.fillStyle = '#1a2a14';
       ctx.fillRect(b.x, b.y, b.w, b.h);

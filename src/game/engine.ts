@@ -506,7 +506,8 @@ export class Game implements GameCtx {
       inp.pressed.mute = false;
     }
     // v7: desktop pause (P / ESC) — same veil + sim freeze as the touch II button
-    if (inp.pressed.pause) {
+    // v9: only consume the edge in play/paused — menu scenes use ESC as BACK
+    if (inp.pressed.pause && (this.scene === 'play' || this.paused)) {
       inp.pressed.pause = false;
       this.togglePause();
     }
