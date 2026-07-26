@@ -431,6 +431,19 @@ export class Game implements GameCtx {
   debugRefreshEligibility(): void {
     void wallet.refreshEligibility(true);
   }
+  // CI: fighter-select / gate screen internals
+  get gateInfo(): { scene: string; mode: string; cursor: number; rowCount: number; teaser: boolean; flashing: boolean; uiFighter: { skin: string; assetId: number | null; name: string } } {
+    const f = this.gate.uiFighter;
+    return {
+      scene: this.gate.scene,
+      mode: this.gate.mode,
+      cursor: this.gate.cursor,
+      rowCount: this.gate.rowCount,
+      teaser: this.gate.teaserOpen,
+      flashing: this.gate.flashing,
+      uiFighter: { skin: f.skin, assetId: f.assetId, name: f.name },
+    };
+  }
 
   // ---------- scene flow ----------
   private startNewGame(): void {

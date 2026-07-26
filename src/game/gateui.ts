@@ -447,6 +447,20 @@ export class GateUI {
     return this.teaser !== null;
   }
 
+  // ---- CI introspection ----
+  get mode(): 'grid' | 'athlete' {
+    return this.athleteMode() ? 'athlete' : 'grid';
+  }
+  get cursor(): number {
+    return this.athleteMode() ? this.rowCur : this.gridCur;
+  }
+  get rowCount(): number {
+    return this.rows.length;
+  }
+  get uiFighter(): Fighter {
+    return this.fighter;
+  }
+
   // ================================================================ DRAW
   draw(ctx: CanvasRenderingContext2D, t: number, _art: Art, frames: Map<string, HTMLImageElement>): void {
     this.hots = [];
