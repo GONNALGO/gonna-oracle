@@ -1,6 +1,9 @@
 // v9.1 — SEAL: save a finished run on-chain. 0-ALGO payment from the
-// connected wallet to the SEAL treasury, carrying the record in the note:
-//   GONNAFIGHT|1|<score>|<stage 1-6>|<win 0|1>|<continues>|<assetId or 0>|<skin>|<msg>
+// connected wallet to the SEAL treasury, carrying the record in the note.
+// v9.2 — note v2 adds run telemetry (pause-immune frame time, deaths, combo):
+//   GONNAFIGHT|2|<score>|<stage 1-6>|<win 0|1>|<timeSec>|<deaths>|<continues>|<maxCombo>|<assetId or 0>|<skin>|<msg>
+// (v1 = GONNAFIGHT|1|<score>|<stage>|<win>|<continues>|<assetId>|<skin>|<msg>
+//  stays readable forever — the board parses both, see board.ts)
 // algosdk is a HEAVY new dependency: it is dynamic-imported inside seal()
 // (and nowhere else) so it rides the lazy wallet chunks, never the entry one.
 import * as wallet from './wallet';
@@ -37,16 +40,23 @@ export interface SealRecord {
   assetId: number | null; // null -> 0 (free default GONNA)
   skin: string;
   msg: string;
+  // v9.2 note v2 telemetry
+  timeSec: number; // in-run frame count / 60 (pause-immune, replay-proof ready)
+  deaths: number; // lives lost this run
+  maxCombo: number; // best combo chain this run
 }
 
 export function buildNote(r: SealRecord): string {
   const msg = sanitizeMsg(r.msg);
   return (
-    'GONNAFIGHT|1|' +
+    'GONNAFIGHT|2|' +
     Math.max(0, Math.floor(r.score)) + '|' +
     Math.min(6, Math.max(1, Math.floor(r.stage))) + '|' +
     (r.win ? 1 : 0) + '|' +
+    Math.max(0, Math.floor(r.timeSec)) + '|' +
+    Math.max(0, Math.floor(r.deaths)) + '|' +
     Math.max(0, Math.floor(r.continues)) + '|' +
+    Math.max(0, Math.floor(r.maxCombo)) + '|' +
     (r.assetId ?? 0) + '|' +
     r.skin.toLowerCase() + '|' +
     msg
@@ -58,6 +68,7 @@ export interface SealOutcome {
   note: string;
   txid: string;
   status: SealStatus;
+  round: number; // v9.2: confirmed round for the ACT 2 block stamp (0 = unknown)
 }
 
 // CI debug hook (window.__gonna.lastSeal mirrors this)
@@ -67,7 +78,7 @@ export interface SealDebug extends SealOutcome {
 export const sealDebug: { last: SealDebug | null } = { last: null };
 
 // poll algod until the tx confirms (~20s budget, then CONFIRM PENDING)
-async function pollPending(txid: string): Promise<SealStatus> {
+async function pollPending(txid: string): Promise<{ status: SealStatus; round: number }> {
   for (let i = 0; i < 10; i++) {
     await new Promise((r) => setTimeout(r, 2000));
     try {
@@ -75,14 +86,14 @@ async function pollPending(txid: string): Promise<SealStatus> {
       if (r.ok) {
         const j = (await r.json()) as { 'confirmed-round'?: number; 'pool-error'?: string };
         if (j['pool-error']) throw new Error('the network rejected the seal');
-        if ((j['confirmed-round'] ?? 0) > 0) return 'sealed';
+        if ((j['confirmed-round'] ?? 0) > 0) return { status: 'sealed', round: j['confirmed-round']! };
       }
     } catch (e) {
       if (e instanceof Error && e.message === 'the network rejected the seal') throw e;
       // transient network error: keep polling within the budget
     }
   }
-  return 'pending';
+  return { status: 'pending', round: 0 };
 }
 
 async function postSigned(blob: Uint8Array): Promise<string> {
@@ -106,13 +117,16 @@ export async function seal(rec: SealRecord): Promise<SealOutcome> {
 
   let txid: string;
   let status: SealStatus;
+  let round = 0;
   if (wallet.isMock()) {
     // CI mock: fake signed bytes, real HTTP flow (page.route intercepts algod)
     const fake = new Uint8Array(noteBytes.length + 7);
     fake.set(new TextEncoder().encode('MOCKSIG'), 0);
     fake.set(noteBytes, 7);
     txid = await postSigned(fake);
-    status = await pollPending(txid);
+    const p = await pollPending(txid);
+    status = p.status;
+    round = p.round;
   } else {
     // real wallet: algosdk builds the 0-ALGO payment, the wallet signs it
     const algosdk = await import('algosdk');
@@ -143,12 +157,14 @@ export async function seal(rec: SealRecord): Promise<SealOutcome> {
       throw new Error('algod rejected the seal');
     }
     try {
-      status = await pollPending(txid);
+      const p = await pollPending(txid);
+      status = p.status;
+      round = p.round;
     } catch {
       throw new Error('the network rejected the seal');
     }
   }
-  const out: SealOutcome = { note, txid, status };
+  const out: SealOutcome = { note, txid, status, round };
   sealDebug.last = { ...out, at: Date.now() };
   return out;
 }

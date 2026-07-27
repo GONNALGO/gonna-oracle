@@ -683,6 +683,38 @@ export class AudioSys {
     const seq: [number, number][] = [[523, 0], [659, 0.12], [784, 0.24], [1047, 0.36], [784, 0.54], [1047, 0.66], [1319, 0.84]];
     for (const [f, d] of seq) this.blip(f, 0.16, 'square', 0.28, 0, d);
   }
+  // ---- v9.2: THE SEAL MOMENT ----
+  // ACT 2: deep synth gong when the block confirms (low sine bell + shimmer)
+  gong(): void {
+    this.blip(98, 1.6, 'sine', 0.5, 0);
+    this.blip(147, 1.2, 'sine', 0.3, 0, 0.01);
+    this.blip(196, 0.9, 'triangle', 0.22, 0, 0.02);
+    this.noise(0.5, 0.12, 900, 0.25);
+  }
+  // ACT 4: rank-reveal THUD (punchy low drum hit)
+  thud(): void {
+    this.blip(72, 0.28, 'sine', 0.5, 34);
+    this.noise(0.12, 0.4, 700);
+  }
+  // ACT 3: triumph chiptune fanfare — a new short jingle (NOT a stage track):
+  // bright rising run + held high tonic, square-wave Capcom style
+  triumph(): void {
+    const seq: [number, number, number][] = [
+      // freq, delay, dur
+      [659, 0.0, 0.1],
+      [784, 0.1, 0.1],
+      [988, 0.2, 0.1],
+      [1175, 0.3, 0.14],
+      [988, 0.46, 0.09],
+      [1175, 0.55, 0.09],
+      [1319, 0.64, 0.22],
+      [1568, 0.88, 0.34],
+    ];
+    for (const [f, d, dur] of seq) this.blip(f, dur, 'square', 0.26, 0, d);
+    // sparkle harmony on the finale
+    this.blip(2093, 0.3, 'square', 0.14, 0, 0.88);
+    this.noise(0.3, 0.1, 6000, 0.15);
+  }
 
   // ---------- Music sequencer ----------
   playTrack(name: keyof typeof TRACKS): void {
