@@ -76,7 +76,7 @@ const SORT_DD_BTN = { x: 8, y: HDR_Y - 2, w: 130, h: 13 };
 // v9.2.3: VIEW CARD joins the bottom row (step 1 of the 2-step guide — the
 // inline preview is gone, the fullscreen viewer covers nothing until asked);
 // 20px-tall buttons so the 18px fluo icons breathe
-// v9.2.4: the generic navigator.share SHARE button is GONE (redundant next to
+// v9.2.4: the generic web-share SHARE button is GONE (redundant next to
 // VIEW CARD + the direct X/TG anchors, dead on many browsers) — the bottom row
 // rebalances to 3 even 100px buttons (30/142/254, 12px gaps, span 30..354)
 export const SHARE_BTNS = [

@@ -561,7 +561,7 @@ export class Game implements GameCtx {
       // v9.2.3: the SEALED screen — the game art stays clean; VIEW CARD (step
       // 1 of the 2-step guide) opens the fullscreen viewer, X/TG are step 2.
       // Taller 20px buttons so the 18px fluo icons breathe.
-      // v9.2.4: the generic navigator.share SHARE button is GONE (redundant,
+      // v9.2.4: the generic web-share SHARE button is GONE (redundant,
       // dead on many browsers) — VIEW TX / DONE rebalance to 2 even 156px
       // buttons (30/198, 12px gap, span 30..354).
       return [
@@ -817,7 +817,7 @@ export class Game implements GameCtx {
     this.audio.uiSelect();
   }
 
-  // v9.2.4: X/TG only — the generic navigator.share path is gone (the SHARE
+  // v9.2.4: X/TG only — the generic web-share path is gone (the SHARE
   // button was redundant next to VIEW CARD + the direct anchors and dead on
   // many browsers)
   private execShare(which: 'x' | 'tg'): void {

@@ -438,7 +438,7 @@ export class CardViewer {
   }
 }
 
-// v9.2.4: the generic navigator.share path (nativeShare) is GONE — the SHARE
+// v9.2.4: the generic web-share (native sheet) path is GONE — the SHARE
 // button it served was redundant (VIEW CARD + direct X/TG anchors cover the
 // flow) and unsupported/dead on many browsers. X/TG anchors + texts intact.
 
