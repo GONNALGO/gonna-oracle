@@ -71,7 +71,7 @@ export class BoardUI {
 
   private walletLabel(addr: string): { label: string; kind: 'seg-active' | 'seg-inactive' | 'addr' } {
     const seg = wallet.cachedSegment(addr);
-    if (seg) return { label: wallet.truncatePixel(seg.name, 16), kind: seg.active ? 'seg-active' : 'seg-inactive' };
+    if (seg) return { label: wallet.truncatePixel(seg.name, 20), kind: seg.active ? 'seg-active' : 'seg-inactive' };
     return { label: addr.slice(0, 5) + '...' + addr.slice(-4), kind: 'addr' };
   }
 

@@ -480,6 +480,12 @@ export class Game implements GameCtx {
 
   private tapSave(gx: number, gy: number): void {
     if (this.savePhase === 'busy') return;
+    // tapping the message box focuses the DOM input (mobile keyboard)
+    const r = SAVE_MSG_RECT;
+    if (gx >= r.x && gx <= r.x + r.w && gy >= r.y && gy <= r.y + r.h && this.msgInput) {
+      this.msgInput.focus({ preventScroll: true });
+      return;
+    }
     const btns = this.saveButtons();
     for (let i = 0; i < btns.length; i++) {
       const b = btns[i];
@@ -498,6 +504,7 @@ export class Game implements GameCtx {
       this.saveToTitle();
       return;
     }
+    this.ensureMsgInput(); // re-show after a connect detour (cheap no-op otherwise)
     const inp = this.input;
     const typing = this.msgInput !== null && document.activeElement === this.msgInput;
     if (inp.pressed.pause) {
@@ -552,7 +559,15 @@ export class Game implements GameCtx {
 
   // ---------- v9.1: DOM message input (native mobile keyboards, accessible) ----------
   private ensureMsgInput(): void {
-    if (this.msgInput || typeof document === 'undefined') return;
+    if (typeof document === 'undefined') return;
+    if (this.msgInput) {
+      // re-show after a scene detour (connect-from-save)
+      if (this.msgInput.style.display === 'none') {
+        this.msgInput.style.display = '';
+        this.placeMsgInput();
+      }
+      return;
+    }
     const el = document.createElement('input');
     el.type = 'text';
     el.id = 'gonna-seal-msg';
@@ -596,7 +611,8 @@ export class Game implements GameCtx {
     el.style.top = Math.round(f.fitOffY + SAVE_MSG_RECT.y * f.fitScale) + 'px';
     el.style.width = Math.round(SAVE_MSG_RECT.w * f.fitScale) + 'px';
     el.style.height = Math.round(SAVE_MSG_RECT.h * f.fitScale) + 'px';
-    el.style.fontSize = Math.max(10, Math.round(9 * f.fitScale)) + 'px';
+    // iOS Safari auto-zooms on focused inputs < 16px — go 16px on touch
+    el.style.fontSize = Math.max(this.touchActive ? 16 : 10, Math.round(9 * f.fitScale)) + 'px';
     el.style.letterSpacing = Math.max(0, Math.round(1 * f.fitScale)) + 'px';
   }
 
@@ -948,6 +964,8 @@ export class Game implements GameCtx {
     this.sceneT = 0;
     // no held control may leak across a scene cut (joystick ghost / stuck button)
     this.touch.releaseAll();
+    // v9.1: the SEAL message overlay only exists on the SAVE RECORD screen
+    if (s !== 'save' && this.msgInput) this.msgInput.style.display = 'none';
   }
 
   // ---------- main loop ----------

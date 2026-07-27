@@ -130,7 +130,11 @@ async function idxFetch(path: string): Promise<unknown> {
 
 export function fetchBoard(force: boolean): Promise<BoardData> {
   if (busy) return busy;
-  if (!force && data.status === 'ready' && Date.now() - data.ts < CACHE_MS) return Promise.resolve(data);
+  // fresh in-memory copy or 5-min localStorage cache: no network hit
+  if (!force && data.status === 'ready' && Date.now() - data.ts < CACHE_MS) {
+    data.fromCache = true;
+    return Promise.resolve(data);
+  }
   if (!force && readCache()) return Promise.resolve(data);
   data.status = 'loading';
   busy = (async () => {
