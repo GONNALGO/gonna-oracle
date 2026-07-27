@@ -28,6 +28,7 @@ function ok(cond, label) {
 const pageErrors = [];
 const browser = await chromium.launch({ args: ['--no-sandbox', '--disable-gpu'] });
 const ctx = await browser.newContext({ ...devices['iPhone 13'], hasTouch: true });
+await ctx.addInitScript(() => { try { window.localStorage.setItem('gonna.fsguide.v1', '1'); } catch {} }); // v9.2: guide pre-dismissed
 const page = await ctx.newPage();
 page.on('pageerror', (e) => pageErrors.push('pageerror: ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') pageErrors.push('console: ' + m.text()); });

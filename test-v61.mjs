@@ -30,6 +30,7 @@ const ctx = await browser.newContext({
   hasTouch: true,
 });
 await ctx.addInitScript(() => {
+  try { window.localStorage.setItem('gonna.fsguide.v1', '1'); } catch {} // v9.2: one-shot FULLSCREEN GUIDE pre-dismissed for the legacy flow
   window.__vibes = [];
   const rec = (p) => { window.__vibes.push(JSON.parse(JSON.stringify(p))); return true; };
   try { Object.defineProperty(navigator, 'vibrate', { value: rec, configurable: true }); }
@@ -284,6 +285,7 @@ const pctx = await browser.newContext({
   ...devices['Pixel 5 landscape'],
   hasTouch: true,
 });
+await pctx.addInitScript(() => { try { window.localStorage.setItem('gonna.fsguide.v1', '1'); } catch {} }); // v9.2: guide pre-dismissed
 const ppage = await pctx.newPage();
 ppage.on('pageerror', (e) => pageErrors.push('pixel pageerror: ' + e.message));
 ppage.on('console', (m) => { if (m.type() === 'error') pageErrors.push('pixel console: ' + m.text()); });

@@ -28,6 +28,7 @@ const browser = await chromium.launch({ args: ['--no-sandbox', '--disable-gpu'] 
 
 async function newPage(mobile) {
   const ctx = await browser.newContext(mobile ? { ...devices['iPhone 13'], hasTouch: true } : { viewport: { width: 960, height: 560 } });
+  if (mobile) await ctx.addInitScript(() => { try { window.localStorage.setItem('gonna.fsguide.v1', '1'); } catch {} }); // v9.2: guide pre-dismissed
   const page = await ctx.newPage();
   page.on('pageerror', (e) => pageErrors.push((mobile ? 'mobile: ' : 'desktop: ') + e.message));
   await page.goto(BASE, { waitUntil: 'networkidle' });
