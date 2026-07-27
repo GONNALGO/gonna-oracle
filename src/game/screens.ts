@@ -255,6 +255,7 @@ export interface SaveView {
   msgLen: number;
   buttons: SaveButton[];
   focus: number;
+  touch: boolean;
 }
 // the DOM message input overlays this exact rect (engine keeps it in sync)
 export const SAVE_MSG_RECT = { x: 62, y: 108, w: 260, h: 20 };
@@ -325,5 +326,5 @@ export function drawSaveRecord(ctx: CanvasRenderingContext2D, t: number, v: Save
   }
 
   drawText(ctx, 'SEAL = 0-ALGO TX TO THE GONNA TREASURY', VW / 2, 200, 1, '#5a5f6c', 'center');
-  if ((t & 32) !== 0) drawText(ctx, 'ENTER CONFIRM - ESC SKIP', VW / 2, VH - 10, 1, '#8a8f9c', 'center');
+  if (!v.touch && (t & 32) !== 0) drawText(ctx, 'ENTER CONFIRM - ESC SKIP', VW / 2, VH - 10, 1, '#8a8f9c', 'center');
 }

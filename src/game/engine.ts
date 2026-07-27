@@ -1569,6 +1569,7 @@ export class Game implements GameCtx {
           msgLen: this.msgInput ? this.msgInput.value.length : 0,
           buttons: btns,
           focus: Math.min(this.saveFocus, Math.max(0, btns.length - 1)),
+          touch: this.touchActive,
         });
       }
       c.restore();
