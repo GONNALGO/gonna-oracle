@@ -32,7 +32,7 @@ import { DEFAULT_FIGHTER, isGonnaName, loadFighter, loadSkinFrames, loadSkinMap,
 import type { Fighter } from './skins';
 import * as seal from './seal';
 import * as board from './board';
-import { BoardUI } from './boardui';
+import { BoardUI, SHARE_BTNS } from './boardui';
 import type { BoardAction } from './boardui';
 // ---- v9.2: THE ARENA ----
 import { SealMoment } from './sealanim';
@@ -128,6 +128,10 @@ export class Game implements GameCtx {
   private boardPostedX = false;
   private boardPostedTG = false;
   private boardCard: share.CardResult | null = null;
+  // v9.2.1: REAL DOM anchors overlaid on the pixel share buttons — a genuine
+  // tap on a true <a target="_blank"> is the only way iOS fires universal
+  // links into the X / Telegram apps (window.open was popup-blocked + web-only)
+  private shareAnchors = new share.ShareAnchors();
   private deaths = 0; // v9.2 note v2: lives lost this run
   private maxCombo = 0; // v9.2 note v2: best combo chain this run
   private guide = new FsGuide();
@@ -268,6 +272,7 @@ export class Game implements GameCtx {
     this.fit = f;
     this.touch.setViewport(f);
     this.placeMsgInput(); // v9.1: keep the DOM overlay pixel-perfect
+    this.syncShareAnchors(); // v9.2.1: same for the share anchors
   }
 
   // v6.1: portrait FIT <-> ZOOM toggle (touch ZOOM button)
@@ -433,7 +438,8 @@ export class Game implements GameCtx {
         this.audio.playTrack('title');
       }
     } else if (a.act === 'viewtx') {
-      if (a.txid) window.open('https://allo.info/tx/' + a.txid, '_blank');
+      // v9.2.1: the real DOM anchor over VIEW TX handles the navigation
+      if (a.txid) this.shareAnchors.click('board:viewtx');
     } else if (a.act === 'share') {
       this.execBoardShare(a.which);
     }
@@ -564,7 +570,8 @@ export class Game implements GameCtx {
         this.openGateScene('connect', this.gateNext);
         break;
       case 'viewtx':
-        if (this.saveTxid) window.open('https://allo.info/tx/' + this.saveTxid, '_blank');
+        // v9.2.1: real DOM anchor (allo.info, new tab — popup-blocker proof)
+        this.shareAnchors.click('save:viewtx');
         break;
       case 'sharex':
         this.execShare('x');
@@ -708,7 +715,41 @@ export class Game implements GameCtx {
     };
   }
 
-  private execShare(which: 'x' | 'tg' | 'generic'): void {
+  // v9.2.1: the DOM anchors overlaid on the pixel share buttons. Genuine taps
+  // land on REAL <a target="_blank" rel="noopener"> elements, so iOS fires the
+  // universal links into the X / Telegram apps and the popup blocker never
+  // engages (window.open from the canvas tap handler was treated as a
+  // programmatic navigation -> prompt + web login page). Synced every frame.
+  private syncShareAnchors(): void {
+    if (typeof document === 'undefined') return;
+    const defs: share.ShareAnchorDef[] = [];
+    if (this.scene === 'save' && this.saveRec && (this.savePhase === 'done' || this.savePhase === 'pending')) {
+      const r = this.buildShareRec();
+      const btns = this.saveButtons();
+      const bx = btns.find((b) => b.id === 'sharex');
+      const bt = btns.find((b) => b.id === 'sharetg');
+      const bv = btns.find((b) => b.id === 'viewtx');
+      if (r && bx) defs.push({ id: 'save:sharex', rect: bx, href: share.shareUrlX(r), scheme: share.shareSchemeX(r), aria: 'Share on X', onTap: () => this.prepareSaveShare('x') });
+      if (r && bt) defs.push({ id: 'save:sharetg', rect: bt, href: share.shareUrlTG(r), scheme: share.shareSchemeTG(r), aria: 'Share on Telegram', onTap: () => this.prepareSaveShare('tg') });
+      if (bv && this.saveTxid) defs.push({ id: 'save:viewtx', rect: bv, href: 'https://allo.info/tx/' + this.saveTxid, scheme: null, aria: 'View the seal transaction on allo.info', onTap: () => this.audio.uiSelect() });
+    } else if (this.scene === 'board' && this.board.currentLevel === 'run' && this.board.currentRun) {
+      const r = this.buildBoardShareRec();
+      const e = this.board.currentRun;
+      if (r) {
+        const bx = SHARE_BTNS.find((b) => b.id === 'share:x');
+        const bt = SHARE_BTNS.find((b) => b.id === 'share:tg');
+        const bv = SHARE_BTNS.find((b) => b.id === 'viewtx');
+        if (bx) defs.push({ id: 'board:sharex', rect: bx, href: share.shareUrlX(r), scheme: share.shareSchemeX(r), aria: 'Share on X', onTap: () => this.prepareBoardShare('x') });
+        if (bt) defs.push({ id: 'board:sharetg', rect: bt, href: share.shareUrlTG(r), scheme: share.shareSchemeTG(r), aria: 'Share on Telegram', onTap: () => this.prepareBoardShare('tg') });
+        if (bv) defs.push({ id: 'board:viewtx', rect: bv, href: 'https://allo.info/tx/' + e.txid, scheme: null, aria: 'View the seal transaction on allo.info', onTap: () => this.audio.uiSelect() });
+      }
+    }
+    this.shareAnchors.sync(defs, this.fit, this.touchActive);
+  }
+
+  // posted state + the 1200x630 card (auto-download on the FIRST share) —
+  // called by the DOM anchor inside the SAME genuine tap; NO navigation here
+  private prepareSaveShare(which: 'x' | 'tg'): void {
     const r = this.buildShareRec();
     if (!r) return;
     if (!this.shareCard) {
@@ -720,24 +761,72 @@ export class Game implements GameCtx {
       this.shareDownloaded = true;
       share.downloadCard(this.shareCard.canvas);
     }
-    if (which === 'x') {
-      this.sharePostedX = true;
-      window.open(share.shareUrlX(r), '_blank');
-    } else if (which === 'tg') {
-      this.sharePostedTG = true;
-      window.open(share.shareUrlTG(r), '_blank');
-    } else {
-      void share.nativeShare(this.shareCard.canvas, share.shareTextX(r)).then((ok) => {
-        if (!ok && this.shareCard && this.shareDownloaded === false) share.downloadCard(this.shareCard.canvas);
-      });
+    if (which === 'x') this.sharePostedX = true;
+    else this.sharePostedTG = true;
+    this.audio.uiSelect();
+  }
+
+  private prepareBoardShare(which: 'x' | 'tg'): void {
+    const r = this.buildBoardShareRec();
+    const e = this.board.currentRun;
+    if (!r || !e) return;
+    if (!this.boardCard) {
+      const sprite = e.skin === 'gonna' ? (this.frames.get('0_0') ?? null) : skinPortrait(e.skin);
+      this.boardCard = share.renderCard(r, sprite);
     }
+    if (which === 'x') this.boardPostedX = true;
+    else this.boardPostedTG = true;
+    share.downloadCard(this.boardCard.canvas);
+    this.audio.uiSelect();
+  }
+
+  private execShare(which: 'x' | 'tg' | 'generic'): void {
+    if (which !== 'generic') {
+      // v9.2.1: navigation lives on the real DOM anchor (keyboard ENTER / any
+      // canvas fallback tap routes through the very same anchor)
+      if (!this.shareAnchors.click(which === 'x' ? 'save:sharex' : 'save:sharetg')) this.prepareSaveShare(which);
+      return;
+    }
+    const r = this.buildShareRec();
+    if (!r) return;
+    if (!this.shareCard) {
+      const fr = this.pframes ?? this.frames;
+      this.shareCard = share.renderCard(r, fr.get('0_0') ?? null);
+    }
+    // the 1200x630 card auto-downloads on the FIRST share
+    if (!this.shareDownloaded) {
+      this.shareDownloaded = true;
+      share.downloadCard(this.shareCard.canvas);
+    }
+    void share.nativeShare(this.shareCard.canvas, share.shareTextX(r)).then((ok) => {
+      if (!ok && this.shareCard && this.shareDownloaded === false) share.downloadCard(this.shareCard.canvas);
+    });
     this.audio.uiSelect();
   }
 
   // share straight from a RUN CARD (L3 of THE ARENA)
   private execBoardShare(which: 'x' | 'tg' | 'generic'): void {
+    if (which !== 'generic') {
+      if (!this.shareAnchors.click(which === 'x' ? 'board:sharex' : 'board:sharetg')) this.prepareBoardShare(which);
+      return;
+    }
+    const r = this.buildBoardShareRec();
     const e = this.board.currentRun;
-    if (!e) return;
+    if (!r || !e) return;
+    if (!this.boardCard) {
+      const sprite = e.skin === 'gonna' ? (this.frames.get('0_0') ?? null) : skinPortrait(e.skin);
+      this.boardCard = share.renderCard(r, sprite);
+    }
+    share.downloadCard(this.boardCard.canvas);
+    void share.nativeShare(this.boardCard.canvas, share.shareTextX(r));
+    this.audio.uiSelect();
+  }
+
+  // share record for the currently open RUN CARD (resets the per-txid posted
+  // state when a fresh card is opened)
+  private buildBoardShareRec(): share.ShareRec | null {
+    const e = this.board.currentRun;
+    if (!e) return null;
     if (this.boardShareTxid !== e.txid) {
       // a fresh run card: reset the posted states
       this.boardShareTxid = e.txid;
@@ -746,7 +835,7 @@ export class Game implements GameCtx {
       this.boardCard = null;
     }
     const nft = e.assetId > 0 ? skinForAsset(e.assetId) : null;
-    const r: share.ShareRec = {
+    return {
       score: e.score,
       stage: e.stage,
       win: e.win,
@@ -760,24 +849,6 @@ export class Game implements GameCtx {
       crown: board.isCrown(e),
       rank: board.rankOfEntry(e),
     };
-    if (!this.boardCard) {
-      const sprite = e.skin === 'gonna' ? (this.frames.get('0_0') ?? null) : skinPortrait(e.skin);
-      this.boardCard = share.renderCard(r, sprite);
-    }
-    const card = this.boardCard;
-    if (which === 'x') {
-      this.boardPostedX = true;
-      share.downloadCard(card.canvas);
-      window.open(share.shareUrlX(r), '_blank');
-    } else if (which === 'tg') {
-      this.boardPostedTG = true;
-      share.downloadCard(card.canvas);
-      window.open(share.shareUrlTG(r), '_blank');
-    } else {
-      share.downloadCard(card.canvas);
-      void share.nativeShare(card.canvas, share.shareTextX(r));
-    }
-    this.audio.uiSelect();
   }
 
   // ---------- v9.1: DOM message input (native mobile keyboards, accessible) ----------
@@ -858,6 +929,7 @@ export class Game implements GameCtx {
     this.ctx.canvas.removeEventListener('pointerdown', this.onMouseDown);
     this.ctx.canvas.removeEventListener('pointermove', this.onPointerMove);
     this.removeMsgInput();
+    this.shareAnchors.clear(); // v9.2.1: drop the DOM share anchors too
     wallet.onSessionEnded(null);
     this.touch.destroy();
     this.input.destroy();
@@ -1041,6 +1113,7 @@ export class Game implements GameCtx {
     connectBtn: { x: number; y: number; w: number; h: number };
     boardBtn: { x: number; y: number; w: number; h: number };
     connectLabel: string;
+    boardLabel: string; // v9.2.1: ARENA on touch, L BOARD on desktop
     mascots: { x: number; y: number; w: number; h: number }[];
   } {
     return {
@@ -1049,6 +1122,7 @@ export class Game implements GameCtx {
       connectBtn: TITLE_CONNECT_BTN,
       boardBtn: TITLE_BOARD_BTN,
       connectLabel: wallet.isConnected() ? wallet.identityLabel(14) : 'CONNECT',
+      boardLabel: this.touchActive ? 'ARENA' : 'L BOARD',
       mascots: TITLE_MASCOTS,
     };
   }
@@ -1121,6 +1195,7 @@ export class Game implements GameCtx {
     signature: string;
     postedX: boolean;
     postedTG: boolean;
+    postedSprite: boolean; // v9.2.1: POSTED! check is a DRAWN sprite, never a font glyph
     card: { w: number; h: number; hasMsg: boolean; hasSkrrt: boolean; texts: string[] } | null;
     boardCard: { w: number; h: number; hasMsg: boolean; hasSkrrt: boolean; texts: string[] } | null;
   } {
@@ -1135,9 +1210,23 @@ export class Game implements GameCtx {
       signature: share.SIGNATURE,
       postedX: this.sharePostedX,
       postedTG: this.sharePostedTG,
+      postedSprite: true, // the checkmark next to POSTED! is drawCheck(), not ✓
       card: cardInfo(this.shareCard),
       boardCard: cardInfo(this.boardCard),
     };
+  }
+  // ---- v9.2.1: DOM share anchors (CI) ----
+  get shareAnchorInfo(): { id: string; href: string; scheme: string | null; target: string; rel: string; css: { x: number; y: number; w: number; h: number } }[] {
+    return this.shareAnchors.info();
+  }
+  // CI: capture share navigations + fake page visibility for fallback tests.
+  // collect != null -> navigations are recorded instead of executed;
+  // hidden != null -> overrides document.hidden for the 1.2s fallback check.
+  debugShareHooks(collect: string[] | null, hidden: boolean | null): void {
+    share.setShareHooks({
+      go: collect ? (u) => collect.push(u) : null,
+      hidden: hidden === null ? null : () => hidden,
+    });
   }
   get fsGuideInfo(): { platform: string | null; standalone: boolean; installAvail: boolean; visible: boolean; dismissed: boolean; autoShown: boolean; installFired: boolean } {
     return this.guide.info;
@@ -1424,6 +1513,8 @@ export class Game implements GameCtx {
         break;
       }
     }
+    // v9.2.1: keep the DOM share anchors glued to their pixel buttons
+    this.syncShareAnchors();
     // v4: while hit-stop / slow-mo freezes the sim, keep edge-presses buffered
     // so combo inputs are never swallowed by the freeze.
     if (this.holdInput) this.holdInput = false;

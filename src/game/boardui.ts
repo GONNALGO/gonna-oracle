@@ -17,7 +17,7 @@ import * as wallet from './wallet';
 import * as board from './board';
 import type { BoardEntry, BoardTab, SortCol } from './board';
 import { SKIN_INFO, skinForAsset, skinPortrait } from './skins';
-import { drawIconTG, drawIconX } from './shareicons';
+import { drawCheck, drawIconTG, drawIconX } from './shareicons';
 
 const FLUO = '#39FF14';
 const PODIUM = ['#f5c542', '#c8ccd4', '#cd7f32']; // gold / silver / bronze
@@ -66,7 +66,9 @@ const COL_DEFS: { col: SortCol; label: string; x: number; w: number }[] = [
   { col: 'combo', label: 'COMBO', x: 270, w: 52 },
 ];
 const SORT_DD_BTN = { x: 8, y: HDR_Y - 2, w: 130, h: 13 };
-const SHARE_BTNS = [
+// exported for the v9.2.1 DOM share-anchor overlay (engine syncs anchors to
+// these exact rects while a RUN CARD is open)
+export const SHARE_BTNS = [
   { id: 'share:x', label: 'SHARE ON X', x: 30, y: 176, w: 150, h: 16, icon: 'x' as const },
   { id: 'share:tg', label: 'SHARE ON TELEGRAM', x: 204, y: 176, w: 150, h: 16, icon: 'tg' as const },
   { id: 'share:generic', label: 'SHARE', x: 30, y: 198, w: 100, h: 16, icon: null },
@@ -859,7 +861,8 @@ export class BoardUI {
       tx += 8;
     }
     drawText(ctx, posted ? 'POSTED!' : b.label, tx, b.y + Math.floor((b.h - 7) / 2), 1, posted ? FLUO : share ? '#e8ecf4' : '#f5c542', 'center');
-    if (posted) drawText(ctx, 'OK', b.x + 6, b.y + Math.floor((b.h - 7) / 2), 1, FLUO);
+    // v9.2.1: DRAWN pixel checkmark sprite — ✓ is not in the ASCII pixel font
+    if (posted) drawCheck(ctx, b.x + 5, b.y + Math.floor((b.h - 6) / 2), 1, FLUO);
   }
 
   private drawTab(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w: number; h: number }, label: string, active: boolean): void {

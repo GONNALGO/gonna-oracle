@@ -67,3 +67,19 @@ export function drawIconX(ctx: CanvasRenderingContext2D, x: number, y: number, s
 export function drawIconTG(ctx: CanvasRenderingContext2D, x: number, y: number, s = 1, color = FLUO, glow = true): void {
   drawBmp(ctx, TG_BMP, 'P', x, y, s, color, glow);
 }
+
+// v9.2.1 — pixel checkmark for the POSTED! state. The pixel font is
+// ASCII-only, so the old ✓ glyph rendered as garbage ("0K"): the check is a
+// DRAWN sprite now, never a font character.
+const CHECK_BMP = [
+  '.....CC',
+  '....CC.',
+  '...CC..',
+  'C.CC...',
+  'CCC....',
+  '.C.....',
+];
+// x,y = top-left of the 7x6 glyph; s = pixel size
+export function drawCheck(ctx: CanvasRenderingContext2D, x: number, y: number, s = 1, color = FLUO): void {
+  drawBmp(ctx, CHECK_BMP, 'C', x, y, s, color, false);
+}

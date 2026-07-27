@@ -48,6 +48,142 @@ export function shareUrlX(r: ShareRec): string {
 export function shareUrlTG(r: ShareRec): string {
   return 'https://t.me/share/url?url=' + encodeURIComponent('https://' + GAME_URL) + '&text=' + encodeURIComponent(shareTextTG(r));
 }
+// v9.2.1: app-scheme deep links, attempted synchronously inside the genuine
+// tap on the overlay anchor (touch only). If the app is installed the composer
+// opens directly; otherwise the ~1.2s visibility fallback fires the web intent.
+export function shareSchemeX(r: ShareRec): string {
+  return 'twitter://post?message=' + encodeURIComponent(shareTextX(r));
+}
+export function shareSchemeTG(r: ShareRec): string {
+  return 'tg://share/url?url=' + encodeURIComponent('https://' + GAME_URL) + '&text=' + encodeURIComponent(shareTextTG(r));
+}
+
+// ---- navigation / visibility seams (CI substitutes; production = location) ----
+const shareHooks: { go: ((url: string) => void) | null; hidden: (() => boolean) | null } = { go: null, hidden: null };
+export function setShareHooks(h: { go?: ((url: string) => void) | null; hidden?: (() => boolean) | null }): void {
+  if (h.go !== undefined) shareHooks.go = h.go;
+  if (h.hidden !== undefined) shareHooks.hidden = h.hidden;
+}
+function navGo(url: string): void {
+  if (shareHooks.go) shareHooks.go(url);
+  else window.location.assign(url);
+}
+function pageHidden(): boolean {
+  if (shareHooks.hidden) return shareHooks.hidden();
+  return document.hidden;
+}
+
+// ============================================================ SHARE ANCHORS
+// v9.2.1 — the pixel share buttons get REAL DOM anchors overlaid invisibly
+// (same overlay technique as the seal message input, synced to the canvas fit
+// coordinates). A genuine tap on a real <a target="_blank" rel="noopener"> is
+// the ONLY way iOS fires universal links into the X / Telegram apps — a
+// window.open from the canvas tap handler is a programmatic navigation, so iOS
+// shows the popup-blocker prompt and dumps the user on the web login page.
+export interface ShareAnchorDef {
+  id: string; // save:sharex / save:sharetg / save:viewtx / board:sharex / ...
+  rect: { x: number; y: number; w: number; h: number }; // game coords (384x224)
+  href: string; // web intent (universal link)
+  scheme: string | null; // app scheme attempted first on touch devices
+  aria: string;
+  onTap: () => void; // posted state + card PNG download inside the SAME gesture
+}
+
+const FALLBACK_MS = 1200; // ~1.2s: app did not take over -> web intent fallback
+
+export class ShareAnchors {
+  private els = new Map<string, HTMLAnchorElement>();
+  private defs = new Map<string, ShareAnchorDef>();
+  private sigs = new Map<string, string>();
+  private touch = false;
+
+  // called every frame: creates / repositions / removes the overlay anchors so
+  // they always sit exactly on their pixel buttons (canvas fit coordinates).
+  sync(defs: ShareAnchorDef[], fit: { fitOffX: number; fitOffY: number; fitScale: number }, touch: boolean): void {
+    this.touch = touch;
+    const live = new Set<string>();
+    for (const d of defs) {
+      live.add(d.id);
+      this.defs.set(d.id, d);
+      let el = this.els.get(d.id);
+      if (!el) {
+        el = document.createElement('a');
+        el.className = 'gonna-share-anchor';
+        el.target = '_blank';
+        el.rel = 'noopener';
+        // z-index 31: above the seal message input (30) — the input lingers on
+        // the SEALED screen and its lower edge touches the share buttons' top
+        el.style.cssText = 'position:fixed;z-index:31;display:block;opacity:0;touch-action:manipulation;-webkit-tap-highlight-color:transparent;';
+        el.addEventListener('click', (e) => this.onClick(d.id, e));
+        document.body.appendChild(el);
+        this.els.set(d.id, el);
+        this.sigs.delete(d.id);
+      }
+      el.setAttribute('aria-label', d.aria);
+      const left = Math.round(fit.fitOffX + d.rect.x * fit.fitScale);
+      const top = Math.round(fit.fitOffY + d.rect.y * fit.fitScale);
+      const w = Math.max(1, Math.round(d.rect.w * fit.fitScale));
+      const h = Math.max(1, Math.round(d.rect.h * fit.fitScale));
+      const sig = d.href + '|' + (d.scheme ?? '') + '|' + left + ',' + top + ',' + w + ',' + h;
+      if (this.sigs.get(d.id) !== sig) {
+        this.sigs.set(d.id, sig);
+        el.href = d.href;
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        el.style.width = w + 'px';
+        el.style.height = h + 'px';
+      }
+    }
+    for (const [id, el] of this.els) {
+      if (!live.has(id)) {
+        el.remove();
+        this.els.delete(id);
+        this.defs.delete(id);
+        this.sigs.delete(id);
+      }
+    }
+  }
+
+  private onClick(id: string, e: MouseEvent): void {
+    const d = this.defs.get(id);
+    if (!d) return;
+    d.onTap(); // POSTED state + card PNG auto-download, inside the genuine tap
+    if (this.touch && d.scheme) {
+      // touch: try the app FIRST (synchronous scheme attempt keeps the gesture
+      // chain); if ~1.2s later the page is still visible the app is not
+      // installed -> fall back to the web intent.
+      e.preventDefault();
+      navGo(d.scheme);
+      window.setTimeout(() => {
+        if (!pageHidden()) navGo(d.href);
+      }, FALLBACK_MS);
+    }
+    // desktop: no preventDefault -> the anchor's own href opens the web intent
+    // in a new tab, exactly like v9.2 (minus the popup blocker).
+  }
+
+  // keyboard / canvas-fallback activations route through the real anchor too
+  click(id: string): boolean {
+    const el = this.els.get(id);
+    if (!el) return false;
+    el.click();
+    return true;
+  }
+
+  clear(): void {
+    this.sync([], { fitOffX: 0, fitOffY: 0, fitScale: 1 }, this.touch);
+  }
+
+  // CI: live DOM state of every overlay anchor
+  info(): { id: string; href: string; scheme: string | null; target: string; rel: string; css: { x: number; y: number; w: number; h: number } }[] {
+    const out: { id: string; href: string; scheme: string | null; target: string; rel: string; css: { x: number; y: number; w: number; h: number } }[] = [];
+    for (const [id, el] of this.els) {
+      const r = el.getBoundingClientRect();
+      out.push({ id, href: el.href, scheme: this.defs.get(id)?.scheme ?? null, target: el.target, rel: el.rel, css: { x: r.x, y: r.y, w: r.width, h: r.height } });
+    }
+    return out;
+  }
+}
 
 // ============================================================ CARD (1200x630)
 export interface CardResult {

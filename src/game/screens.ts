@@ -3,7 +3,7 @@ import { drawText, drawTextSh, textWidth } from './font';
 import { VH, VW } from './types';
 import type { Art } from './sprites';
 import { fmtScore } from './board';
-import { drawIconTG, drawIconX } from './shareicons';
+import { drawCheck, drawIconTG, drawIconX } from './shareicons';
 import { drawSealedBg } from './sealanim';
 
 const FLUO = '#39FF14'; // v9.2 bullrun green
@@ -41,13 +41,20 @@ export function titleFighterLabelRect(name: string): { x: number; y: number; w: 
   return { x: TITLE_FIGHTER_LABEL_X, y: 156, w: textWidth('FIGHTER: ' + name, 1), h: 7 };
 }
 
-function drawTitleBtn(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w: number; h: number }, label: string, t: number, color = '#f5c542'): void {
+function drawTitleBtn(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w: number; h: number }, label: string, t: number, color = '#f5c542', crown = false): void {
   ctx.fillStyle = '#0d1118';
   ctx.fillRect(b.x, b.y, b.w, b.h);
   ctx.strokeStyle = (t & 16) !== 0 ? '#f5c542' : '#b8860b';
   ctx.lineWidth = 1;
   ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
-  drawText(ctx, label, b.x + b.w / 2, b.y + 6, 1, color, 'center');
+  if (crown) {
+    // v9.2.1: small pixel crown before the touch ARENA label (fits cleanly:
+    // 11px crown + gap + 29px ARENA < 56px button)
+    drawCrown(ctx, b.x + 4, b.y + 6);
+    drawText(ctx, label, b.x + b.w / 2 + 7, b.y + 6, 1, color, 'center');
+  } else {
+    drawText(ctx, label, b.x + b.w / 2, b.y + 6, 1, color, 'center');
+  }
 }
 
 export function drawTitle(
@@ -76,7 +83,8 @@ export function drawTitle(
   if (fighterName) {
     drawText(ctx, 'FIGHTER: ' + fighterName, TITLE_FIGHTER_LABEL_X, 156, 1, '#f5c542');
   }
-  drawTitleBtn(ctx, TITLE_BOARD_BTN, touch ? 'BOARD' : 'L BOARD', t, '#7fd858');
+  // v9.2.1: touch devices read ARENA (+ pixel crown) — there is no L key hint
+  drawTitleBtn(ctx, TITLE_BOARD_BTN, touch ? 'ARENA' : 'L BOARD', t, '#7fd858', touch);
   drawTitleBtn(ctx, TITLE_CONNECT_BTN, connectLabel || (touch ? 'CONNECT' : 'C CONNECT'), t, connectColor);
   drawTitleBtn(ctx, TITLE_FIGHTER_BTN, touch ? 'FIGHTER' : 'T FIGHTER', t);
   // controls
@@ -90,7 +98,7 @@ export function drawTitle(
   ctx.scale(-1, 1);
   ctx.drawImage(art.lizIcon, 0, 0, m[1].w, m[1].h);
   ctx.restore();
-  drawText(ctx, 'V9.2 THE ARENA', VW - textWidth('V9.2 THE ARENA', 1) - 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, 'V9.2.1 THE ARENA', VW - textWidth('V9.2.1 THE ARENA', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 
@@ -270,7 +278,7 @@ export interface SaveButton {
   w: number;
   h: number;
   icon?: 'x' | 'tg' | null; // v9.2 viral share pixel icon
-  posted?: boolean; // v9.2 "✓ POSTED!" state (still tappable to re-post)
+  posted?: boolean; // v9.2 POSTED! state: drawn pixel checkmark + fluo text (still tappable to re-post)
 }
 export interface SaveView {
   score: number;
@@ -342,7 +350,9 @@ export function drawSaveRecord(ctx: CanvasRenderingContext2D, t: number, v: Save
         tx += 9;
       }
       drawText(ctx, posted ? 'POSTED!' : b.label, tx, b.y + Math.floor((b.h - 7) / 2), 1, posted ? FLUO : lit ? '#f5c542' : share ? '#e8ecf4' : '#c8ccd4', 'center');
-      if (posted) drawText(ctx, 'OK', b.x + 6, b.y + Math.floor((b.h - 7) / 2), 1, FLUO);
+      // v9.2.1: DRAWN pixel checkmark (✓ is not in the ASCII pixel font — it
+      // rendered as garbage glyphs on device); POSTED! stays text in fluo green
+      if (posted) drawCheck(ctx, b.x + 5, b.y + Math.floor((b.h - 6) / 2), 1, FLUO);
     }
     if (!v.touch && (t & 32) !== 0) drawText(ctx, 'ARROWS + ENTER - ESC DONE', VW / 2, VH - 8, 1, '#5a5f6c', 'center');
     return;
