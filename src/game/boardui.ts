@@ -436,12 +436,12 @@ export class BoardUI {
     if ((this.level === 'player' || this.level === 'fighter' || this.level === 'run') && this.cardKey !== null) {
       const entries = this.cardEntries();
       const isF = typeof this.cardKey === 'number';
-      const nft = isF ? skinForAsset(this.cardKey) : null;
+      const nft = isF && typeof this.cardKey === 'number' ? skinForAsset(this.cardKey) : null;
       card = {
         kind: isF ? 'fighter' : 'player',
         key: this.cardKey,
         label: isF ? (nft ? nft.name.trim() : 'ASA ' + this.cardKey) : this.walletLabel(String(this.cardKey), 24).label,
-        owner: isF ? board.currentOwner(this.cardKey) : null,
+        owner: isF && typeof this.cardKey === 'number' ? board.currentOwner(this.cardKey) : null,
         career: board.careerOf(entries),
         history: entries.map((e) => ({ score: e.score, stage: e.stage, win: e.win, round: e.round, txid: e.txid, msg: e.msg })),
       };

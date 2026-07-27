@@ -23,18 +23,23 @@ import { drawTextSh, textWidth } from './font';
 import { Haptics, TouchControls } from './touch';
 import { computeFit } from './fit';
 import type { ViewFit } from './fit';
-import { drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawSaveRecord, drawTitle, drawVictory, SAVE_MSG_RECT, TITLE_BOARD_BTN, TITLE_CONNECT_BTN, TITLE_FIGHTER_BTN, TITLE_MASCOTS, titleFighterLabelRect } from './screens';
+import { CONTINUE_FIGHT_BTN, CONTINUE_SEAL_BTN, drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawSaveRecord, drawTitle, drawVictory, SAVE_MSG_RECT, TITLE_BOARD_BTN, TITLE_CONNECT_BTN, TITLE_FIGHTER_BTN, TITLE_MASCOTS, titleFighterLabelRect } from './screens';
 import type { SaveButton, Tally } from './screens';
 import * as wallet from './wallet';
 import { GateUI, FIGHTER_DISCONNECT_BTN } from './gateui';
 import type { GateAction } from './gateui';
-import { DEFAULT_FIGHTER, isGonnaName, loadFighter, loadSkinFrames, loadSkinMap, loadSkinPortraits, saveFighter, SKIN_INFO } from './skins';
+import { DEFAULT_FIGHTER, isGonnaName, loadFighter, loadSkinFrames, loadSkinMap, loadSkinPortraits, saveFighter, SKIN_INFO, skinForAsset, skinPortrait } from './skins';
 import type { Fighter } from './skins';
 import * as seal from './seal';
+import * as board from './board';
 import { BoardUI } from './boardui';
 import type { BoardAction } from './boardui';
+// ---- v9.2: THE ARENA ----
+import { SealMoment } from './sealanim';
+import * as share from './share';
+import { captureInstallPrompt, FsGuide } from './fsguide';
 
-type Scene = 'title' | 'intro' | 'play' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter' | 'save' | 'board';
+type Scene = 'title' | 'intro' | 'play' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter' | 'save' | 'board' | 'sealanim';
 
 // v9.1: the run record waiting on the SAVE RECORD screen
 interface SaveRec {
@@ -46,6 +51,9 @@ interface SaveRec {
 }
 
 type Drawable = Player | Enemy | BossLike | Item | Obstacle | Proj;
+
+// v9.2: tiny ⛶ icon in the PAUSE menu reopens the FULLSCREEN GUIDE
+const PAUSE_FS_ICON = { x: VW / 2 + 64, y: 92, w: 22, h: 22 };
 
 export class Game implements GameCtx {
   audio = new AudioSys();
@@ -108,6 +116,22 @@ export class Game implements GameCtx {
   private msgInput: HTMLInputElement | null = null; // DOM overlay (native keyboards)
   private sealReturn = false; // connect flow started from SAVE RECORD -> return there
   private swipeY: number | null = null; // board swipe scroll
+  // ---- v9.2: THE SEAL MOMENT + VIRAL SHARE + FULLSCREEN GUIDE ----
+  private sealAnim = new SealMoment();
+  private saveMsg = ''; // the message sealed with the run (share card quote)
+  private saveRank: number | null = null; // "#N IN THE GONNAVERSE" (null = unknown)
+  private sharePostedX = false;
+  private sharePostedTG = false;
+  private shareCard: share.CardResult | null = null;
+  private shareDownloaded = false; // the card PNG auto-downloads on the FIRST share only
+  private boardShareTxid = ''; // run-card share state is per-txid
+  private boardPostedX = false;
+  private boardPostedTG = false;
+  private boardCard: share.CardResult | null = null;
+  private deaths = 0; // v9.2 note v2: lives lost this run
+  private maxCombo = 0; // v9.2 note v2: best combo chain this run
+  private guide = new FsGuide();
+  private sealBurst: { x: number; y: number; vx: number; vy: number; t: number; gold: boolean }[] = []; // SEAL-during-countdown pixel burst
   // v6.1: internal letterbox — canvas is full-bleed, game view fitted by transform
   fit: ViewFit = computeFit(VW, VH, 1, false, false);
   zoomOn = false; // portrait ZOOM preference (persisted in localStorage)
@@ -143,6 +167,9 @@ export class Game implements GameCtx {
     ctx.canvas.addEventListener('pointermove', this.onPointerMove);
     // v9 boot: wallet session restore + skin assets + persisted fighter
     wallet.init();
+    // v9.2: capture the Android install prompt for the FULLSCREEN GUIDE
+    captureInstallPrompt();
+    this.board.shareState = () => (this.board.currentLevel === 'run' ? { postedX: this.boardPostedX, postedTG: this.boardPostedTG } : null);
     // v9.0.1: the wallet app killed the session -> back to the connect scene
     wallet.onSessionEnded(() => {
       if (this.scene === 'gate' || this.scene === 'fighter') {
@@ -174,10 +201,40 @@ export class Game implements GameCtx {
   // v9: CSS-px tap -> game coords -> scene hotspot. true = consumed.
   private uiTap(x: number, y: number): boolean {
     const s = this.scene;
-    if (s !== 'connect' && s !== 'gate' && s !== 'fighter' && s !== 'title' && s !== 'save' && s !== 'board') return false;
     const f = this.fit;
     const gx = (x - f.fitOffX) / f.fitScale;
     const gy = (y - f.fitOffY) / f.fitScale;
+    // v9.2: the FULLSCREEN GUIDE card owns every tap while it is up
+    if (this.guide.visible) {
+      this.guide.tap(gx, gy);
+      return true;
+    }
+    // v9.2: tiny ⛶ icon in the PAUSE menu reopens the guide anytime
+    if (s === 'play' && this.paused) {
+      if (gx >= PAUSE_FS_ICON.x && gx <= PAUSE_FS_ICON.x + PAUSE_FS_ICON.w && gy >= PAUSE_FS_ICON.y && gy <= PAUSE_FS_ICON.y + PAUSE_FS_ICON.h) {
+        this.guide.reopen();
+        this.audio.uiSelect();
+        return true;
+      }
+      return false; // the rest of the pause veil stays as it was
+    }
+    if (s === 'sealanim') {
+      this.sealAnim.skip(); // THE SEAL MOMENT is skippable with a tap
+      return true;
+    }
+    if (s === 'continue') {
+      const hit = (b: { x: number; y: number; w: number; h: number }) => gx >= b.x && gx <= b.x + b.w && gy >= b.y && gy <= b.y + b.h;
+      if (hit(CONTINUE_FIGHT_BTN)) {
+        this.continueRun();
+        return true;
+      }
+      if (hit(CONTINUE_SEAL_BTN)) {
+        this.sealFromCountdown();
+        return true;
+      }
+      return false;
+    }
+    if (s !== 'connect' && s !== 'gate' && s !== 'fighter' && s !== 'title' && s !== 'save' && s !== 'board') return false;
     if (s === 'title') {
       const hit = (b: { x: number; y: number; w: number; h: number }) => gx >= b.x && gx <= b.x + b.w && gy >= b.y && gy <= b.y + b.h;
       if (hit(TITLE_FIGHTER_BTN)) {
@@ -375,6 +432,10 @@ export class Game implements GameCtx {
         this.titleTrack = true;
         this.audio.playTrack('title');
       }
+    } else if (a.act === 'viewtx') {
+      if (a.txid) window.open('https://allo.info/tx/' + a.txid, '_blank');
+    } else if (a.act === 'share') {
+      this.execBoardShare(a.which);
     }
   }
 
@@ -391,10 +452,47 @@ export class Game implements GameCtx {
     this.saveErr = '';
     this.saveTxid = '';
     this.saveFocus = 0;
+    this.saveMsg = '';
+    this.saveRank = null;
+    this.sharePostedX = false;
+    this.sharePostedTG = false;
+    this.shareCard = null;
+    this.shareDownloaded = false;
     this.saveBest(); // best score persists locally regardless of the seal
     this.setScene('save');
     this.ensureMsgInput();
     this.audio.uiSelect();
+  }
+
+  // v9.2: FIGHT ON (countdown continue — infinite continues, still counted)
+  private continueRun(): void {
+    this.continuesUsed++;
+    this.player.lives = 2;
+    this.player.hp = this.player.maxHp;
+    this.player.state = 'getup';
+    this.player.t = 0;
+    this.player.z = 0;
+    this.player.invuln = 120;
+    this.setScene('play');
+    if (this.stage) this.audio.playTrack(this.boss ? this.stage.bossTrack : this.stage.track);
+    this.audio.uiSelect();
+  }
+
+  // v9.2: SEAL MY RECORD mid-countdown — pixel burst, then the SEAL overlay
+  private sealFromCountdown(): void {
+    for (let i = 0; i < 26; i++) {
+      const a = (i / 26) * Math.PI * 2;
+      this.sealBurst.push({
+        x: VW / 2,
+        y: 116,
+        vx: Math.cos(a) * (1.2 + (i % 4) * 0.5),
+        vy: Math.sin(a) * (1.2 + (i % 3) * 0.5) - 0.6,
+        t: 34 + (i % 5) * 5,
+        gold: (i & 1) === 0,
+      });
+    }
+    this.audio.rankUp();
+    this.openSave(0);
   }
 
   private saveBest(): void {
@@ -428,9 +526,13 @@ export class Game implements GameCtx {
   private saveButtons(): SaveButton[] {
     if (this.savePhase === 'busy') return [];
     if (this.savePhase === 'done' || this.savePhase === 'pending') {
+      // v9.2: the SEALED screen — viral dual-share with ✓ POSTED states
       return [
-        { id: 'viewtx', label: 'VIEW TX', x: 92, y: 172, w: 90, h: 18 },
-        { id: 'done', label: 'DONE', x: 202, y: 172, w: 90, h: 18 },
+        { id: 'sharex', label: 'SHARE ON X', x: 30, y: 126, w: 150, h: 16, icon: 'x', posted: this.sharePostedX },
+        { id: 'sharetg', label: 'SHARE ON TELEGRAM', x: 204, y: 126, w: 150, h: 16, icon: 'tg', posted: this.sharePostedTG },
+        { id: 'sharegen', label: 'SHARE', x: 30, y: 148, w: 100, h: 16 },
+        { id: 'viewtx', label: 'VIEW TX', x: 142, y: 148, w: 100, h: 16 },
+        { id: 'done', label: 'DONE', x: 254, y: 148, w: 100, h: 16 },
       ];
     }
     if (this.savePhase === 'error') {
@@ -463,6 +565,15 @@ export class Game implements GameCtx {
         break;
       case 'viewtx':
         if (this.saveTxid) window.open('https://allo.info/tx/' + this.saveTxid, '_blank');
+        break;
+      case 'sharex':
+        this.execShare('x');
+        break;
+      case 'sharetg':
+        this.execShare('tg');
+        break;
+      case 'sharegen':
+        this.execShare('generic');
         break;
       case 'skip':
       case 'done':
@@ -530,9 +641,13 @@ export class Game implements GameCtx {
     if (!this.saveRec || this.savePhase === 'busy') return;
     const rec = this.saveRec;
     const msg = this.msgInput ? this.msgInput.value : '';
+    this.saveMsg = msg;
     this.savePhase = 'busy';
     this.saveErr = '';
     this.audio.rankUp();
+    // v9.2: THE SEAL MOMENT begins — ACT 1 SIGNING while the wallet works
+    this.sealAnim.start({ score: rec.score, win: rec.win, continues: rec.continues, skin: rec.fighter.skin });
+    this.setScene('sealanim');
     seal
       .seal({
         score: rec.score,
@@ -542,19 +657,127 @@ export class Game implements GameCtx {
         assetId: rec.fighter.assetId,
         skin: rec.fighter.skin,
         msg,
+        // v9.2 note v2: pause-immune frame time + deaths + best combo
+        timeSec: Math.round(this.totalFrames / 60),
+        deaths: this.deaths,
+        maxCombo: this.maxCombo,
       })
       .then((o) => {
         this.saveTxid = o.txid;
         this.savePhase = o.status === 'sealed' ? 'done' : 'pending';
-        this.saveFocus = 1; // DONE
-        this.audio.fanfare();
+        this.sealAnim.confirm(o.round); // ACT 2: freeze -> flash -> GONG
+        // rank for the ACT 4 reveal: leaderboard fetch, SEALED FOREVER if unknown
+        const addr = wallet.getWallet().address;
+        const round = o.round > 0 ? o.round : Number.MAX_SAFE_INTEGER;
+        board
+          .fetchBoard(false)
+          .then((d) => {
+            if (d.status === 'ready' && addr) {
+              this.saveRank = board.rankOfEntry({ sender: addr, score: rec.score, continues: rec.continues, round });
+              this.sealAnim.rank = this.saveRank;
+            }
+          })
+          .catch(() => { /* offline: SEALED FOREVER */ });
       })
       .catch((e: unknown) => {
         console.error('[gonna] seal failed:', e);
         this.saveErr = (e instanceof Error ? e.message : 'SEAL FAILED').toUpperCase().slice(0, 38);
         this.savePhase = 'error';
         this.saveFocus = 0;
+        if (this.scene === 'sealanim') this.setScene('save'); // no show on a failed seal
       });
+  }
+
+  // ---------- v9.2: VIRAL SHARE ----------
+  private buildShareRec(): share.ShareRec | null {
+    const rec = this.saveRec;
+    if (!rec) return null;
+    return {
+      score: rec.score,
+      stage: rec.stage,
+      win: rec.win,
+      continues: rec.continues,
+      timeSec: Math.round(this.totalFrames / 60),
+      maxCombo: this.maxCombo,
+      assetId: rec.fighter.assetId ?? 0,
+      skin: rec.fighter.skin,
+      fighter: rec.fighter.name,
+      msg: this.saveMsg,
+      crown: rec.win === 1 && rec.continues === 0,
+      rank: this.saveRank,
+    };
+  }
+
+  private execShare(which: 'x' | 'tg' | 'generic'): void {
+    const r = this.buildShareRec();
+    if (!r) return;
+    if (!this.shareCard) {
+      const fr = this.pframes ?? this.frames;
+      this.shareCard = share.renderCard(r, fr.get('0_0') ?? null);
+    }
+    // the 1200x630 card auto-downloads on the FIRST share
+    if (!this.shareDownloaded) {
+      this.shareDownloaded = true;
+      share.downloadCard(this.shareCard.canvas);
+    }
+    if (which === 'x') {
+      this.sharePostedX = true;
+      window.open(share.shareUrlX(r), '_blank');
+    } else if (which === 'tg') {
+      this.sharePostedTG = true;
+      window.open(share.shareUrlTG(r), '_blank');
+    } else {
+      void share.nativeShare(this.shareCard.canvas, share.shareTextX(r)).then((ok) => {
+        if (!ok && this.shareCard && this.shareDownloaded === false) share.downloadCard(this.shareCard.canvas);
+      });
+    }
+    this.audio.uiSelect();
+  }
+
+  // share straight from a RUN CARD (L3 of THE ARENA)
+  private execBoardShare(which: 'x' | 'tg' | 'generic'): void {
+    const e = this.board.currentRun;
+    if (!e) return;
+    if (this.boardShareTxid !== e.txid) {
+      // a fresh run card: reset the posted states
+      this.boardShareTxid = e.txid;
+      this.boardPostedX = false;
+      this.boardPostedTG = false;
+      this.boardCard = null;
+    }
+    const nft = e.assetId > 0 ? skinForAsset(e.assetId) : null;
+    const r: share.ShareRec = {
+      score: e.score,
+      stage: e.stage,
+      win: e.win,
+      continues: e.continues,
+      timeSec: e.timeSec,
+      maxCombo: e.maxCombo,
+      assetId: e.assetId,
+      skin: e.skin,
+      fighter: nft ? nft.name.trim() : 'GONNA',
+      msg: e.msg,
+      crown: board.isCrown(e),
+      rank: board.rankOfEntry(e),
+    };
+    if (!this.boardCard) {
+      const sprite = e.skin === 'gonna' ? (this.frames.get('0_0') ?? null) : skinPortrait(e.skin);
+      this.boardCard = share.renderCard(r, sprite);
+    }
+    const card = this.boardCard;
+    if (which === 'x') {
+      this.boardPostedX = true;
+      share.downloadCard(card.canvas);
+      window.open(share.shareUrlX(r), '_blank');
+    } else if (which === 'tg') {
+      this.boardPostedTG = true;
+      share.downloadCard(card.canvas);
+      window.open(share.shareUrlTG(r), '_blank');
+    } else {
+      share.downloadCard(card.canvas);
+      void share.nativeShare(card.canvas, share.shareTextX(r));
+    }
+    this.audio.uiSelect();
   }
 
   // ---------- v9.1: DOM message input (native mobile keyboards, accessible) ----------
@@ -865,8 +1088,11 @@ export class Game implements GameCtx {
     err: string;
     txid: string;
     msg: string;
+    rank: number | null;
+    postedX: boolean;
+    postedTG: boolean;
     rec: { score: number; stage: number; win: 0 | 1; continues: number; fighter: { skin: string; assetId: number | null; name: string } } | null;
-    buttons: { id: string; label: string; x: number; y: number; w: number; h: number }[];
+    buttons: { id: string; label: string; x: number; y: number; w: number; h: number; icon?: string | null; posted?: boolean }[];
   } {
     const rec = this.saveRec;
     return {
@@ -874,11 +1100,68 @@ export class Game implements GameCtx {
       err: this.saveErr,
       txid: this.saveTxid,
       msg: this.msgInput ? this.msgInput.value : '',
+      rank: this.saveRank,
+      postedX: this.sharePostedX,
+      postedTG: this.sharePostedTG,
       rec: rec
         ? { score: rec.score, stage: rec.stage, win: rec.win, continues: rec.continues, fighter: { skin: rec.fighter.skin, assetId: rec.fighter.assetId, name: rec.fighter.name } }
         : null,
       buttons: this.scene === 'save' ? this.saveButtons() : [],
     };
+  }
+  // ---- v9.2: THE SEAL MOMENT / VIRAL SHARE / ARENA / FULLSCREEN GUIDE ----
+  get sealAnimInfo(): { scene: boolean; act: number; actT: number; flash: string; candles: number; block: number; rank: number | null; done: boolean; skipped: boolean } {
+    return { scene: this.scene === 'sealanim', ...this.sealAnim.info };
+  }
+  get shareInfo(): {
+    xText: string;
+    tgText: string;
+    xUrl: string;
+    tgUrl: string;
+    signature: string;
+    postedX: boolean;
+    postedTG: boolean;
+    card: { w: number; h: number; hasMsg: boolean; hasSkrrt: boolean; texts: string[] } | null;
+    boardCard: { w: number; h: number; hasMsg: boolean; hasSkrrt: boolean; texts: string[] } | null;
+  } {
+    const r = this.buildShareRec();
+    const cardInfo = (c: share.CardResult | null) =>
+      c ? { w: c.canvas.width, h: c.canvas.height, hasMsg: c.hasMsg, hasSkrrt: c.texts.some((t) => t.includes('SKRRT')), texts: c.texts } : null;
+    return {
+      xText: r ? share.shareTextX(r) : '',
+      tgText: r ? share.shareTextTG(r) : '',
+      xUrl: r ? share.shareUrlX(r) : '',
+      tgUrl: r ? share.shareUrlTG(r) : '',
+      signature: share.SIGNATURE,
+      postedX: this.sharePostedX,
+      postedTG: this.sharePostedTG,
+      card: cardInfo(this.shareCard),
+      boardCard: cardInfo(this.boardCard),
+    };
+  }
+  get fsGuideInfo(): { platform: string | null; standalone: boolean; installAvail: boolean; visible: boolean; dismissed: boolean; autoShown: boolean; installFired: boolean } {
+    return this.guide.info;
+  }
+  get continueInfo(): { count: number; continuesUsed: number; fightBtn: { x: number; y: number; w: number; h: number }; sealBtn: { x: number; y: number; w: number; h: number } } {
+    return { count: this.continueCount, continuesUsed: this.continuesUsed, fightBtn: CONTINUE_FIGHT_BTN, sealBtn: CONTINUE_SEAL_BTN };
+  }
+  // CI: the generated 1200x630 share card as a PNG data URL (saved by the suite)
+  debugCardPng(): string | null {
+    return this.shareCard ? this.shareCard.canvas.toDataURL('image/png') : null;
+  }
+  debugBoardCardPng(): string | null {
+    return this.boardCard ? this.boardCard.canvas.toDataURL('image/png') : null;
+  }
+  // CI: build the share card without tapping (layout/PNG checks)
+  debugRenderCard(): void {
+    const r = this.buildShareRec();
+    if (!r) return;
+    const fr = this.pframes ?? this.frames;
+    this.shareCard = share.renderCard(r, fr.get('0_0') ?? null);
+  }
+  // CI: reopen / state-control for the FULLSCREEN GUIDE
+  debugReopenGuide(): void {
+    this.guide.reopen();
   }
   get lastSeal(): seal.SealDebug | null {
     return seal.sealDebug.last;
@@ -930,6 +1213,8 @@ export class Game implements GameCtx {
     this.stageIdx = 0;
     this.finalVictory = false;
     this.continuesUsed = 0; // v9.1: per-run counter, reset on a new run
+    this.deaths = 0; // v9.2 note v2 telemetry
+    this.maxCombo = 0;
     this.player.lives = 2;
     this.loadStage(0);
     this.scene = 'intro';
@@ -974,13 +1259,31 @@ export class Game implements GameCtx {
       // v7: P/ESC resumes from desktop too (touch resumes via the II button)
       if (this.input.pressed.pause) {
         this.input.pressed.pause = false;
-        this.togglePause();
+        // v9.2: with the FULLSCREEN GUIDE up, ESC dismisses the card instead
+        if (this.guide.visible) this.guide.keyStart();
+        else this.togglePause();
       }
       this.input.postUpdate(); // swallow buffered edges while frozen
       return;
     }
     this.frame++;
     const inp = this.input;
+    // v9.2: SEAL-during-countdown pixel burst (short-lived overlay particles)
+    if (this.sealBurst.length > 0) {
+      for (const p of this.sealBurst) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.08;
+        p.t--;
+      }
+      this.sealBurst = this.sealBurst.filter((p) => p.t > 0);
+    }
+    // v9.2: the FULLSCREEN GUIDE card swallows START/ESC while it is up
+    if (this.guide.visible && (inp.pressed.start || inp.pressed.pause)) {
+      this.guide.keyStart();
+      inp.pressed.start = false;
+      inp.pressed.pause = false;
+    }
     if (inp.pressed.mute) {
       this.audio.toggleMute();
       inp.pressed.mute = false;
@@ -995,6 +1298,7 @@ export class Game implements GameCtx {
     switch (this.scene) {
       case 'title': {
         this.sceneT++;
+        this.guide.maybeAutoShow('title'); // v9.2: one-shot FULLSCREEN GUIDE
         if (inp.pressed.fighter) this.openFighter(); // v9: T = CHOOSE YOUR FIGHTER
         else if (inp.pressed.special) this.openConnectTitle(); // v9.0.1: C = CONNECT WALLET
         else if (inp.pressedCodes.has('KeyL')) this.openBoard(); // v9.1: L = GLOBAL LEADERBOARD
@@ -1065,20 +1369,35 @@ export class Game implements GameCtx {
           this.continueCount--;
           this.audio.uiMove();
         }
+        // v9.2: INTERACTIVE COUNTDOWN — 3-way choice DURING the countdown
         if (inp.pressed.start) {
-          // v9.1: infinite continues — the run counts them (BYZANTINE CLEAR = 0)
-          this.continuesUsed++;
-          this.player.lives = 2;
-          this.player.hp = this.player.maxHp;
-          this.player.state = 'getup';
-          this.player.t = 0;
-          this.player.z = 0;
-          this.player.invuln = 120;
-          this.setScene('play');
-          if (this.stage) this.audio.playTrack(this.boss ? this.stage.bossTrack : this.stage.track);
-          this.audio.uiSelect();
+          this.continueRun(); // [FIGHT ON]
+        } else if (inp.pressedCodes.has('KeyS')) {
+          this.sealFromCountdown(); // [SEAL MY RECORD] mid-countdown
+        } else if (inp.pressed.pause) {
+          inp.pressed.pause = false;
+          this.openSave(0); // ESC: WALK AWAY with the record
         } else if (this.continueCount < 0) {
           this.openSave(0); // v9.1: run over -> SAVE RECORD
+        }
+        break;
+      }
+      case 'sealanim': {
+        // v9.2: THE SEAL MOMENT — 4 acts, skippable, then the SEALED screen
+        this.sceneT++;
+        const cue = this.sealAnim.update();
+        if (cue.gong) this.audio.gong();
+        if (cue.triumph) this.audio.triumph();
+        if (cue.thud) this.audio.thud();
+        if (cue.tick) this.audio.uiMove();
+        if (inp.pressed.start) this.sealAnim.skip();
+        else if (inp.pressed.pause) {
+          inp.pressed.pause = false;
+          this.sealAnim.skip();
+        }
+        if (this.sealAnim.done) {
+          this.saveFocus = 99; // DONE (clamped to the last button)
+          this.setScene('save');
         }
         break;
       }
@@ -1116,6 +1435,8 @@ export class Game implements GameCtx {
     this.totalFrames++;
     this.timeLeft -= 1 / 60;
     if (this.timeLeft < 0) this.timeLeft = 0;
+    // v9.2 note v2: best combo chain this run
+    if (this.player.comboHits > this.maxCombo) this.maxCombo = this.player.comboHits;
 
     if (this.freezeT > 0) {
       this.freezeT--;
@@ -1198,6 +1519,7 @@ export class Game implements GameCtx {
     // player death
     if (p.state === 'dead' && p.t > 100) {
       p.lives--;
+      this.deaths++; // v9.2 note v2 telemetry
       if (p.lives >= 0) {
         p.hp = p.maxHp;
         p.state = 'getup';
@@ -1482,6 +1804,28 @@ export class Game implements GameCtx {
 
   // ---------- render ----------
   render(): void {
+    this.renderMain();
+    const c = this.ctx;
+    // v9.2: SEAL-during-countdown pixel burst rides over the scene
+    if (this.sealBurst.length > 0) {
+      c.save();
+      this.fitView(false);
+      for (const p of this.sealBurst) {
+        c.fillStyle = p.gold ? '#f5c542' : '#39FF14';
+        c.fillRect(Math.round(p.x), Math.round(p.y), 2, 2);
+      }
+      c.restore();
+    }
+    // v9.2: the FULLSCREEN GUIDE card draws above everything, every scene
+    if (this.guide.visible) {
+      c.save();
+      this.fitView(false);
+      this.guide.draw(c, this.frame);
+      c.restore();
+    }
+  }
+
+  private renderMain(): void {
     const c = this.ctx;
     const f = this.fit;
     c.imageSmoothingEnabled = false;
@@ -1498,7 +1842,8 @@ export class Game implements GameCtx {
       !!this.stage &&
       s !== 'title' && s !== 'intro' && s !== 'victory' &&
       s !== 'connect' && s !== 'gate' && s !== 'fighter' && // v9
-      s !== 'save' && s !== 'board'; // v9.1
+      s !== 'save' && s !== 'board' && // v9.1
+      s !== 'sealanim'; // v9.2
     const zoomed = f.zoom && inStage;
     this.vScale = zoomed ? f.zoomScale : f.fitScale;
     this.vOffX = zoomed ? 0 : f.fitOffX; // ZOOM centers the cropped window via cropX
@@ -1570,6 +1915,7 @@ export class Game implements GameCtx {
           buttons: btns,
           focus: Math.min(this.saveFocus, Math.max(0, btns.length - 1)),
           touch: this.touchActive,
+          rank: this.saveRank,
         });
       }
       c.restore();
@@ -1579,6 +1925,14 @@ export class Game implements GameCtx {
       c.save();
       this.fitView(true);
       this.board.draw(c, this.frame, this.frames, this.touchActive);
+      c.restore();
+      return;
+    }
+    // v9.2: THE SEAL MOMENT (4-act animation, skin-aware frames)
+    if (this.scene === 'sealanim') {
+      c.save();
+      this.fitView(true);
+      this.sealAnim.draw(c, this.pframes ?? this.frames);
       c.restore();
       return;
     }
@@ -1628,7 +1982,7 @@ export class Game implements GameCtx {
     drawHud(c, this, this.score, this.timeLeft, this.goArrow, this.frame, this.audio.muted);
     if (this.scene === 'clear') drawClear(c, this.tally, this.score);
     if (this.scene === 'gameover') drawGameOver(c, this.sceneT);
-    if (this.scene === 'continue') drawContinue(c, this.continueCount, this.sceneT, this.continuesUsed);
+    if (this.scene === 'continue') drawContinue(c, this.continueCount, this.sceneT, this.continuesUsed, this.touchActive);
     if (this.boss && !this.boss.alive) drawMarketCap(c, this.boss.t, this.boss.deathLine);
 
     // v6/v7: pause veil (touch II button, desktop P/ESC)
@@ -1637,6 +1991,21 @@ export class Game implements GameCtx {
       c.fillRect(0, 0, VW, VH);
       drawTextSh(c, 'PAUSED', VW / 2, 96, 3, '#f5c542', 'center');
       drawTextSh(c, this.touchActive ? 'TAP II TO RESUME' : 'P / ESC TO RESUME', VW / 2, 124, 1, '#c8ccd4', 'center');
+      // v9.2: tiny ⛶ icon reopens the FULLSCREEN GUIDE anytime
+      const g = PAUSE_FS_ICON;
+      c.fillStyle = '#0d1118';
+      c.fillRect(g.x, g.y, g.w, g.h);
+      c.strokeStyle = '#39FF14';
+      c.lineWidth = 1;
+      c.strokeRect(g.x + 0.5, g.y + 0.5, g.w - 1, g.h - 1);
+      const gx0 = g.x + 5;
+      const gy0 = g.y + 5;
+      c.fillStyle = '#39FF14';
+      // four corner brackets (fullscreen glyph)
+      c.fillRect(gx0, gy0, 5, 2); c.fillRect(gx0, gy0, 2, 5);
+      c.fillRect(gx0 + 7, gy0, 5, 2); c.fillRect(gx0 + 10, gy0, 2, 5);
+      c.fillRect(gx0, gy0 + 10, 5, 2); c.fillRect(gx0, gy0 + 7, 2, 5);
+      c.fillRect(gx0 + 7, gy0 + 10, 5, 2); c.fillRect(gx0 + 10, gy0 + 7, 2, 5);
     }
     c.restore(); // overlay view
   }

@@ -549,16 +549,8 @@ export class TouchControls {
       this.sysBtn(c, this.zoomR, this.hooks.zoomOn());
       drawText(c, 'Z', Math.round(this.zoomR.x + this.zoomR.w / 2 - 3 * this.sysScale), Math.round(this.zoomR.y + this.zoomR.h / 2 - 4 * this.sysScale), this.sysScale, this.hooks.zoomOn() ? '#7fd858' : '#e8ecf4');
 
-      // ---- portrait fullscreen tip banner (dead space below sys row) ----
-      if (f.portrait) {
-        const s = Math.max(1, Math.round(f.fitScale));
-        const tipY = Math.round(this.joyTop + 12);
-        const l1 = 'FOR TRUE FULLSCREEN:';
-        const l2 = 'ADD TO HOME SCREEN';
-        const cx = Math.round(f.cssW / 2);
-        drawText(c, l1, cx - Math.round((l1.length * 6 * s) / 2), tipY, s, '#8a8f9c');
-        drawText(c, l2, cx - Math.round((l2.length * 6 * s) / 2), tipY + 10 * s, s, '#f5c542');
-      }
+      // v9.2: the permanent "FOR TRUE FULLSCREEN" tip banner is GONE — the
+      // one-shot FULLSCREEN GUIDE card (fsguide.ts) owns that message now.
 
       // ---- arcade buttons ----
       for (const b of this.pad) {

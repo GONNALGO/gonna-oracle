@@ -2,6 +2,11 @@
 import { drawText, drawTextSh, textWidth } from './font';
 import { VH, VW } from './types';
 import type { Art } from './sprites';
+import { fmtScore } from './board';
+import { drawIconTG, drawIconX } from './shareicons';
+import { drawSealedBg } from './sealanim';
+
+const FLUO = '#39FF14'; // v9.2 bullrun green
 
 // Byzantine mosaic border
 export function mosaicBorder(ctx: CanvasRenderingContext2D): void {
@@ -85,7 +90,7 @@ export function drawTitle(
   ctx.scale(-1, 1);
   ctx.drawImage(art.lizIcon, 0, 0, m[1].w, m[1].h);
   ctx.restore();
-  drawText(ctx, 'V9.1 SEAL', VW - textWidth('V9.1 SEAL', 1) - 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, 'V9.2 THE ARENA', VW - textWidth('V9.2 THE ARENA', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 
@@ -129,14 +134,38 @@ export function drawGameOver(ctx: CanvasRenderingContext2D, t: number): void {
 
 // v9.1: continues are infinite — the run simply counts them (BYZANTINE CLEAR
 // = win with 0 continues, crowned on the leaderboard)
-export function drawContinue(ctx: CanvasRenderingContext2D, count: number, t: number, continuesUsed = 0): void {
+// v9.2: the countdown is INTERACTIVE — 3-way choice DURING the countdown:
+// [FIGHT ON] (ENTER / green button) / [SEAL MY RECORD] (S / gold button) /
+// walk away (ESC or let it expire -> the save screen)
+export const CONTINUE_FIGHT_BTN = { x: 62, y: 168, w: 120, h: 18 };
+export const CONTINUE_SEAL_BTN = { x: 202, y: 168, w: 120, h: 18 };
+export function drawContinue(ctx: CanvasRenderingContext2D, count: number, t: number, continuesUsed = 0, touch = false): void {
   ctx.fillStyle = 'rgba(5,6,10,0.88)';
   ctx.fillRect(0, 0, VW, VH);
   mosaicBorder(ctx);
-  drawTextSh(ctx, 'CONTINUE?', VW / 2, 70, 3, '#ffffff', 'center');
-  drawTextSh(ctx, String(count), VW / 2, 104, 5, count <= 3 ? '#e23b3b' : '#f5c542', 'center');
-  drawText(ctx, 'CONTINUES USED: ' + continuesUsed, VW / 2, 142, 1, '#8a8f9c', 'center');
-  if ((t & 16) !== 0) drawTextSh(ctx, 'PRESS ENTER', VW / 2, 160, 1, '#7fd858', 'center');
+  drawTextSh(ctx, 'CONTINUE?', VW / 2, 56, 3, '#ffffff', 'center');
+  drawTextSh(ctx, String(count), VW / 2, 88, 5, count <= 3 ? '#e23b3b' : '#f5c542', 'center');
+  drawText(ctx, 'CONTINUES USED: ' + continuesUsed, VW / 2, 128, 1, '#8a8f9c', 'center');
+  // FIGHT ON (green)
+  const f = CONTINUE_FIGHT_BTN;
+  ctx.fillStyle = '#0f2408';
+  ctx.fillRect(f.x, f.y, f.w, f.h);
+  ctx.strokeStyle = (t & 16) !== 0 ? '#7fd858' : '#3fae4a';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(f.x + 0.5, f.y + 0.5, f.w - 1, f.h - 1);
+  drawTextSh(ctx, 'FIGHT ON', f.x + f.w / 2, f.y + 5, 1, '#7fd858', 'center');
+  // SEAL MY RECORD (gold)
+  const s = CONTINUE_SEAL_BTN;
+  ctx.fillStyle = '#14100a';
+  ctx.fillRect(s.x, s.y, s.w, s.h);
+  ctx.strokeStyle = (t & 16) !== 0 ? '#f5c542' : '#b8860b';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(s.x + 0.5, s.y + 0.5, s.w - 1, s.h - 1);
+  drawTextSh(ctx, 'SEAL MY RECORD', s.x + s.w / 2, s.y + 5, 1, '#f5c542', 'center');
+  if (!touch) {
+    if ((t & 16) !== 0) drawText(ctx, 'ENTER FIGHT ON - S SEAL', VW / 2, 196, 1, '#7fd858', 'center');
+    drawText(ctx, 'ESC WALK AWAY', VW / 2, 208, 1, '#5a5f6c', 'center');
+  }
 }
 
 export interface FinalStats {
@@ -240,6 +269,8 @@ export interface SaveButton {
   y: number;
   w: number;
   h: number;
+  icon?: 'x' | 'tg' | null; // v9.2 viral share pixel icon
+  posted?: boolean; // v9.2 "✓ POSTED!" state (still tappable to re-post)
 }
 export interface SaveView {
   score: number;
@@ -256,22 +287,68 @@ export interface SaveView {
   buttons: SaveButton[];
   focus: number;
   touch: boolean;
+  rank: number | null; // v9.2: "#N IN THE GONNAVERSE" on the SEALED screen
 }
 // the DOM message input overlays this exact rect (engine keeps it in sync)
 export const SAVE_MSG_RECT = { x: 62, y: 108, w: 260, h: 20 };
 
 export function drawSaveRecord(ctx: CanvasRenderingContext2D, t: number, v: SaveView): void {
-  ctx.fillStyle = '#070a14';
-  ctx.fillRect(0, 0, VW, VH);
-  for (let i = 0; i < 28; i++) {
-    const sx = (i * 137 + ((t >> 3) * (1 + (i & 3)))) % VW;
-    const sy = (i * 71) % VH;
-    ctx.fillStyle = (i & 1) ? '#101a30' : '#14202a';
-    ctx.fillRect(sx, sy, 1, 1);
+  // v9.2: SEALED phases get the bullrun background (gentle rising candles)
+  if (v.phase === 'done' || v.phase === 'pending') {
+    drawSealedBg(ctx, t);
+  } else {
+    ctx.fillStyle = '#070a14';
+    ctx.fillRect(0, 0, VW, VH);
+    for (let i = 0; i < 28; i++) {
+      const sx = (i * 137 + ((t >> 3) * (1 + (i & 3)))) % VW;
+      const sy = (i * 71) % VH;
+      ctx.fillStyle = (i & 1) ? '#101a30' : '#14202a';
+      ctx.fillRect(sx, sy, 1, 1);
+    }
+    mosaicBorder(ctx);
   }
-  mosaicBorder(ctx);
-  drawTextSh(ctx, 'SAVE RECORD', VW / 2, 10, 2, '#f5c542', 'center', '#b8860b');
   const byzantine = v.win === 1 && v.continues === 0;
+
+  // ==================== v9.2: SEALED screen (after THE SEAL MOMENT) ==========
+  if (v.phase === 'done' || v.phase === 'pending') {
+    if (byzantine) drawCrown(ctx, VW / 2 - 76, 34);
+    drawTextSh(ctx, 'SEALED!', VW / 2 + (byzantine ? 8 : 0), 28, 3, FLUO, 'center', '#0a3d00');
+    if (v.phase === 'pending') {
+      drawText(ctx, 'CONFIRM PENDING - IT WILL LAND', VW / 2, 52, 1, '#f5c542', 'center');
+    } else if (v.rank !== null) {
+      drawTextSh(ctx, '#' + v.rank + ' IN THE GONNAVERSE', VW / 2, 52, 1, FLUO, 'center', '#0a3d00');
+    } else {
+      drawText(ctx, 'SEALED FOREVER', VW / 2, 52, 1, '#c8ccd4', 'center');
+    }
+    drawText(ctx, fmtScore(v.score), VW / 2, 68, 1, '#f5c542', 'center');
+    drawText(ctx, 'TX ' + v.txid.slice(0, 20) + '...', VW / 2, 82, 1, '#8a8f9c', 'center');
+    if ((t & 32) !== 0) drawText(ctx, 'SHARE YOUR SEAL - THE CARD PNG IS YOURS', VW / 2, 96, 1, '#5a5f6c', 'center');
+    for (let i = 0; i < v.buttons.length; i++) {
+      const b = v.buttons[i];
+      const lit = i === v.focus;
+      const share = b.icon === 'x' || b.icon === 'tg';
+      const posted = b.posted === true;
+      ctx.fillStyle = posted ? '#0f2408' : lit ? '#142a10' : '#0d1118';
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.strokeStyle = lit ? '#f5c542' : share ? ((t & 16) !== 0 ? FLUO : '#1e8c0a') : '#3a3f4c';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+      let tx = b.x + b.w / 2;
+      if (b.icon === 'x') {
+        drawIconX(ctx, b.x + 8, b.y + 2, 1, posted ? '#8a8f9c' : FLUO, false);
+        tx += 9;
+      } else if (b.icon === 'tg') {
+        drawIconTG(ctx, b.x + 4, b.y + 2, 1, posted ? '#8a8f9c' : FLUO, false);
+        tx += 9;
+      }
+      drawText(ctx, posted ? 'POSTED!' : b.label, tx, b.y + Math.floor((b.h - 7) / 2), 1, posted ? FLUO : lit ? '#f5c542' : share ? '#e8ecf4' : '#c8ccd4', 'center');
+      if (posted) drawText(ctx, 'OK', b.x + 6, b.y + Math.floor((b.h - 7) / 2), 1, FLUO);
+    }
+    if (!v.touch && (t & 32) !== 0) drawText(ctx, 'ARROWS + ENTER - ESC DONE', VW / 2, VH - 8, 1, '#5a5f6c', 'center');
+    return;
+  }
+
+  drawTextSh(ctx, 'SAVE RECORD', VW / 2, 10, 2, '#f5c542', 'center', '#b8860b');
   if (byzantine) {
     drawCrown(ctx, VW / 2 - 52, 30);
     drawText(ctx, 'BYZANTINE CLEAR!', VW / 2 - 36, 30, 1, '#f5c542');
@@ -302,12 +379,6 @@ export function drawSaveRecord(ctx: CanvasRenderingContext2D, t: number, v: Save
   // phase line
   if (v.phase === 'busy') {
     if ((t & 8) !== 0) drawTextSh(ctx, 'SEALING... SIGN IN YOUR WALLET', VW / 2, 148, 1, '#f5c542', 'center');
-  } else if (v.phase === 'done') {
-    drawTextSh(ctx, 'SEALED!', VW / 2, 144, 2, '#7fd858', 'center');
-    drawText(ctx, 'TX ' + v.txid.slice(0, 16) + '...', VW / 2, 164, 1, '#8a8f9c', 'center');
-  } else if (v.phase === 'pending') {
-    drawTextSh(ctx, 'SUBMITTED - CONFIRM PENDING', VW / 2, 146, 1, '#f5c542', 'center');
-    drawText(ctx, 'TX ' + v.txid.slice(0, 16) + '...', VW / 2, 160, 1, '#8a8f9c', 'center');
   } else if (v.phase === 'error') {
     drawTextSh(ctx, v.err || 'SEAL FAILED', VW / 2, 148, 1, '#e23b3b', 'center');
   }
