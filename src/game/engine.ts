@@ -37,6 +37,7 @@ import type { BoardAction } from './boardui';
 // ---- v9.2: THE ARENA ----
 import { SealMoment } from './sealanim';
 import * as share from './share';
+import { shareCheckRect, shareIconRect } from './shareicons';
 import { captureInstallPrompt, FsGuide } from './fsguide';
 
 type Scene = 'title' | 'intro' | 'play' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter' | 'save' | 'board' | 'sealanim';
@@ -123,11 +124,15 @@ export class Game implements GameCtx {
   private sharePostedX = false;
   private sharePostedTG = false;
   private shareCard: share.CardResult | null = null;
-  private shareDownloaded = false; // the card PNG auto-downloads on the FIRST share only
+  private shareCardUrl = ''; // v9.2.2: dataURL for the DOM <img> preview (replaces the auto-download)
   private boardShareTxid = ''; // run-card share state is per-txid
   private boardPostedX = false;
   private boardPostedTG = false;
   private boardCard: share.CardResult | null = null;
+  private boardCardUrl = '';
+  private boardPreviewHidden = false; // v9.2.2: RUN CARD preview dismissed via [X] / tap-outside
+  // v9.2.2: the share card as a REAL DOM <img> (right-click / long-press SAVE)
+  private cardPreview = new share.CardPreview();
   // v9.2.1: REAL DOM anchors overlaid on the pixel share buttons — a genuine
   // tap on a true <a target="_blank"> is the only way iOS fires universal
   // links into the X / Telegram apps (window.open was popup-blocked + web-only)
@@ -171,9 +176,18 @@ export class Game implements GameCtx {
     ctx.canvas.addEventListener('pointermove', this.onPointerMove);
     // v9 boot: wallet session restore + skin assets + persisted fighter
     wallet.init();
+    // v9.2.2: ATTEMPT the title music immediately on page load. Autoplay
+    // policy keeps the fresh AudioContext suspended (that is fine — the
+    // attempt is documented); on the FIRST pointer/key gesture anywhere,
+    // onAnyGesture() resumes the context and the already-loaded TITLE loop
+    // starts — music never waits for gameplay.
+    this.audio.ensure();
+    this.audio.playTrack('title');
+    this.titleTrack = true;
     // v9.2: capture the Android install prompt for the FULLSCREEN GUIDE
     captureInstallPrompt();
-    this.board.shareState = () => (this.board.currentLevel === 'run' ? { postedX: this.boardPostedX, postedTG: this.boardPostedTG } : null);
+    this.board.shareState = () =>
+      this.board.currentLevel === 'run' ? { postedX: this.boardPostedX, postedTG: this.boardPostedTG, preview: this.boardPreviewVisible } : null;
     // v9.0.1: the wallet app killed the session -> back to the connect scene
     wallet.onSessionEnded(() => {
       if (this.scene === 'gate' || this.scene === 'fighter') {
@@ -188,6 +202,9 @@ export class Game implements GameCtx {
 
   private onMouseDown = (e: PointerEvent): void => {
     if (e.pointerType === 'touch') return; // touch goes through TouchControls
+    // v9.2.2: a desktop mouse/touchpad pointerdown IS a first gesture too —
+    // resume the AudioContext + kick the title track on ANY pointer gesture
+    this.onAnyGesture();
     if (this.scene === 'board') this.swipeY = e.clientY;
     this.uiTap(e.clientX, e.clientY);
   };
@@ -260,6 +277,20 @@ export class Game implements GameCtx {
       return true; // never let a tap fall through to "press start"
     }
     if (s === 'board') {
+      // v9.2.2: the RUN CARD preview is dismissable — [X] box or tap-outside.
+      // (The DOM <img> itself swallows taps inside its rect; only outside taps
+      // reach the canvas, so any canvas tap outside the preview hides it.)
+      if (this.boardPreviewVisible) {
+        const dx = share.RUN_PREVIEW_X;
+        if (gx >= dx.x && gx <= dx.x + dx.w && gy >= dx.y && gy <= dx.y + dx.h) {
+          this.boardPreviewHidden = true;
+          this.audio.uiSelect();
+          return true;
+        }
+        const pr = share.RUN_PREVIEW_RECT;
+        const onPreview = gx >= pr.x && gx <= pr.x + pr.w && gy >= pr.y && gy <= pr.y + pr.h;
+        if (!onPreview) this.boardPreviewHidden = true; // tap-outside dismisses (buttons still act below)
+      }
       this.handleBoardAction(this.board.tap(gx, gy));
       return true;
     }
@@ -273,6 +304,7 @@ export class Game implements GameCtx {
     this.touch.setViewport(f);
     this.placeMsgInput(); // v9.1: keep the DOM overlay pixel-perfect
     this.syncShareAnchors(); // v9.2.1: same for the share anchors
+    this.syncCardPreview(); // v9.2.2: and the card preview <img>
   }
 
   // v6.1: portrait FIT <-> ZOOM toggle (touch ZOOM button)
@@ -463,7 +495,7 @@ export class Game implements GameCtx {
     this.sharePostedX = false;
     this.sharePostedTG = false;
     this.shareCard = null;
-    this.shareDownloaded = false;
+    this.shareCardUrl = '';
     this.saveBest(); // best score persists locally regardless of the seal
     this.setScene('save');
     this.ensureMsgInput();
@@ -532,13 +564,15 @@ export class Game implements GameCtx {
   private saveButtons(): SaveButton[] {
     if (this.savePhase === 'busy') return [];
     if (this.savePhase === 'done' || this.savePhase === 'pending') {
-      // v9.2: the SEALED screen — viral dual-share with ✓ POSTED states
+      // v9.2.2: the SEALED screen — viral dual-share with POSTED states, the
+      // card <img> preview sits above (SAVE_PREVIEW_RECT), taller 20px buttons
+      // so the new 18px fluo icons breathe
       return [
-        { id: 'sharex', label: 'SHARE ON X', x: 30, y: 126, w: 150, h: 16, icon: 'x', posted: this.sharePostedX },
-        { id: 'sharetg', label: 'SHARE ON TELEGRAM', x: 204, y: 126, w: 150, h: 16, icon: 'tg', posted: this.sharePostedTG },
-        { id: 'sharegen', label: 'SHARE', x: 30, y: 148, w: 100, h: 16 },
-        { id: 'viewtx', label: 'VIEW TX', x: 142, y: 148, w: 100, h: 16 },
-        { id: 'done', label: 'DONE', x: 254, y: 148, w: 100, h: 16 },
+        { id: 'sharex', label: 'SHARE ON X', x: 30, y: 152, w: 150, h: 20, icon: 'x', posted: this.sharePostedX },
+        { id: 'sharetg', label: 'SHARE ON TELEGRAM', x: 204, y: 152, w: 150, h: 20, icon: 'tg', posted: this.sharePostedTG },
+        { id: 'sharegen', label: 'SHARE', x: 30, y: 176, w: 100, h: 20 },
+        { id: 'viewtx', label: 'VIEW TX', x: 142, y: 176, w: 100, h: 20 },
+        { id: 'done', label: 'DONE', x: 254, y: 176, w: 100, h: 20 },
       ];
     }
     if (this.savePhase === 'error') {
@@ -747,19 +781,16 @@ export class Game implements GameCtx {
     this.shareAnchors.sync(defs, this.fit, this.touchActive);
   }
 
-  // posted state + the 1200x630 card (auto-download on the FIRST share) —
-  // called by the DOM anchor inside the SAME genuine tap; NO navigation here
+  // POSTED state + the 1200x630 card render — called by the DOM anchor inside
+  // the SAME genuine tap; NO navigation and NO download here (v9.2.2: the
+  // programmatic download click burned iOS's single-gesture navigation token,
+  // killing the app-scheme jump — the card lives in the DOM <img> preview now)
   private prepareSaveShare(which: 'x' | 'tg'): void {
     const r = this.buildShareRec();
     if (!r) return;
     if (!this.shareCard) {
       const fr = this.pframes ?? this.frames;
       this.shareCard = share.renderCard(r, fr.get('0_0') ?? null);
-    }
-    // the 1200x630 card auto-downloads on the FIRST share
-    if (!this.shareDownloaded) {
-      this.shareDownloaded = true;
-      share.downloadCard(this.shareCard.canvas);
     }
     if (which === 'x') this.sharePostedX = true;
     else this.sharePostedTG = true;
@@ -776,7 +807,6 @@ export class Game implements GameCtx {
     }
     if (which === 'x') this.boardPostedX = true;
     else this.boardPostedTG = true;
-    share.downloadCard(this.boardCard.canvas);
     this.audio.uiSelect();
   }
 
@@ -793,14 +823,8 @@ export class Game implements GameCtx {
       const fr = this.pframes ?? this.frames;
       this.shareCard = share.renderCard(r, fr.get('0_0') ?? null);
     }
-    // the 1200x630 card auto-downloads on the FIRST share
-    if (!this.shareDownloaded) {
-      this.shareDownloaded = true;
-      share.downloadCard(this.shareCard.canvas);
-    }
-    void share.nativeShare(this.shareCard.canvas, share.shareTextX(r)).then((ok) => {
-      if (!ok && this.shareCard && this.shareDownloaded === false) share.downloadCard(this.shareCard.canvas);
-    });
+    // v9.2.2: native share sheet only — the card is saved from the <img> preview
+    void share.nativeShare(this.shareCard.canvas, share.shareTextX(r));
     this.audio.uiSelect();
   }
 
@@ -817,9 +841,44 @@ export class Game implements GameCtx {
       const sprite = e.skin === 'gonna' ? (this.frames.get('0_0') ?? null) : skinPortrait(e.skin);
       this.boardCard = share.renderCard(r, sprite);
     }
-    share.downloadCard(this.boardCard.canvas);
     void share.nativeShare(this.boardCard.canvas, share.shareTextX(r));
     this.audio.uiSelect();
+  }
+
+  // v9.2.2: is the RUN CARD preview <img> up right now?
+  private get boardPreviewVisible(): boolean {
+    return this.scene === 'board' && this.board.currentLevel === 'run' && this.board.currentRun !== null && !this.boardPreviewHidden;
+  }
+
+  // v9.2.2: the card preview <img> (RIGHT CLICK SAVE) — SEALED screen (part of
+  // the layout) + RUN CARD (dismissable). Synced every frame like the anchors.
+  private syncCardPreview(): void {
+    if (typeof document === 'undefined') return;
+    if (this.scene === 'save' && this.saveRec && (this.savePhase === 'done' || this.savePhase === 'pending')) {
+      const r = this.buildShareRec();
+      if (r && !this.shareCard) {
+        const fr = this.pframes ?? this.frames;
+        this.shareCard = share.renderCard(r, fr.get('0_0') ?? null);
+      }
+      if (this.shareCard) {
+        if (!this.shareCardUrl) this.shareCardUrl = this.shareCard.canvas.toDataURL('image/png');
+        this.cardPreview.sync('save:' + this.saveTxid + ':' + this.savePhase, this.shareCardUrl, share.SAVE_PREVIEW_RECT, this.fit);
+        return;
+      }
+    } else if (this.scene === 'board' && this.board.currentLevel === 'run' && this.board.currentRun) {
+      const r = this.buildBoardShareRec(); // resets the per-txid state on a fresh card
+      const e = this.board.currentRun;
+      if (r && e && !this.boardCard) {
+        const sprite = e.skin === 'gonna' ? (this.frames.get('0_0') ?? null) : skinPortrait(e.skin);
+        this.boardCard = share.renderCard(r, sprite);
+      }
+      if (this.boardCard && e && !this.boardPreviewHidden) {
+        if (!this.boardCardUrl) this.boardCardUrl = this.boardCard.canvas.toDataURL('image/png');
+        this.cardPreview.sync('board:' + e.txid, this.boardCardUrl, share.RUN_PREVIEW_RECT, this.fit);
+        return;
+      }
+    }
+    this.cardPreview.clear();
   }
 
   // share record for the currently open RUN CARD (resets the per-txid posted
@@ -828,11 +887,13 @@ export class Game implements GameCtx {
     const e = this.board.currentRun;
     if (!e) return null;
     if (this.boardShareTxid !== e.txid) {
-      // a fresh run card: reset the posted states
+      // a fresh run card: reset the posted states + preview dismissal
       this.boardShareTxid = e.txid;
       this.boardPostedX = false;
       this.boardPostedTG = false;
       this.boardCard = null;
+      this.boardCardUrl = '';
+      this.boardPreviewHidden = false;
     }
     const nft = e.assetId > 0 ? skinForAsset(e.assetId) : null;
     return {
@@ -930,6 +991,7 @@ export class Game implements GameCtx {
     this.ctx.canvas.removeEventListener('pointermove', this.onPointerMove);
     this.removeMsgInput();
     this.shareAnchors.clear(); // v9.2.1: drop the DOM share anchors too
+    this.cardPreview.clear(); // v9.2.2: and the card preview <img>
     wallet.onSessionEnded(null);
     this.touch.destroy();
     this.input.destroy();
@@ -1113,7 +1175,7 @@ export class Game implements GameCtx {
     connectBtn: { x: number; y: number; w: number; h: number };
     boardBtn: { x: number; y: number; w: number; h: number };
     connectLabel: string;
-    boardLabel: string; // v9.2.1: ARENA on touch, L BOARD on desktop
+    boardLabel: string; // v9.2.2: ARENA on BOTH desktop and touch (L key unchanged)
     mascots: { x: number; y: number; w: number; h: number }[];
   } {
     return {
@@ -1122,7 +1184,7 @@ export class Game implements GameCtx {
       connectBtn: TITLE_CONNECT_BTN,
       boardBtn: TITLE_BOARD_BTN,
       connectLabel: wallet.isConnected() ? wallet.identityLabel(14) : 'CONNECT',
-      boardLabel: this.touchActive ? 'ARENA' : 'L BOARD',
+      boardLabel: 'ARENA', // v9.2.2: ARENA on BOTH desktop and touch ("voglio lo stesso nome"); desktop keeps the L key
       mascots: TITLE_MASCOTS,
     };
   }
@@ -1218,6 +1280,24 @@ export class Game implements GameCtx {
   // ---- v9.2.1: DOM share anchors (CI) ----
   get shareAnchorInfo(): { id: string; href: string; scheme: string | null; target: string; rel: string; css: { x: number; y: number; w: number; h: number } }[] {
     return this.shareAnchors.info();
+  }
+  // ---- v9.2.2: card preview <img> + icon layout + audio (CI) ----
+  get cardPreviewInfo(): { visible: boolean; src: string; cls: string; css: { x: number; y: number; w: number; h: number } | null; caption: string; boardDismissed: boolean } {
+    return { ...this.cardPreview.info(), caption: share.CARD_CAPTION, boardDismissed: this.boardPreviewHidden };
+  }
+  // icon vs POSTED-check bboxes on the live share buttons (no-overlap proof)
+  get shareIconLayout(): { id: string; icon: { x: number; y: number; w: number; h: number } | null; check: { x: number; y: number; w: number; h: number } }[] {
+    const out: { id: string; icon: { x: number; y: number; w: number; h: number } | null; check: { x: number; y: number; w: number; h: number } }[] = [];
+    const btns: { id: string; x: number; y: number; w: number; h: number; icon?: string | null }[] =
+      this.scene === 'save' ? this.saveButtons() : this.scene === 'board' && this.board.currentLevel === 'run' ? [...SHARE_BTNS] : [];
+    for (const b of btns) {
+      if (b.id !== 'sharex' && b.id !== 'sharetg' && b.id !== 'share:x' && b.id !== 'share:tg') continue;
+      out.push({ id: b.id, icon: shareIconRect(b), check: shareCheckRect(b) });
+    }
+    return out;
+  }
+  get audioInfo(): { state: string; track: string | null; unlocked: boolean; muted: boolean } {
+    return this.audio.info;
   }
   // CI: capture share navigations + fake page visibility for fallback tests.
   // collect != null -> navigations are recorded instead of executed;
@@ -1515,6 +1595,8 @@ export class Game implements GameCtx {
     }
     // v9.2.1: keep the DOM share anchors glued to their pixel buttons
     this.syncShareAnchors();
+    // v9.2.2: same for the card preview <img> (RIGHT CLICK SAVE)
+    this.syncCardPreview();
     // v4: while hit-stop / slow-mo freezes the sim, keep edge-presses buffered
     // so combo inputs are never swallowed by the freeze.
     if (this.holdInput) this.holdInput = false;

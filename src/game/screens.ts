@@ -3,7 +3,8 @@ import { drawText, drawTextSh, textWidth } from './font';
 import { VH, VW } from './types';
 import type { Art } from './sprites';
 import { fmtScore } from './board';
-import { drawCheck, drawIconTG, drawIconX } from './shareicons';
+import { drawCheck, drawIconTG, drawIconX, shareCheckRect, shareIconRect } from './shareicons';
+import { CARD_CAPTION } from './share';
 import { drawSealedBg } from './sealanim';
 
 const FLUO = '#39FF14'; // v9.2 bullrun green
@@ -83,13 +84,14 @@ export function drawTitle(
   if (fighterName) {
     drawText(ctx, 'FIGHTER: ' + fighterName, TITLE_FIGHTER_LABEL_X, 156, 1, '#f5c542');
   }
-  // v9.2.1: touch devices read ARENA (+ pixel crown) — there is no L key hint
-  drawTitleBtn(ctx, TITLE_BOARD_BTN, touch ? 'ARENA' : 'L BOARD', t, '#7fd858', touch);
+  // v9.2.2: ARENA (+ pixel crown) on BOTH desktop and touch — same name
+  // everywhere (user explicit); desktop keeps the L key (hint in the controls)
+  drawTitleBtn(ctx, TITLE_BOARD_BTN, 'ARENA', t, '#7fd858', true);
   drawTitleBtn(ctx, TITLE_CONNECT_BTN, connectLabel || (touch ? 'CONNECT' : 'C CONNECT'), t, connectColor);
   drawTitleBtn(ctx, TITLE_FIGHTER_BTN, touch ? 'FIGHTER' : 'T FIGHTER', t);
   // controls
   drawText(ctx, 'ARROWS/WASD MOVE  SPACE JUMP  C SPECIAL', VW / 2, 172, 1, '#8a8f9c', 'center');
-  drawText(ctx, 'Z PUNCH  X KICK  P PAUSE  M MUTE', VW / 2, 184, 1, '#8a8f9c', 'center');
+  drawText(ctx, touch ? 'Z PUNCH  X KICK  P PAUSE  M MUTE' : 'Z PUNCH  X KICK  P PAUSE  M MUTE  L ARENA', VW / 2, 184, 1, '#8a8f9c', 'center');
   // lizard mascots (flanking the logo, clear of every label/button below)
   const m = TITLE_MASCOTS;
   ctx.drawImage(art.lizIcon, m[0].x, m[0].y, m[0].w, m[0].h);
@@ -98,7 +100,7 @@ export function drawTitle(
   ctx.scale(-1, 1);
   ctx.drawImage(art.lizIcon, 0, 0, m[1].w, m[1].h);
   ctx.restore();
-  drawText(ctx, 'V9.2.1 THE ARENA', VW - textWidth('V9.2.1 THE ARENA', 1) - 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, 'V9.2.2 THE ARENA', VW - textWidth('V9.2.2 THE ARENA', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 
@@ -319,18 +321,23 @@ export function drawSaveRecord(ctx: CanvasRenderingContext2D, t: number, v: Save
 
   // ==================== v9.2: SEALED screen (after THE SEAL MOMENT) ==========
   if (v.phase === 'done' || v.phase === 'pending') {
-    if (byzantine) drawCrown(ctx, VW / 2 - 76, 34);
-    drawTextSh(ctx, 'SEALED!', VW / 2 + (byzantine ? 8 : 0), 28, 3, FLUO, 'center', '#0a3d00');
+    // v9.2.2 layout: compact header, the share card as a REAL DOM <img> preview
+    // in the middle (RIGHT CLICK SAVE), then the two share button rows.
+    if (byzantine) drawCrown(ctx, VW / 2 - 78, 12);
+    drawTextSh(ctx, 'SEALED!', VW / 2 + (byzantine ? 8 : 0), 6, 3, FLUO, 'center', '#0a3d00');
     if (v.phase === 'pending') {
-      drawText(ctx, 'CONFIRM PENDING - IT WILL LAND', VW / 2, 52, 1, '#f5c542', 'center');
+      drawText(ctx, 'CONFIRM PENDING - IT WILL LAND', VW / 2, 32, 1, '#f5c542', 'center');
     } else if (v.rank !== null) {
-      drawTextSh(ctx, '#' + v.rank + ' IN THE GONNAVERSE', VW / 2, 52, 1, FLUO, 'center', '#0a3d00');
+      drawTextSh(ctx, '#' + v.rank + ' IN THE GONNAVERSE', VW / 2, 32, 1, FLUO, 'center', '#0a3d00');
     } else {
-      drawText(ctx, 'SEALED FOREVER', VW / 2, 52, 1, '#c8ccd4', 'center');
+      drawText(ctx, 'SEALED FOREVER', VW / 2, 32, 1, '#c8ccd4', 'center');
     }
-    drawText(ctx, fmtScore(v.score), VW / 2, 68, 1, '#f5c542', 'center');
-    drawText(ctx, 'TX ' + v.txid.slice(0, 20) + '...', VW / 2, 82, 1, '#8a8f9c', 'center');
-    if ((t & 32) !== 0) drawText(ctx, 'SHARE YOUR SEAL - THE CARD PNG IS YOURS', VW / 2, 96, 1, '#5a5f6c', 'center');
+    drawText(ctx, fmtScore(v.score), 30, 42, 1, '#f5c542');
+    drawText(ctx, 'TX ' + v.txid.slice(0, 20) + '...', VW - 30, 42, 1, '#8a8f9c', 'right');
+    // the DOM <img> preview overlays SAVE_PREVIEW_RECT (112,52,160,84); the
+    // pixel caption sits right under it — the card is saved from the img
+    // (right-click / long-press), never auto-downloaded (v9.2.2)
+    drawText(ctx, CARD_CAPTION, VW / 2, 140, 1, FLUO, 'center');
     for (let i = 0; i < v.buttons.length; i++) {
       const b = v.buttons[i];
       const lit = i === v.focus;
@@ -342,17 +349,22 @@ export function drawSaveRecord(ctx: CanvasRenderingContext2D, t: number, v: Save
       ctx.lineWidth = 1;
       ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
       let tx = b.x + b.w / 2;
+      // v9.2.2: big 18px official icon, solid FLUO + subtle glow, LEFT side
       if (b.icon === 'x') {
-        drawIconX(ctx, b.x + 8, b.y + 2, 1, posted ? '#8a8f9c' : FLUO, false);
-        tx += 9;
+        const r = shareIconRect(b);
+        drawIconX(ctx, r.x, r.y, 1, FLUO, true);
+        tx += 11;
       } else if (b.icon === 'tg') {
-        drawIconTG(ctx, b.x + 4, b.y + 2, 1, posted ? '#8a8f9c' : FLUO, false);
-        tx += 9;
+        const r = shareIconRect(b);
+        drawIconTG(ctx, r.x, r.y, 1, FLUO, true);
+        tx += 11;
       }
       drawText(ctx, posted ? 'POSTED!' : b.label, tx, b.y + Math.floor((b.h - 7) / 2), 1, posted ? FLUO : lit ? '#f5c542' : share ? '#e8ecf4' : '#c8ccd4', 'center');
-      // v9.2.1: DRAWN pixel checkmark (✓ is not in the ASCII pixel font — it
-      // rendered as garbage glyphs on device); POSTED! stays text in fluo green
-      if (posted) drawCheck(ctx, b.x + 5, b.y + Math.floor((b.h - 6) / 2), 1, FLUO);
+      // v9.2.2: the DRAWN pixel checkmark hugs the RIGHT edge — the icon stays clean
+      if (posted) {
+        const r = shareCheckRect(b);
+        drawCheck(ctx, r.x, r.y, 1, FLUO);
+      }
     }
     if (!v.touch && (t & 32) !== 0) drawText(ctx, 'ARROWS + ENTER - ESC DONE', VW / 2, VH - 8, 1, '#5a5f6c', 'center');
     return;

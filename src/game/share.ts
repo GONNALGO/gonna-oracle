@@ -1,7 +1,10 @@
-// v9.2 — VIRAL SHARE. Official X / Telegram logos redrawn in pixel art,
-// FLUO GREEN #39FF14 on black; exact dual-share texts (signature ONLY in the
-// post text, NEVER on the card); 1200x630 PNG card rendered offscreen and
-// auto-downloaded on the first share; navigator.share({files}) when capable.
+// v9.2.2 — VIRAL SHARE v2. Official X / Telegram logos redrawn BIG in pixel
+// art, FLUO GREEN #39FF14 on black; exact dual-share texts (signature ONLY in
+// the post text, NEVER on the card); the 1200x630 PNG card is shown as a REAL
+// DOM <img> preview (right-click / long-press SAVE) — the auto-download is
+// GONE: on iOS its programmatic anchor click burned the single user-gesture
+// navigation token, so the twitter:// scheme jump never fired and the first
+// tap fell through to the web intent. Share taps are NAVIGATION-ONLY now.
 import { drawText, drawTextSh } from './font';
 import { stageName, fmtScore, fmtTime } from './board';
 import { buildStage } from './stages';
@@ -86,7 +89,7 @@ export interface ShareAnchorDef {
   href: string; // web intent (universal link)
   scheme: string | null; // app scheme attempted first on touch devices
   aria: string;
-  onTap: () => void; // posted state + card PNG download inside the SAME gesture
+  onTap: () => void; // POSTED state + sfx ONLY — v9.2.2: no download, nothing that could burn the iOS gesture token
 }
 
 const FALLBACK_MS = 1200; // ~1.2s: app did not take over -> web intent fallback
@@ -147,7 +150,7 @@ export class ShareAnchors {
   private onClick(id: string, e: MouseEvent): void {
     const d = this.defs.get(id);
     if (!d) return;
-    d.onTap(); // POSTED state + card PNG auto-download, inside the genuine tap
+    d.onTap(); // POSTED state + sfx — v9.2.2: NOTHING else (no download click; the gesture token belongs to the app jump)
     if (this.touch && d.scheme) {
       // touch: try the app FIRST (synchronous scheme attempt keeps the gesture
       // chain); if ~1.2s later the page is still visible the app is not
@@ -309,19 +312,72 @@ function drawAlgorandLogo(ctx: CanvasRenderingContext2D, x: number, y: number, s
   for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) if (px[r][c] === 'A') ctx.fillRect(x + c * s, y + r * s, s, s);
 }
 
-// ---- PNG download (mobile: lands as the newest photo in the gallery) ----
-export function downloadCard(cv: HTMLCanvasElement): void {
-  cv.toBlob((blob) => {
-    if (!blob) return;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'gonna-fight-seal.png';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 4000);
-  }, 'image/png');
+// ============================================================ CARD PREVIEW
+// v9.2.2 — the generated 1200x630 card shown as a REAL DOM <img> (dataURL):
+// right-click SAVE on desktop, long-press SAVE on iOS/Android (it is a real
+// image, not a canvas). Replaces the auto-download entirely — the share tap
+// must spend the single iOS gesture token on the APP navigation, never on a
+// programmatic download click.
+export const CARD_CAPTION = 'RIGHT CLICK SAVE'; // exact pixel caption under the img
+export const SAVE_PREVIEW_RECT = { x: 112, y: 52, w: 160, h: 84 }; // SEALED screen (part of the layout)
+export const RUN_PREVIEW_RECT = { x: 112, y: 44, w: 160, h: 84 }; // RUN CARD overlay (dismissable)
+export const RUN_PREVIEW_X = { x: 276, y: 44, w: 14, h: 14 }; // canvas [X] dismiss box (OUTSIDE the img)
+
+export class CardPreview {
+  private img: HTMLImageElement | null = null;
+  private sig = '';
+
+  // called every frame: mounts / positions / hides the preview img so it sits
+  // exactly on its canvas rect (same fit-sync technique as the share anchors)
+  sync(id: string | null, dataUrl: string | null, rect: { x: number; y: number; w: number; h: number } | null, fit: { fitOffX: number; fitOffY: number; fitScale: number }): void {
+    if (!id || !dataUrl || !rect) {
+      if (this.img) {
+        this.img.remove();
+        this.img = null;
+      }
+      this.sig = '';
+      return;
+    }
+    let el = this.img;
+    if (!el) {
+      el = document.createElement('img');
+      el.className = 'gonna-card-preview';
+      el.alt = 'GONNA FIGHT seal card - right click / long-press to save';
+      el.draggable = true;
+      // z-index 29: below the seal message input (30) and the share anchors (31)
+      el.style.cssText =
+        'position:fixed;z-index:29;display:block;box-sizing:border-box;' +
+        'border:1px solid ' + FLUO + ';background:#070a14;image-rendering:pixelated;' +
+        '-webkit-touch-callout:default;user-select:none;-webkit-user-select:none;';
+      document.body.appendChild(el);
+      this.img = el;
+      this.sig = '';
+    }
+    const left = Math.round(fit.fitOffX + rect.x * fit.fitScale);
+    const top = Math.round(fit.fitOffY + rect.y * fit.fitScale);
+    const w = Math.max(1, Math.round(rect.w * fit.fitScale));
+    const h = Math.max(1, Math.round(rect.h * fit.fitScale));
+    const sig = id + '|' + left + ',' + top + ',' + w + ',' + h;
+    if (this.sig !== sig) {
+      this.sig = sig;
+      el.src = dataUrl; // only when the card id changes — never re-set per frame
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+      el.style.width = w + 'px';
+      el.style.height = h + 'px';
+    }
+  }
+
+  clear(): void {
+    this.sync(null, null, null, { fitOffX: 0, fitOffY: 0, fitScale: 1 });
+  }
+
+  // CI: live DOM state of the preview img
+  info(): { visible: boolean; src: string; cls: string; css: { x: number; y: number; w: number; h: number } | null } {
+    if (!this.img) return { visible: false, src: '', cls: 'gonna-card-preview', css: null };
+    const r = this.img.getBoundingClientRect();
+    return { visible: true, src: this.img.src.slice(0, 32), cls: this.img.className, css: { x: r.x, y: r.y, w: r.width, h: r.height } };
+  }
 }
 
 // generic share: native sheet with the card file when capable

@@ -17,7 +17,8 @@ import * as wallet from './wallet';
 import * as board from './board';
 import type { BoardEntry, BoardTab, SortCol } from './board';
 import { SKIN_INFO, skinForAsset, skinPortrait } from './skins';
-import { drawCheck, drawIconTG, drawIconX } from './shareicons';
+import { drawCheck, drawIconTG, drawIconX, shareCheckRect, shareIconRect } from './shareicons';
+import { CARD_CAPTION, RUN_PREVIEW_X } from './share';
 
 const FLUO = '#39FF14';
 const PODIUM = ['#f5c542', '#c8ccd4', '#cd7f32']; // gold / silver / bronze
@@ -68,17 +69,20 @@ const COL_DEFS: { col: SortCol; label: string; x: number; w: number }[] = [
 const SORT_DD_BTN = { x: 8, y: HDR_Y - 2, w: 130, h: 13 };
 // exported for the v9.2.1 DOM share-anchor overlay (engine syncs anchors to
 // these exact rects while a RUN CARD is open)
+// v9.2.2: 20px-tall buttons so the new 18px fluo icons breathe; the card
+// preview <img> + RIGHT CLICK SAVE caption overlay the detail rows above
 export const SHARE_BTNS = [
-  { id: 'share:x', label: 'SHARE ON X', x: 30, y: 176, w: 150, h: 16, icon: 'x' as const },
-  { id: 'share:tg', label: 'SHARE ON TELEGRAM', x: 204, y: 176, w: 150, h: 16, icon: 'tg' as const },
-  { id: 'share:generic', label: 'SHARE', x: 30, y: 198, w: 100, h: 16, icon: null },
-  { id: 'viewtx', label: 'VIEW TX', x: 142, y: 198, w: 100, h: 16, icon: null },
-  { id: 'back', label: 'BACK', x: 254, y: 198, w: 100, h: 16, icon: null },
+  { id: 'share:x', label: 'SHARE ON X', x: 30, y: 172, w: 150, h: 20, icon: 'x' as const },
+  { id: 'share:tg', label: 'SHARE ON TELEGRAM', x: 204, y: 172, w: 150, h: 20, icon: 'tg' as const },
+  { id: 'share:generic', label: 'SHARE', x: 30, y: 196, w: 100, h: 20, icon: null },
+  { id: 'viewtx', label: 'VIEW TX', x: 142, y: 196, w: 100, h: 20, icon: null },
+  { id: 'back', label: 'BACK', x: 254, y: 196, w: 100, h: 20, icon: null },
 ];
 
 export interface ShareState {
   postedX: boolean;
   postedTG: boolean;
+  preview: boolean; // v9.2.2: the RUN CARD preview <img> is up (caption + [X] drawn)
 }
 
 export class BoardUI {
@@ -843,6 +847,17 @@ export class BoardUI {
       this.drawShareBtn(ctx, b, t, posted === true);
       this.hots.push({ x: b.x, y: b.y, w: b.w, h: b.h, id: b.id });
     }
+    // v9.2.2: the card preview <img> (DOM) covers the detail rows; the pixel
+    // caption sits under it and the [X] dismiss box just outside its top-right
+    if (share?.preview) {
+      drawText(ctx, CARD_CAPTION, VW / 2, 132, 1, FLUO, 'center');
+      ctx.fillStyle = '#0d1118';
+      ctx.fillRect(RUN_PREVIEW_X.x, RUN_PREVIEW_X.y, RUN_PREVIEW_X.w, RUN_PREVIEW_X.h);
+      ctx.strokeStyle = FLUO;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(RUN_PREVIEW_X.x + 0.5, RUN_PREVIEW_X.y + 0.5, RUN_PREVIEW_X.w - 1, RUN_PREVIEW_X.h - 1);
+      drawText(ctx, 'X', RUN_PREVIEW_X.x + RUN_PREVIEW_X.w / 2, RUN_PREVIEW_X.y + 4, 1, FLUO, 'center');
+    }
   }
 
   private drawShareBtn(ctx: CanvasRenderingContext2D, b: { id: string; label: string; x: number; y: number; w: number; h: number; icon: 'x' | 'tg' | null }, t: number, posted: boolean): void {
@@ -853,16 +868,22 @@ export class BoardUI {
     ctx.lineWidth = 1;
     ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
     let tx = b.x + b.w / 2;
+    // v9.2.2: big 18px official icon, solid FLUO + subtle glow, LEFT side
     if (b.icon === 'x') {
-      drawIconX(ctx, b.x + 8, b.y + 2, 1, posted ? '#8a8f9c' : FLUO, false);
-      tx += 8;
+      const r = shareIconRect(b);
+      drawIconX(ctx, r.x, r.y, 1, FLUO, true);
+      tx += 11;
     } else if (b.icon === 'tg') {
-      drawIconTG(ctx, b.x + 4, b.y + 2, 1, posted ? '#8a8f9c' : FLUO, false);
-      tx += 8;
+      const r = shareIconRect(b);
+      drawIconTG(ctx, r.x, r.y, 1, FLUO, true);
+      tx += 11;
     }
     drawText(ctx, posted ? 'POSTED!' : b.label, tx, b.y + Math.floor((b.h - 7) / 2), 1, posted ? FLUO : share ? '#e8ecf4' : '#f5c542', 'center');
-    // v9.2.1: DRAWN pixel checkmark sprite — ✓ is not in the ASCII pixel font
-    if (posted) drawCheck(ctx, b.x + 5, b.y + Math.floor((b.h - 6) / 2), 1, FLUO);
+    // v9.2.2: the DRAWN pixel checkmark hugs the RIGHT edge — never over the icon
+    if (posted) {
+      const r = shareCheckRect(b);
+      drawCheck(ctx, r.x, r.y, 1, FLUO);
+    }
   }
 
   private drawTab(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w: number; h: number }, label: string, active: boolean): void {

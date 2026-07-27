@@ -560,9 +560,24 @@ export class AudioSys {
 
   // music sequencer state
   private track: Track | null = null;
+  private trackName: string | null = null; // v9.2.2: audioInfo debug hook
   private step = 0;
   private nextT = 0;
   private timer: number | null = null;
+
+  // v9.2.2 — audioInfo debug hook (CI + on-device diagnostics):
+  //   state    = AudioContext state ('none' until the first ensure())
+  //   track    = currently loaded music track ('title' is queued at page load)
+  //   unlocked = context exists AND is running (first gesture landed)
+  //   muted    = M toggle state
+  get info(): { state: string; track: string | null; unlocked: boolean; muted: boolean } {
+    return {
+      state: this.ctx ? this.ctx.state : 'none',
+      track: this.trackName,
+      unlocked: this.ctx !== null && this.ctx.state === 'running',
+      muted: this.muted,
+    };
+  }
 
   // Must be called from a user gesture (key press).
   ensure(): void {
@@ -601,6 +616,10 @@ export class AudioSys {
     this.nextT = this.ctx.currentTime + 0.06;
     // start sequencer clock
     this.timer = window.setInterval(() => this.schedule(), 40);
+    // v9.2.2: attempt playback IMMEDIATELY (page load) — autoplay policy will
+    // keep the context suspended until the first gesture, which is fine: the
+    // moment a gesture lands, ensure() resumes and the queued title track plays.
+    void this.ctx.resume();
   }
 
   toggleMute(): void {
@@ -719,12 +738,14 @@ export class AudioSys {
   // ---------- Music sequencer ----------
   playTrack(name: keyof typeof TRACKS): void {
     this.track = TRACKS[name] ?? null;
+    this.trackName = name;
     this.step = 0;
     if (this.ctx) this.nextT = this.ctx.currentTime + 0.06;
   }
 
   stopMusic(): void {
     this.track = null;
+    this.trackName = null;
   }
 
   private schedule(): void {
