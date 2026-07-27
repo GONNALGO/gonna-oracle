@@ -455,7 +455,13 @@ export class TouchControls {
       return;
     }
     if (this.hooks.isPaused()) {
-      // while paused, only PAUSE (handled above) does anything
+      // v9.2: the pause veil has its own hotspots (the tiny ⛶ icon reopens
+      // the FULLSCREEN GUIDE) — forward taps to the scene UI first
+      if (this.hooks.uiTap(x, y)) {
+        this.track(e.pointerId, null, false);
+        return;
+      }
+      // otherwise, while paused only PAUSE (handled above) does anything
       this.track(e.pointerId, null, false);
       return;
     }

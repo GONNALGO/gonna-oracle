@@ -133,12 +133,13 @@ export class BoardUI {
   }
 
   // identity label + color kind for a row's primary slot
-  private primary(e: BoardEntry): { label: string; kind: 'seg-active' | 'seg-inactive' | 'addr' | 'nft' } {
+  // (draw truncates to 13px-chars; the CI info hook asks for the full label)
+  private primary(e: BoardEntry, max = 13): { label: string; kind: 'seg-active' | 'seg-inactive' | 'addr' | 'nft' } {
     if (this.tab === 'gonnas') {
       const hit = skinForAsset(e.assetId);
-      return { label: wallet.truncatePixel(hit ? hit.name.trim() : 'ASA ' + e.assetId, 13), kind: 'nft' };
+      return { label: wallet.truncatePixel(hit ? hit.name.trim() : 'ASA ' + e.assetId, max), kind: 'nft' };
     }
-    return this.walletLabel(e.sender, 13);
+    return this.walletLabel(e.sender, max);
   }
 
   private walletLabel(addr: string, max = 20): { label: string; kind: 'seg-active' | 'seg-inactive' | 'addr' } {
@@ -459,7 +460,7 @@ export class BoardUI {
       myRank: me ? board.rankOfWallet(me) : 0,
       badges,
       top: rows.slice(0, 10).map((e, i) => {
-        const p = this.primary(e);
+        const p = this.primary(e, 24); // full segment label for the CI hook
         const key = this.tab === 'wallets' ? e.sender : e.assetId;
         return {
           rank: i + 1,
