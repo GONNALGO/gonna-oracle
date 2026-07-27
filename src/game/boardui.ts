@@ -52,9 +52,12 @@ const ROW_W = VW - 16 - 24; // right column reserved for the scroll arrows
 const TAB_WALLETS = { x: 30, y: 28, w: 150, h: 15 };
 const TAB_GONNAS = { x: 204, y: 28, w: 150, h: 15 };
 const HDR_Y = 46;
-const BTN_REFRESH = { x: 14, y: 202, w: 70, h: 14 };
-const BTN_MYRANK = { x: 96, y: 202, w: 92, h: 14 };
-const BTN_BACK = { x: 292, y: 202, w: 78, h: 14 };
+// v9.2.3: footer buttons moved up to y=198 so the hint line (7px at VH-12)
+// sits fully INSIDE the mosaic border (bottom band VH-4) without touching
+// the button row: buttons 198..212, hint 212..219, border 220..224.
+const BTN_REFRESH = { x: 14, y: 198, w: 70, h: 14 };
+const BTN_MYRANK = { x: 96, y: 198, w: 92, h: 14 };
+const BTN_BACK = { x: 292, y: 198, w: 78, h: 14 };
 const BTN_UP = { x: VW - 28, y: LIST_TOP, w: 20, h: 16 };
 const BTN_DOWN = { x: VW - 28, y: LIST_TOP + LIST_H - 16, w: 20, h: 16 };
 
@@ -646,8 +649,8 @@ export class BoardUI {
       let label = this.shownSeals + ' SEALS' + (st.fromCache ? ' - CACHED' : '');
       if (textWidth(label, 1) > slotR - slotL) label = this.shownSeals + ' SEALS';
       if (textWidth(label, 1) <= slotR - slotL) {
-        drawText(ctx, label, slotR, 206, 1, '#5a5f6c', 'right');
-        this.sealsRect = { x: slotR - textWidth(label, 1), y: 206, w: textWidth(label, 1), h: 7 };
+        drawText(ctx, label, slotR, BTN_BACK.y + 4, 1, '#5a5f6c', 'right');
+        this.sealsRect = { x: slotR - textWidth(label, 1), y: BTN_BACK.y + 4, w: textWidth(label, 1), h: 7 };
       } else {
         this.sealsRect = null;
       }
@@ -658,8 +661,8 @@ export class BoardUI {
     // mosaic band starts at VH-4, so the 7px text must end by VH-5)
     if (!touch) {
       const hint = 'ENTER CARD - L/R TABS - R REFRESH - M MY RANK - ESC BACK';
-      this.hintRect = { x: Math.round(VW / 2 - textWidth(hint, 1) / 2), y: VH - 12, w: textWidth(hint, 1), h: 7 };
-      if ((t & 32) !== 0) drawText(ctx, hint, VW / 2, VH - 12, 1, '#5a5f6c', 'center');
+      this.hintRect = { x: Math.round(VW / 2 - textWidth(hint, 1) / 2), y: VH - 11, w: textWidth(hint, 1), h: 7 };
+      if ((t & 32) !== 0) drawText(ctx, hint, VW / 2, VH - 11, 1, '#5a5f6c', 'center');
     } else {
       this.hintRect = null;
     }
