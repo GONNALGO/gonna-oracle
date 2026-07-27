@@ -332,6 +332,7 @@ export class CardViewer {
   private cap: HTMLDivElement | null = null;
   private id = '';
   private touch = false;
+  private openedAt = 0; // tap-outside guard (see the backdrop click listener)
   onClose: (() => void) | null = null;
 
   get isOpen(): boolean {
@@ -379,7 +380,10 @@ export class CardViewer {
         this.close();
       });
       root.addEventListener('click', (e) => {
-        if (e.target === root) this.close(); // tap-outside only; taps on the img/caption keep it open
+        // tap-outside only; taps on the img/caption keep it open. The 400ms
+        // guard stops the OPENING tap's own trailing synthetic click (fired
+        // after the viewer appears under the finger) from instantly closing it.
+        if (e.target === root && performance.now() - this.openedAt > 400) this.close();
       });
       this.keyHandler = (e: KeyboardEvent) => {
         e.stopPropagation(); // the viewer owns the keyboard while open
@@ -394,6 +398,7 @@ export class CardViewer {
       this.img = img;
       this.cap = cap;
       this.id = '';
+      this.openedAt = performance.now();
     }
     if (this.img && this.id !== id) {
       this.id = id;
