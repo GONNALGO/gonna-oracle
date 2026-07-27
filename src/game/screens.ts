@@ -4,7 +4,7 @@ import { VH, VW } from './types';
 import type { Art } from './sprites';
 import { fmtScore } from './board';
 import { drawCheck, drawIconTG, drawIconX, shareCheckRect, shareIconRect } from './shareicons';
-import { CARD_CAPTION } from './share';
+import { SHARE_GUIDE } from './share';
 import { drawSealedBg } from './sealanim';
 
 const FLUO = '#39FF14'; // v9.2 bullrun green
@@ -100,7 +100,7 @@ export function drawTitle(
   ctx.scale(-1, 1);
   ctx.drawImage(art.lizIcon, 0, 0, m[1].w, m[1].h);
   ctx.restore();
-  drawText(ctx, 'V9.2.2 THE ARENA', VW - textWidth('V9.2.2 THE ARENA', 1) - 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, 'V9.2.3 THE ARENA', VW - textWidth('V9.2.3 THE ARENA', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 
@@ -321,8 +321,8 @@ export function drawSaveRecord(ctx: CanvasRenderingContext2D, t: number, v: Save
 
   // ==================== v9.2: SEALED screen (after THE SEAL MOMENT) ==========
   if (v.phase === 'done' || v.phase === 'pending') {
-    // v9.2.2 layout: compact header, the share card as a REAL DOM <img> preview
-    // in the middle (RIGHT CLICK SAVE), then the two share button rows.
+    // v9.2.3 layout: compact header, NOTHING covers the bullrun art — VIEW
+    // CARD opens the fullscreen viewer on demand, then the share button rows.
     if (byzantine) drawCrown(ctx, VW / 2 - 78, 12);
     drawTextSh(ctx, 'SEALED!', VW / 2 + (byzantine ? 8 : 0), 6, 3, FLUO, 'center', '#0a3d00');
     if (v.phase === 'pending') {
@@ -334,10 +334,9 @@ export function drawSaveRecord(ctx: CanvasRenderingContext2D, t: number, v: Save
     }
     drawText(ctx, fmtScore(v.score), 30, 42, 1, '#f5c542');
     drawText(ctx, 'TX ' + v.txid.slice(0, 20) + '...', VW - 30, 42, 1, '#8a8f9c', 'right');
-    // the DOM <img> preview overlays SAVE_PREVIEW_RECT (112,52,160,84); the
-    // pixel caption sits right under it — the card is saved from the img
-    // (right-click / long-press), never auto-downloaded (v9.2.2)
-    drawText(ctx, CARD_CAPTION, VW / 2, 140, 1, FLUO, 'center');
+    // v9.2.3: the art stays clean — the 2-step pixel guide sits between the
+    // VIEW CARD button (step 1, y=72) and the X/TG share row (step 2, y=152)
+    drawTextSh(ctx, SHARE_GUIDE, VW / 2, 112, 1, FLUO, 'center', '#0a3d00');
     for (let i = 0; i < v.buttons.length; i++) {
       const b = v.buttons[i];
       const lit = i === v.focus;

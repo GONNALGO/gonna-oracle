@@ -1,10 +1,11 @@
-// v9.2.2 — VIRAL SHARE v2. Official X / Telegram logos redrawn BIG in pixel
+// v9.2.3 — VIRAL SHARE v3. Official X / Telegram logos redrawn BIG in pixel
 // art, FLUO GREEN #39FF14 on black; exact dual-share texts (signature ONLY in
-// the post text, NEVER on the card); the 1200x630 PNG card is shown as a REAL
-// DOM <img> preview (right-click / long-press SAVE) — the auto-download is
-// GONE: on iOS its programmatic anchor click burned the single user-gesture
-// navigation token, so the twitter:// scheme jump never fired and the first
-// tap fell through to the web intent. Share taps are NAVIGATION-ONLY now.
+// the post text, NEVER on the card). The inline card preview is GONE (it
+// covered the game art) — a VIEW CARD button now opens a fullscreen CARD
+// VIEWER (real <img>, RIGHT CLICK SAVE / HOLD TO SAVE caption). Share taps
+// stay NAVIGATION-ONLY: the auto-download never came back (on iOS its
+// programmatic anchor click burned the single user-gesture navigation token,
+// so the twitter:// scheme jump never fired).
 import { drawText, drawTextSh } from './font';
 import { stageName, fmtScore, fmtTime } from './board';
 import { buildStage } from './stages';
@@ -312,71 +313,123 @@ function drawAlgorandLogo(ctx: CanvasRenderingContext2D, x: number, y: number, s
   for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) if (px[r][c] === 'A') ctx.fillRect(x + c * s, y + r * s, s, s);
 }
 
-// ============================================================ CARD PREVIEW
-// v9.2.2 — the generated 1200x630 card shown as a REAL DOM <img> (dataURL):
-// right-click SAVE on desktop, long-press SAVE on iOS/Android (it is a real
-// image, not a canvas). Replaces the auto-download entirely — the share tap
+// ============================================================ CARD VIEWER
+// v9.2.3 — the 1200x630 card NO LONGER sits inline on the SEALED / RUN CARD
+// screens (it covered the game art). A VIEW CARD pixel button opens this
+// fullscreen modal instead: dark dim backdrop, the REAL <img> centered as
+// large as fits (right-click SAVE on desktop, long-press "Add to Photos" on
+// touch — it is a real image, not a canvas), pixel caption under it, close
+// via [X] / ESC / tap-outside. The auto-download stays dead: the share tap
 // must spend the single iOS gesture token on the APP navigation, never on a
 // programmatic download click.
-export const CARD_CAPTION = 'RIGHT CLICK SAVE'; // exact pixel caption under the img
-export const SAVE_PREVIEW_RECT = { x: 112, y: 52, w: 160, h: 84 }; // SEALED screen (part of the layout)
-export const RUN_PREVIEW_RECT = { x: 112, y: 44, w: 160, h: 84 }; // RUN CARD overlay (dismissable)
-export const RUN_PREVIEW_X = { x: 276, y: 44, w: 14, h: 14 }; // canvas [X] dismiss box (OUTSIDE the img)
+export const CARD_CAPTION_DESKTOP = 'RIGHT CLICK SAVE'; // caption under the viewer img (desktop)
+export const CARD_CAPTION_TOUCH = 'HOLD TO SAVE'; // caption under the viewer img (touch)
+export const SHARE_GUIDE = '1 SAVE THE CARD - 2 POST IT'; // 2-step pixel guide over the share area
 
-export class CardPreview {
+export class CardViewer {
+  private root: HTMLDivElement | null = null;
   private img: HTMLImageElement | null = null;
-  private sig = '';
+  private cap: HTMLDivElement | null = null;
+  private id = '';
+  private touch = false;
+  onClose: (() => void) | null = null;
 
-  // called every frame: mounts / positions / hides the preview img so it sits
-  // exactly on its canvas rect (same fit-sync technique as the share anchors)
-  sync(id: string | null, dataUrl: string | null, rect: { x: number; y: number; w: number; h: number } | null, fit: { fitOffX: number; fitOffY: number; fitScale: number }): void {
-    if (!id || !dataUrl || !rect) {
-      if (this.img) {
-        this.img.remove();
-        this.img = null;
-      }
-      this.sig = '';
-      return;
-    }
-    let el = this.img;
-    if (!el) {
-      el = document.createElement('img');
-      el.className = 'gonna-card-preview';
-      el.alt = 'GONNA FIGHT seal card - right click / long-press to save';
-      el.draggable = true;
-      // z-index 29: below the seal message input (30) and the share anchors (31)
-      el.style.cssText =
-        'position:fixed;z-index:29;display:block;box-sizing:border-box;' +
-        'border:1px solid ' + FLUO + ';background:#070a14;image-rendering:pixelated;' +
+  get isOpen(): boolean {
+    return this.root !== null;
+  }
+
+  open(id: string, dataUrl: string, touch: boolean): void {
+    this.touch = touch;
+    if (!this.root) {
+      const root = document.createElement('div');
+      root.className = 'gonna-card-viewer';
+      root.style.cssText =
+        'position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+        'background:rgba(3,4,8,0.94);gap:12px;touch-action:manipulation;-webkit-tap-highlight-color:transparent;';
+      const img = document.createElement('img');
+      img.className = 'gonna-card-viewer-img';
+      img.alt = 'GONNA FIGHT seal card - right click / hold to save';
+      img.draggable = true;
+      img.style.cssText =
+        'display:block;box-sizing:border-box;max-width:92vw;max-height:68vh;' +
+        'border:2px solid ' + FLUO + ';background:#070a14;image-rendering:pixelated;' +
+        'box-shadow:0 0 24px rgba(57,255,20,0.25);' +
         '-webkit-touch-callout:default;user-select:none;-webkit-user-select:none;';
-      document.body.appendChild(el);
-      this.img = el;
-      this.sig = '';
+      const cap = document.createElement('div');
+      cap.className = 'gonna-card-viewer-caption';
+      cap.style.cssText =
+        'color:' + FLUO + ';font-family:monospace;font-weight:bold;font-size:14px;letter-spacing:2px;text-transform:uppercase;' +
+        'text-shadow:0 0 8px rgba(57,255,20,0.6);user-select:none;-webkit-user-select:none;';
+      const x = document.createElement('button');
+      x.className = 'gonna-card-viewer-close';
+      x.type = 'button';
+      x.textContent = 'X';
+      x.setAttribute('aria-label', 'Close the card viewer');
+      x.style.cssText =
+        'position:absolute;top:10px;right:10px;width:40px;height:40px;box-sizing:border-box;' +
+        'background:#0d1118;color:' + FLUO + ';border:2px solid ' + FLUO + ';' +
+        'font-family:monospace;font-weight:bold;font-size:18px;cursor:pointer;';
+      root.appendChild(img);
+      root.appendChild(cap);
+      root.appendChild(x);
+      // close paths: [X], tap-outside (the dim backdrop), ESC (capture phase so
+      // the game input never sees keys while the viewer is up)
+      x.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.close();
+      });
+      root.addEventListener('click', (e) => {
+        if (e.target === root) this.close(); // tap-outside only; taps on the img/caption keep it open
+      });
+      this.keyHandler = (e: KeyboardEvent) => {
+        e.stopPropagation(); // the viewer owns the keyboard while open
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          this.close();
+        }
+      };
+      window.addEventListener('keydown', this.keyHandler, true);
+      document.body.appendChild(root);
+      this.root = root;
+      this.img = img;
+      this.cap = cap;
+      this.id = '';
     }
-    const left = Math.round(fit.fitOffX + rect.x * fit.fitScale);
-    const top = Math.round(fit.fitOffY + rect.y * fit.fitScale);
-    const w = Math.max(1, Math.round(rect.w * fit.fitScale));
-    const h = Math.max(1, Math.round(rect.h * fit.fitScale));
-    const sig = id + '|' + left + ',' + top + ',' + w + ',' + h;
-    if (this.sig !== sig) {
-      this.sig = sig;
-      el.src = dataUrl; // only when the card id changes — never re-set per frame
-      el.style.left = left + 'px';
-      el.style.top = top + 'px';
-      el.style.width = w + 'px';
-      el.style.height = h + 'px';
+    if (this.img && this.id !== id) {
+      this.id = id;
+      this.img.src = dataUrl; // only when the card id changes — never per frame
     }
+    if (this.cap) this.cap.textContent = this.touch ? CARD_CAPTION_TOUCH : CARD_CAPTION_DESKTOP;
   }
 
-  clear(): void {
-    this.sync(null, null, null, { fitOffX: 0, fitOffY: 0, fitScale: 1 });
+  private keyHandler: ((e: KeyboardEvent) => void) | null = null;
+
+  close(): void {
+    if (!this.root) return;
+    this.root.remove();
+    this.root = null;
+    this.img = null;
+    this.cap = null;
+    this.id = '';
+    if (this.keyHandler) {
+      window.removeEventListener('keydown', this.keyHandler, true);
+      this.keyHandler = null;
+    }
+    if (this.onClose) this.onClose();
   }
 
-  // CI: live DOM state of the preview img
-  info(): { visible: boolean; src: string; cls: string; css: { x: number; y: number; w: number; h: number } | null } {
-    if (!this.img) return { visible: false, src: '', cls: 'gonna-card-preview', css: null };
-    const r = this.img.getBoundingClientRect();
-    return { visible: true, src: this.img.src.slice(0, 32), cls: this.img.className, css: { x: r.x, y: r.y, w: r.width, h: r.height } };
+  // CI: live DOM state of the viewer
+  info(): { open: boolean; id: string; caption: string; captionDesktop: string; captionTouch: string; src: string; cls: string; imgCls: string } {
+    return {
+      open: this.isOpen,
+      id: this.id,
+      caption: this.cap ? this.cap.textContent ?? '' : '',
+      captionDesktop: CARD_CAPTION_DESKTOP,
+      captionTouch: CARD_CAPTION_TOUCH,
+      src: this.img ? this.img.src.slice(0, 32) : '',
+      cls: 'gonna-card-viewer',
+      imgCls: 'gonna-card-viewer-img',
+    };
   }
 }
 

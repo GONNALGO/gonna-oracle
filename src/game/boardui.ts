@@ -18,7 +18,7 @@ import * as board from './board';
 import type { BoardEntry, BoardTab, SortCol } from './board';
 import { SKIN_INFO, skinForAsset, skinPortrait } from './skins';
 import { drawCheck, drawIconTG, drawIconX, shareCheckRect, shareIconRect } from './shareicons';
-import { CARD_CAPTION, RUN_PREVIEW_X } from './share';
+import { SHARE_GUIDE } from './share';
 
 const FLUO = '#39FF14';
 const PODIUM = ['#f5c542', '#c8ccd4', '#cd7f32']; // gold / silver / bronze
@@ -31,6 +31,7 @@ export type BoardAction =
   | { act: 'none' }
   | { act: 'move' }
   | { act: 'title' }
+  | { act: 'viewcard' }
   | { act: 'viewtx'; txid: string }
   | { act: 'share'; which: ShareWhich };
 
@@ -69,20 +70,21 @@ const COL_DEFS: { col: SortCol; label: string; x: number; w: number }[] = [
 const SORT_DD_BTN = { x: 8, y: HDR_Y - 2, w: 130, h: 13 };
 // exported for the v9.2.1 DOM share-anchor overlay (engine syncs anchors to
 // these exact rects while a RUN CARD is open)
-// v9.2.2: 20px-tall buttons so the new 18px fluo icons breathe; the card
-// preview <img> + RIGHT CLICK SAVE caption overlay the detail rows above
+// v9.2.3: VIEW CARD joins the bottom row (step 1 of the 2-step guide — the
+// inline preview is gone, the fullscreen viewer covers nothing until asked);
+// 20px-tall buttons so the 18px fluo icons breathe
 export const SHARE_BTNS = [
   { id: 'share:x', label: 'SHARE ON X', x: 30, y: 172, w: 150, h: 20, icon: 'x' as const },
   { id: 'share:tg', label: 'SHARE ON TELEGRAM', x: 204, y: 172, w: 150, h: 20, icon: 'tg' as const },
-  { id: 'share:generic', label: 'SHARE', x: 30, y: 196, w: 100, h: 20, icon: null },
-  { id: 'viewtx', label: 'VIEW TX', x: 142, y: 196, w: 100, h: 20, icon: null },
-  { id: 'back', label: 'BACK', x: 254, y: 196, w: 100, h: 20, icon: null },
+  { id: 'viewcard', label: 'VIEW CARD', x: 30, y: 196, w: 78, h: 20, icon: null },
+  { id: 'share:generic', label: 'SHARE', x: 112, y: 196, w: 78, h: 20, icon: null },
+  { id: 'viewtx', label: 'VIEW TX', x: 194, y: 196, w: 78, h: 20, icon: null },
+  { id: 'back', label: 'BACK', x: 276, y: 196, w: 78, h: 20, icon: null },
 ];
 
 export interface ShareState {
   postedX: boolean;
   postedTG: boolean;
-  preview: boolean; // v9.2.2: the RUN CARD preview <img> is up (caption + [X] drawn)
 }
 
 export class BoardUI {
@@ -101,6 +103,10 @@ export class BoardUI {
   private histCursor = 0;
   private runEntry: BoardEntry | null = null;
   private myRankFlash = 0;
+  // v9.2.3: live footer bboxes (CI no-overlap proof — the seals info used to
+  // invade the BACK box and the hint line was clipped by the mosaic border)
+  private sealsRect: { x: number; y: number; w: number; h: number } | null = null;
+  private hintRect: { x: number; y: number; w: number; h: number } | null = null;
   // engine injects the live share state while a RUN CARD is open
   shareState: (() => ShareState | null) | null = null;
 
@@ -341,6 +347,7 @@ export class BoardUI {
         if (e) this.openRun(e);
         return { act: 'move' };
       }
+      if (id === 'viewcard' && this.runEntry) return { act: 'viewcard' };
       if (id === 'viewtx' && this.runEntry) return { act: 'viewtx', txid: this.runEntry.txid };
       if (id === 'share:x') return { act: 'share', which: 'x' };
       if (id === 'share:tg') return { act: 'share', which: 'tg' };
@@ -403,6 +410,15 @@ export class BoardUI {
       msg: string;
       txid: string;
     }[];
+    footer: {
+      // v9.2.3: live bboxes — the seals info must never touch a button box and
+      // the hint line must sit fully inside the mosaic border (VH-4 band)
+      seals: { x: number; y: number; w: number; h: number } | null;
+      hint: { x: number; y: number; w: number; h: number } | null;
+      back: { x: number; y: number; w: number; h: number };
+      refresh: { x: number; y: number; w: number; h: number };
+      myrank: { x: number; y: number; w: number; h: number } | null;
+    };
     card: {
       kind: 'player' | 'fighter';
       key: string | number;
@@ -465,6 +481,13 @@ export class BoardUI {
       cursor: this.cursor,
       myRank: me ? board.rankOfWallet(me) : 0,
       badges,
+      footer: {
+        seals: this.sealsRect,
+        hint: this.hintRect,
+        back: { ...BTN_BACK },
+        refresh: { ...BTN_REFRESH },
+        myrank: wallet.isConnected() ? { ...BTN_MYRANK } : null,
+      },
       top: rows.slice(0, 10).map((e, i) => {
         const p = this.primary(e, 24); // full segment label for the CI hook
         const key = this.tab === 'wallets' ? e.sender : e.assetId;
@@ -608,16 +631,37 @@ export class BoardUI {
     this.drawBtn(ctx, BTN_REFRESH, 'REFRESH', t);
     this.drawBtn(ctx, BTN_BACK, 'BACK', t);
     this.hots.push({ ...BTN_REFRESH, id: 'refresh' }, { ...BTN_BACK, id: 'back' });
-    if (wallet.isConnected()) {
+    const myRankOn = wallet.isConnected();
+    if (myRankOn) {
       const rank = board.rankOfWallet(wallet.getWallet().address!);
       this.drawBtn(ctx, BTN_MYRANK, rank > 0 ? 'MY RANK #' + rank : 'MY RANK', t, FLUO);
       this.hots.push({ ...BTN_MYRANK, id: 'myrank' });
     }
+    // v9.2.3: the seals/cached info gets its OWN slot between the left buttons
+    // and BACK — right-aligned to BACK's left edge and shortened until it
+    // fits, so it can NEVER invade a button box again (user screenshot bug)
     if (st.status === 'ready') {
-      drawText(ctx, this.shownSeals + ' SEALS' + (st.fromCache ? ' - CACHED' : ''), VW / 2 + 56, 206, 1, '#5a5f6c', 'center');
+      const slotL = (myRankOn ? BTN_MYRANK.x + BTN_MYRANK.w : BTN_REFRESH.x + BTN_REFRESH.w) + 8;
+      const slotR = BTN_BACK.x - 8;
+      let label = this.shownSeals + ' SEALS' + (st.fromCache ? ' - CACHED' : '');
+      if (textWidth(label, 1) > slotR - slotL) label = this.shownSeals + ' SEALS';
+      if (textWidth(label, 1) <= slotR - slotL) {
+        drawText(ctx, label, slotR, 206, 1, '#5a5f6c', 'right');
+        this.sealsRect = { x: slotR - textWidth(label, 1), y: 206, w: textWidth(label, 1), h: 7 };
+      } else {
+        this.sealsRect = null;
+      }
+    } else {
+      this.sealsRect = null;
     }
-    if (!touch && (t & 32) !== 0) {
-      drawText(ctx, 'ENTER CARD - L/R TABS - R REFRESH - M MY RANK - ESC BACK', VW / 2, VH - 8, 1, '#5a5f6c', 'center');
+    // v9.2.3: the hint line sits fully INSIDE the checkered border (the bottom
+    // mosaic band starts at VH-4, so the 7px text must end by VH-5)
+    if (!touch) {
+      const hint = 'ENTER CARD - L/R TABS - R REFRESH - M MY RANK - ESC BACK';
+      this.hintRect = { x: Math.round(VW / 2 - textWidth(hint, 1) / 2), y: VH - 12, w: textWidth(hint, 1), h: 7 };
+      if ((t & 32) !== 0) drawText(ctx, hint, VW / 2, VH - 12, 1, '#5a5f6c', 'center');
+    } else {
+      this.hintRect = null;
     }
   }
 
@@ -840,23 +884,15 @@ export class BoardUI {
     // message
     if (e.msg) drawTextSh(ctx, '"' + wallet.truncatePixel(e.msg, 30) + '"', VW / 2, 140, 1, '#ffffff', 'center');
     else drawText(ctx, '(NO MESSAGE)', VW / 2, 140, 1, '#3a3f4c', 'center');
-    // share buttons + VIEW TX + BACK (same viral formula as the SEALED screen)
+    // v9.2.3: the 2-step pixel guide between the detail rows and the share
+    // area — VIEW CARD is step 1, the X/TG buttons are step 2
+    drawTextSh(ctx, SHARE_GUIDE, VW / 2, 156, 1, FLUO, 'center', '#0a3d00');
+    // share buttons + VIEW CARD + VIEW TX + BACK (same viral formula as the SEALED screen)
     const share = this.shareState ? this.shareState() : null;
     for (const b of SHARE_BTNS) {
       const posted = (b.id === 'share:x' && share?.postedX) || (b.id === 'share:tg' && share?.postedTG);
       this.drawShareBtn(ctx, b, t, posted === true);
       this.hots.push({ x: b.x, y: b.y, w: b.w, h: b.h, id: b.id });
-    }
-    // v9.2.2: the card preview <img> (DOM) covers the detail rows; the pixel
-    // caption sits under it and the [X] dismiss box just outside its top-right
-    if (share?.preview) {
-      drawText(ctx, CARD_CAPTION, VW / 2, 132, 1, FLUO, 'center');
-      ctx.fillStyle = '#0d1118';
-      ctx.fillRect(RUN_PREVIEW_X.x, RUN_PREVIEW_X.y, RUN_PREVIEW_X.w, RUN_PREVIEW_X.h);
-      ctx.strokeStyle = FLUO;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(RUN_PREVIEW_X.x + 0.5, RUN_PREVIEW_X.y + 0.5, RUN_PREVIEW_X.w - 1, RUN_PREVIEW_X.h - 1);
-      drawText(ctx, 'X', RUN_PREVIEW_X.x + RUN_PREVIEW_X.w / 2, RUN_PREVIEW_X.y + 4, 1, FLUO, 'center');
     }
   }
 
