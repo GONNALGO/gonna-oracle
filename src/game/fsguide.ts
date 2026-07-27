@@ -177,7 +177,7 @@ export class FsGuide {
         ['3', 'TAP ADD'],
       ];
       for (let i = 0; i < 3; i++) {
-        const sy = y + 52 + i * 34;
+        const sy = y + 48 + i * 30;
         // step icon tile
         ctx.fillStyle = '#0d1118';
         ctx.fillRect(x + 24, sy, 26, 26);
@@ -191,7 +191,7 @@ export class FsGuide {
         drawTextSh(ctx, steps[i][1], x + 78, sy + 4, 1, '#f2f2f2');
         if (i === 1) drawText(ctx, '(SCROLL THE SHARE SHEET)', x + 78, sy + 14, 1, '#5a5f6c');
       }
-      drawText(ctx, 'THEN PLAY FROM THE GONNA ICON!', x + CARD.w / 2, y + 156, 1, (t & 16) !== 0 ? '#f5c542' : '#b8860b', 'center');
+      drawText(ctx, 'THEN PLAY FROM THE GONNA ICON!', x + CARD.w / 2, y + 142, 1, (t & 16) !== 0 ? '#f5c542' : '#b8860b', 'center');
     } else if (this.platform === 'android') {
       if (this.installAvail) {
         // 1-tap install straight from beforeinstallprompt
