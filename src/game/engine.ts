@@ -632,9 +632,9 @@ export class Game implements GameCtx {
 
   private tapSave(gx: number, gy: number): void {
     if (this.savePhase === 'busy') return;
-    // tapping the message box focuses the DOM input (mobile keyboard)
+    // tapping the message box focuses the DOM input (mobile keyboard) — EDIT phase only (v9.2.2)
     const r = SAVE_MSG_RECT;
-    if (gx >= r.x && gx <= r.x + r.w && gy >= r.y && gy <= r.y + r.h && this.msgInput) {
+    if (this.savePhase === 'edit' && gx >= r.x && gx <= r.x + r.w && gy >= r.y && gy <= r.y + r.h && this.msgInput) {
       this.msgInput.focus({ preventScroll: true });
       return;
     }
@@ -657,6 +657,16 @@ export class Game implements GameCtx {
       return;
     }
     this.ensureMsgInput(); // re-show after a connect detour (cheap no-op otherwise)
+    // v9.2.2: the message input belongs to the EDIT phase only — in done /
+    // pending its placeholder would float over the card preview <img>
+    if (this.msgInput) {
+      const hide = this.savePhase !== 'edit';
+      const hidden = this.msgInput.style.display === 'none';
+      if (hide !== hidden) {
+        this.msgInput.style.display = hide ? 'none' : '';
+        if (!hide) this.placeMsgInput();
+      }
+    }
     const inp = this.input;
     const typing = this.msgInput !== null && document.activeElement === this.msgInput;
     if (inp.pressed.pause) {
