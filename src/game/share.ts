@@ -438,19 +438,8 @@ export class CardViewer {
   }
 }
 
-// generic share: native sheet with the card file when capable
-export async function nativeShare(cv: HTMLCanvasElement, text: string): Promise<boolean> {
-  try {
-    const blob = await new Promise<Blob | null>((res) => cv.toBlob(res, 'image/png'));
-    if (!blob) return false;
-    const file = new File([blob], 'gonna-fight-seal.png', { type: 'image/png' });
-    const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean; share?: (d: { files?: File[]; text?: string }) => Promise<void> };
-    if (nav.canShare && nav.share && nav.canShare({ files: [file] })) {
-      await nav.share({ files: [file], text });
-      return true;
-    }
-  } catch { /* cancelled or unsupported */ }
-  return false;
-}
+// v9.2.4: the generic navigator.share path (nativeShare) is GONE — the SHARE
+// button it served was redundant (VIEW CARD + direct X/TG anchors cover the
+// flow) and unsupported/dead on many browsers. X/TG anchors + texts intact.
 
 export { drawIconX, drawIconTG };

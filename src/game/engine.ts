@@ -561,13 +561,15 @@ export class Game implements GameCtx {
       // v9.2.3: the SEALED screen — the game art stays clean; VIEW CARD (step
       // 1 of the 2-step guide) opens the fullscreen viewer, X/TG are step 2.
       // Taller 20px buttons so the 18px fluo icons breathe.
+      // v9.2.4: the generic navigator.share SHARE button is GONE (redundant,
+      // dead on many browsers) — VIEW TX / DONE rebalance to 2 even 156px
+      // buttons (30/198, 12px gap, span 30..354).
       return [
         { id: 'viewcard', label: 'VIEW CARD', x: 112, y: 72, w: 160, h: 20 },
         { id: 'sharex', label: 'SHARE ON X', x: 30, y: 152, w: 150, h: 20, icon: 'x', posted: this.sharePostedX },
         { id: 'sharetg', label: 'SHARE ON TELEGRAM', x: 204, y: 152, w: 150, h: 20, icon: 'tg', posted: this.sharePostedTG },
-        { id: 'sharegen', label: 'SHARE', x: 30, y: 176, w: 100, h: 20 },
-        { id: 'viewtx', label: 'VIEW TX', x: 142, y: 176, w: 100, h: 20 },
-        { id: 'done', label: 'DONE', x: 254, y: 176, w: 100, h: 20 },
+        { id: 'viewtx', label: 'VIEW TX', x: 30, y: 176, w: 156, h: 20 },
+        { id: 'done', label: 'DONE', x: 198, y: 176, w: 156, h: 20 },
       ];
     }
     if (this.savePhase === 'error') {
@@ -610,9 +612,6 @@ export class Game implements GameCtx {
         break;
       case 'sharetg':
         this.execShare('tg');
-        break;
-      case 'sharegen':
-        this.execShare('generic');
         break;
       case 'skip':
       case 'done':
@@ -818,39 +817,18 @@ export class Game implements GameCtx {
     this.audio.uiSelect();
   }
 
-  private execShare(which: 'x' | 'tg' | 'generic'): void {
-    if (which !== 'generic') {
-      // v9.2.1: navigation lives on the real DOM anchor (keyboard ENTER / any
-      // canvas fallback tap routes through the very same anchor)
-      if (!this.shareAnchors.click(which === 'x' ? 'save:sharex' : 'save:sharetg')) this.prepareSaveShare(which);
-      return;
-    }
-    const r = this.buildShareRec();
-    if (!r) return;
-    if (!this.shareCard) {
-      const fr = this.pframes ?? this.frames;
-      this.shareCard = share.renderCard(r, fr.get('0_0') ?? null);
-    }
-    // v9.2.2: native share sheet only — the card is saved from the <img> preview
-    void share.nativeShare(this.shareCard.canvas, share.shareTextX(r));
-    this.audio.uiSelect();
+  // v9.2.4: X/TG only — the generic navigator.share path is gone (the SHARE
+  // button was redundant next to VIEW CARD + the direct anchors and dead on
+  // many browsers)
+  private execShare(which: 'x' | 'tg'): void {
+    // v9.2.1: navigation lives on the real DOM anchor (keyboard ENTER / any
+    // canvas fallback tap routes through the very same anchor)
+    if (!this.shareAnchors.click(which === 'x' ? 'save:sharex' : 'save:sharetg')) this.prepareSaveShare(which);
   }
 
   // share straight from a RUN CARD (L3 of THE ARENA)
-  private execBoardShare(which: 'x' | 'tg' | 'generic'): void {
-    if (which !== 'generic') {
-      if (!this.shareAnchors.click(which === 'x' ? 'board:sharex' : 'board:sharetg')) this.prepareBoardShare(which);
-      return;
-    }
-    const r = this.buildBoardShareRec();
-    const e = this.board.currentRun;
-    if (!r || !e) return;
-    if (!this.boardCard) {
-      const sprite = e.skin === 'gonna' ? (this.frames.get('0_0') ?? null) : skinPortrait(e.skin);
-      this.boardCard = share.renderCard(r, sprite);
-    }
-    void share.nativeShare(this.boardCard.canvas, share.shareTextX(r));
-    this.audio.uiSelect();
+  private execBoardShare(which: 'x' | 'tg'): void {
+    if (!this.shareAnchors.click(which === 'x' ? 'board:sharex' : 'board:sharetg')) this.prepareBoardShare(which);
   }
 
   // v9.2.3: VIEW CARD on the SEALED screen -> fullscreen viewer (step 1 of

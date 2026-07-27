@@ -25,7 +25,7 @@ const PODIUM = ['#f5c542', '#c8ccd4', '#cd7f32']; // gold / silver / bronze
 const HIST_VISIBLE = 5;
 
 export type BoardLevel = 'board' | 'player' | 'fighter' | 'run';
-export type ShareWhich = 'x' | 'tg' | 'generic';
+export type ShareWhich = 'x' | 'tg';
 
 export type BoardAction =
   | { act: 'none' }
@@ -76,13 +76,15 @@ const SORT_DD_BTN = { x: 8, y: HDR_Y - 2, w: 130, h: 13 };
 // v9.2.3: VIEW CARD joins the bottom row (step 1 of the 2-step guide — the
 // inline preview is gone, the fullscreen viewer covers nothing until asked);
 // 20px-tall buttons so the 18px fluo icons breathe
+// v9.2.4: the generic navigator.share SHARE button is GONE (redundant next to
+// VIEW CARD + the direct X/TG anchors, dead on many browsers) — the bottom row
+// rebalances to 3 even 100px buttons (30/142/254, 12px gaps, span 30..354)
 export const SHARE_BTNS = [
   { id: 'share:x', label: 'SHARE ON X', x: 30, y: 172, w: 150, h: 20, icon: 'x' as const },
   { id: 'share:tg', label: 'SHARE ON TELEGRAM', x: 204, y: 172, w: 150, h: 20, icon: 'tg' as const },
-  { id: 'viewcard', label: 'VIEW CARD', x: 30, y: 196, w: 78, h: 20, icon: null },
-  { id: 'share:generic', label: 'SHARE', x: 112, y: 196, w: 78, h: 20, icon: null },
-  { id: 'viewtx', label: 'VIEW TX', x: 194, y: 196, w: 78, h: 20, icon: null },
-  { id: 'back', label: 'BACK', x: 276, y: 196, w: 78, h: 20, icon: null },
+  { id: 'viewcard', label: 'VIEW CARD', x: 30, y: 196, w: 100, h: 20, icon: null },
+  { id: 'viewtx', label: 'VIEW TX', x: 142, y: 196, w: 100, h: 20, icon: null },
+  { id: 'back', label: 'BACK', x: 254, y: 196, w: 100, h: 20, icon: null },
 ];
 
 export interface ShareState {
@@ -354,7 +356,6 @@ export class BoardUI {
       if (id === 'viewtx' && this.runEntry) return { act: 'viewtx', txid: this.runEntry.txid };
       if (id === 'share:x') return { act: 'share', which: 'x' };
       if (id === 'share:tg') return { act: 'share', which: 'tg' };
-      if (id === 'share:generic') return { act: 'share', which: 'generic' };
       return { act: 'none' };
     }
     return { act: 'none' };
@@ -446,6 +447,9 @@ export class BoardUI {
       sender: string;
       v: 1 | 2;
     } | null;
+    // v9.2.4: live RUN CARD bottom-row bboxes (CI: even widths, no
+    // gaps/overlaps after the generic SHARE button was removed)
+    runBtns: { id: string; label: string; x: number; y: number; w: number; h: number }[];
   } {
     const st = board.boardState();
     const rows = this.rows();
@@ -538,6 +542,7 @@ export class BoardUI {
             v: this.runEntry.v,
           }
         : null,
+      runBtns: this.level === 'run' ? SHARE_BTNS.map((b) => ({ id: b.id, label: b.label, x: b.x, y: b.y, w: b.w, h: b.h })) : [],
     };
   }
 
