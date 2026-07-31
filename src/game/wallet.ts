@@ -24,7 +24,7 @@ const KEY_ELIG = 'gonna.elig.v2'; // {address, ok, algo, gonna, gonnaDecimals, n
 const KEY_ELIG_OLD = 'gonna.elig';
 const KEY_MOCK = 'gonna.mockwallet'; // CI mock state
 const KEY_DECIMALS = 'gonna.asa.decimals';
-const KEY_NFD = 'gonna.nfd'; // {address, name, active, ts} — 24h per-address
+const KEY_NFD = 'gonna.nfd.v2'; // {address, name, active, ts} — 24h per-address (v2: segments-only)
 const NFD_CACHE_MS = 24 * 60 * 60 * 1000;
 
 export type WalletProvider = 'pera' | 'defly';
@@ -185,10 +185,15 @@ async function fetchNfdSegment(address: string): Promise<{ name: string; active:
     gather('https://api.nf.domains/nfd/lookup?address=' + address),
     gather('https://api.nf.domains/nfd/v2/search?owner=' + address + '&view=brief&limit=10'),
   ]);
-  const all = [...(a.status === 'fulfilled' ? a.value : []), ...(b.status === 'fulfilled' ? b.value : [])];
+  // v9.2.5: ONLY .gonna.algo segments count as GONNAVERSE identity. Root NFDs
+  // (friedbean.algo, mj.algo, gonna.algo itself, ...) do NOT — a wallet without
+  // a .gonna.algo segment shows the plain address. Active segment = green,
+  // expired segment = gray.
+  const all = [...(a.status === 'fulfilled' ? a.value : []), ...(b.status === 'fulfilled' ? b.value : [])]
+    .filter((n) => typeof n.name === 'string' && n.name.toLowerCase().endsWith('.gonna.algo'));
   if (all.length === 0) return null;
-  // prefer .gonna.algo segments (the GONNAVERSE identity), then active ones
-  const score = (n: NfdEntry): number => (n.name?.toLowerCase().endsWith('.gonna.algo') ? 2 : 0) + (n.expired ? 0 : 1);
+  // among own segments prefer an active one
+  const score = (n: NfdEntry): number => (n.expired ? 0 : 1);
   const seen = new Set<string>();
   let best: NfdEntry | null = null;
   for (const n of all) {
@@ -550,7 +555,7 @@ export interface Segment {
   name: string;
   active: boolean;
 }
-const KEY_NFD_SEGS = 'gonna.nfd.segs'; // {addr: {name, active, ts}}
+const KEY_NFD_SEGS = 'gonna.nfd.segs.v2'; // {addr: {name, active, ts}} (v2: segments-only)
 const segMem = new Map<string, Segment | null>();
 let segStore: Record<string, { name: string; active: boolean; ts: number }> = {};
 try {
