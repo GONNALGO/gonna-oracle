@@ -151,7 +151,7 @@ export class BoardUI {
 
   // identity label + color kind for a row's primary slot
   // (draw truncates to 13px-chars; the CI info hook asks for the full label)
-  private primary(e: BoardEntry, max = 13): { label: string; kind: 'seg-active' | 'seg-inactive' | 'addr' | 'nft' } {
+  private primary(e: BoardEntry, max = 13): { label: string; kind: 'seg-active' | 'seg-inactive' | 'root' | 'addr' | 'nft' } {
     if (this.tab === 'gonnas') {
       const hit = skinForAsset(e.assetId);
       return { label: wallet.truncatePixel(hit ? hit.name.trim() : 'ASA ' + e.assetId, max), kind: 'nft' };
@@ -159,8 +159,9 @@ export class BoardUI {
     return this.walletLabel(e.sender, max);
   }
 
-  private walletLabel(addr: string, max = 20): { label: string; kind: 'seg-active' | 'seg-inactive' | 'addr' } {
+  private walletLabel(addr: string, max = 20): { label: string; kind: 'seg-active' | 'seg-inactive' | 'root' | 'addr' } {
     const seg = wallet.cachedSegment(addr);
+    if (seg && seg.root) return { label: wallet.truncatePixel(seg.name, max), kind: 'root' };
     if (seg) return { label: wallet.truncatePixel(seg.name, max), kind: seg.active ? 'seg-active' : 'seg-inactive' };
     return { label: addr.slice(0, 5) + '...' + addr.slice(-4), kind: 'addr' };
   }
@@ -716,7 +717,7 @@ export class BoardUI {
     }
     // primary label: NFD segment (green/gray) / short address / NFT name
     const p = this.primary(e);
-    const pColor = p.kind === 'seg-active' ? '#7fd858' : p.kind === 'seg-inactive' ? '#8a8f9c' : p.kind === 'nft' ? '#f5c542' : '#c8ccd4';
+    const pColor = p.kind === 'root' ? '#f5c542' : p.kind === 'seg-active' ? '#7fd858' : p.kind === 'seg-inactive' ? '#8a8f9c' : p.kind === 'nft' ? '#f5c542' : '#c8ccd4';
     drawText(ctx, p.label, ROW_X + 32, y + 3, 1, pColor);
     // badges right after the label
     let bx = ROW_X + 32 + textWidth(p.label, 1) + 4;
