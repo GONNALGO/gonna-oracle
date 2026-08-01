@@ -151,7 +151,7 @@ export class BoardUI {
 
   // identity label + color kind for a row's primary slot
   // (draw truncates to 13px-chars; the CI info hook asks for the full label)
-  private primary(e: BoardEntry, max = 13): { label: string; kind: 'seg-active' | 'seg-inactive' | 'root' | 'addr' | 'nft' } {
+  private primary(e: BoardEntry, max = 13): { label: string; kind: 'seg-active' | 'seg-inactive' | 'root' | 'dom' | 'addr' | 'nft' } {
     if (this.tab === 'gonnas') {
       const hit = skinForAsset(e.assetId);
       return { label: wallet.truncatePixel(hit ? hit.name.trim() : 'ASA ' + e.assetId, max), kind: 'nft' };
@@ -159,9 +159,10 @@ export class BoardUI {
     return this.walletLabel(e.sender, max);
   }
 
-  private walletLabel(addr: string, max = 20): { label: string; kind: 'seg-active' | 'seg-inactive' | 'root' | 'addr' } {
+  private walletLabel(addr: string, max = 20): { label: string; kind: 'seg-active' | 'seg-inactive' | 'root' | 'dom' | 'addr' } {
     const seg = wallet.cachedSegment(addr);
     if (seg && seg.root) return { label: wallet.truncatePixel(seg.name, max), kind: 'root' };
+    if (seg && seg.domain) return { label: wallet.truncatePixel(seg.name, max), kind: 'dom' };
     if (seg) return { label: wallet.truncatePixel(seg.name, max), kind: seg.active ? 'seg-active' : 'seg-inactive' };
     return { label: addr.slice(0, 5) + '...' + addr.slice(-4), kind: 'addr' };
   }
@@ -717,7 +718,15 @@ export class BoardUI {
     }
     // primary label: NFD segment (green/gray) / short address / NFT name
     const p = this.primary(e);
-    const pColor = p.kind === 'root' ? '#f5c542' : p.kind === 'seg-active' ? '#7fd858' : p.kind === 'seg-inactive' ? '#8a8f9c' : p.kind === 'nft' ? '#f5c542' : '#c8ccd4';
+    const pColor = p.kind === 'root' ? '#f5c542' : p.kind === 'dom' ? '#57c8d8' : p.kind === 'seg-active' ? '#7fd858' : p.kind === 'seg-inactive' ? '#5f7a52' : p.kind === 'nft' ? '#f5c542' : '#c8ccd4';
+    if (p.kind === 'seg-active') {
+      // LO SPETTRO: quantum light — a breathing glow behind the live segment
+      const gw = textWidth(p.label, 1) + 26;
+      ctx.save();
+      ctx.globalAlpha = 0.16 + 0.12 * Math.sin(t / 340);
+      ctx.drawImage(glowSprite(), ROW_X + 32 - 13, y + 3 - 4, gw, 16);
+      ctx.restore();
+    }
     drawText(ctx, p.label, ROW_X + 32, y + 3, 1, pColor);
     // badges right after the label
     let bx = ROW_X + 32 + textWidth(p.label, 1) + 4;
@@ -970,6 +979,24 @@ export class BoardUI {
 }
 
 // SPEED DEMON pixel flame badge
+// LO SPETTRO: pre-rendered radial glow sprite (green core → transparent),
+// rendered once and reused — the quantum light behind live .gonna.algo segments
+let glowCv: HTMLCanvasElement | null = null;
+function glowSprite(): HTMLCanvasElement {
+  if (glowCv) return glowCv;
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 16;
+  const g = c.getContext('2d')!;
+  const grad = g.createRadialGradient(32, 8, 1, 32, 8, 32);
+  grad.addColorStop(0, 'rgba(57,255,20,0.85)');
+  grad.addColorStop(0.55, 'rgba(57,255,20,0.28)');
+  grad.addColorStop(1, 'rgba(57,255,20,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 16);
+  glowCv = c;
+  return c;
+}
+
 function drawFlame(ctx: CanvasRenderingContext2D, x: number, y: number): void {
   ctx.fillStyle = '#ff8a3c';
   ctx.fillRect(x + 2, y, 3, 2);

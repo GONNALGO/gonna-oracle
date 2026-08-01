@@ -24,7 +24,7 @@ const KEY_ELIG = 'gonna.elig.v2'; // {address, ok, algo, gonna, gonnaDecimals, n
 const KEY_ELIG_OLD = 'gonna.elig';
 const KEY_MOCK = 'gonna.mockwallet'; // CI mock state
 const KEY_DECIMALS = 'gonna.asa.decimals';
-const KEY_NFD = 'gonna.nfd.v3'; // {address, name, active, ts} — 24h per-address (v2: segments-only)
+const KEY_NFD = 'gonna.nfd.v4'; // {address, name, active, ts} — 24h per-address (v2: segments-only)
 const NFD_CACHE_MS = 24 * 60 * 60 * 1000;
 
 export type WalletProvider = 'pera' | 'defly';
@@ -90,9 +90,10 @@ export interface Identity {
   segment: string | null; // e.g. nat.gonna.algo (null = plain address)
   active: boolean; // segment is not expired
   root: boolean; // v9.2.6: owns the ROOT gonna.algo — the creator's throne (gold)
+  domain: boolean; // v9.2.7: owns an active root .algo domain, no segment (cyan)
   source: 'nfd' | 'cache' | 'address' | null; // how the current label was produced
 }
-const identity: Identity = { address: null, segment: null, active: false, root: false, source: null };
+const identity: Identity = { address: null, segment: null, active: false, root: false, domain: false, source: null };
 let nfdRun = 0; // race token: a stale resolution never overwrites a newer address
 
 function lsGet(k: string): string | null {
@@ -173,7 +174,7 @@ function nfdEntries(d: unknown): NfdEntry[] {
   return [];
 }
 
-async function fetchNfdSegment(address: string): Promise<{ name: string; active: boolean; root?: boolean } | null> {
+async function fetchNfdSegment(address: string): Promise<{ name: string; active: boolean; root?: boolean; domain?: boolean } | null> {
   const gather = async (url: string): Promise<NfdEntry[]> => {
     const r = await fetch(url);
     if (!r.ok) throw new Error('http ' + r.status);
@@ -191,12 +192,15 @@ async function fetchNfdSegment(address: string): Promise<{ name: string; active:
   // a .gonna.algo segment shows the plain address. Active segment = green,
   // expired segment = gray.
   const raw = [...(a.status === 'fulfilled' ? a.value : []), ...(b.status === 'fulfilled' ? b.value : [])];
+  // v9.2.7 LO SPETTRO hierarchy: creator ROOT (gold) > active segment (green
+  // quantum light) > dormant segment (ember) > active root .algo domain (cyan,
+  // below the family) > plain address.
+  const cr = raw.find((n) => typeof n.name === 'string' && n.name.toLowerCase() === 'gonna.algo' && !n.expired);
+  if (cr) return { name: 'gonna.algo', active: true, root: true };
   const all = raw.filter((n) => typeof n.name === 'string' && n.name.toLowerCase().endsWith('.gonna.algo'));
   if (all.length === 0) {
-    // v9.2.6: the ROOT gonna.algo is the creator's throne — not a segment.
-    // Shown in gold when owned and not expired; otherwise plain address.
-    const root = raw.find((n) => typeof n.name === 'string' && n.name.toLowerCase() === 'gonna.algo' && !n.expired);
-    return root ? { name: 'gonna.algo', active: true, root: true } : null;
+    const dom = raw.find((n) => typeof n.name === 'string' && !n.expired);
+    return dom && dom.name ? { name: dom.name.toLowerCase(), active: true, domain: true } : null;
   }
   // among own segments prefer an active one
   const score = (n: NfdEntry): number => (n.expired ? 0 : 1);
@@ -212,11 +216,12 @@ async function fetchNfdSegment(address: string): Promise<{ name: string; active:
   return { name: best.name.toLowerCase(), active: !best.expired };
 }
 
-function applyIdentity(address: string | null, segment: string | null, active: boolean, source: Identity['source'], root = false): void {
+function applyIdentity(address: string | null, segment: string | null, active: boolean, source: Identity['source'], root = false, domain = false): void {
   identity.address = address;
   identity.segment = segment;
   identity.active = active;
   identity.root = root;
+  identity.domain = domain;
   identity.source = source;
 }
 
@@ -228,21 +233,21 @@ export function resolveIdentity(address: string): void {
   try {
     const raw = lsGet(KEY_NFD);
     if (raw) {
-      const c = JSON.parse(raw) as { address: string; name: string | null; active: boolean; root?: boolean; ts: number };
+      const c = JSON.parse(raw) as { address: string; name: string | null; active: boolean; root?: boolean; domain?: boolean; ts: number };
       if (c.address === address && Date.now() - c.ts < NFD_CACHE_MS) {
-        applyIdentity(address, c.name, !!c.active, 'cache', !!c.root);
+        applyIdentity(address, c.name, !!c.active, 'cache', !!c.root, !!c.domain);
         return;
       }
     }
   } catch { /* corrupt cache: resolve live */ }
   void (async () => {
-    let seg: { name: string; active: boolean; root?: boolean } | null = null;
+    let seg: { name: string; active: boolean; root?: boolean; domain?: boolean } | null = null;
     try {
       seg = await fetchNfdSegment(address);
     } catch { /* cosmetic: silently fall back to the address */ }
     if (run !== nfdRun || state.address !== address) return; // wallet changed mid-flight
-    applyIdentity(address, seg ? seg.name : null, seg ? seg.active : false, seg ? 'nfd' : 'address', !!(seg && seg.root));
-    lsSet(KEY_NFD, JSON.stringify({ address, name: seg ? seg.name : null, active: seg ? seg.active : false, root: !!(seg && seg.root), ts: Date.now() }));
+    applyIdentity(address, seg ? seg.name : null, seg ? seg.active : false, seg ? 'nfd' : 'address', !!(seg && seg.root), !!(seg && seg.domain));
+    lsSet(KEY_NFD, JSON.stringify({ address, name: seg ? seg.name : null, active: seg ? seg.active : false, root: !!(seg && seg.root), domain: !!(seg && seg.domain), ts: Date.now() }));
   })();
 }
 
@@ -261,12 +266,13 @@ export function identityLabel(maxChars = 28): string {
   return shortAddress();
 }
 
-// gold = the ROOT (creator), green = active segment, gray = inactive segment;
-// null = caller default (plain address)
+// LO SPETTRO: gold = the ROOT (creator), green = active segment, ember =
+// dormant segment, cyan = root .algo domain; null = caller default (address)
 export function identityColor(): string | null {
   if (!identity.segment) return null;
   if (identity.root) return '#f5c542';
-  return identity.active ? '#7fd858' : '#8a8f9c';
+  if (identity.domain) return '#57c8d8';
+  return identity.active ? '#7fd858' : '#5f7a52';
 }
 
 export function truncatePixel(s: string, maxChars: number): string {
@@ -564,10 +570,11 @@ export interface Segment {
   name: string;
   active: boolean;
   root?: boolean; // owns the ROOT gonna.algo — creator (gold)
+  domain?: boolean; // owns an active root .algo domain, no segment (cyan)
 }
-const KEY_NFD_SEGS = 'gonna.nfd.segs.v3'; // {addr: {name, active, root, ts}} (v3: + creator root)
+const KEY_NFD_SEGS = 'gonna.nfd.segs.v4'; // {addr: {name, active, root, domain, ts}} (v4: + domains)
 const segMem = new Map<string, Segment | null>();
-let segStore: Record<string, { name: string; active: boolean; root?: boolean; ts: number }> = {};
+let segStore: Record<string, { name: string; active: boolean; root?: boolean; domain?: boolean; ts: number }> = {};
 try {
   const raw = lsGet(KEY_NFD_SEGS);
   if (raw) segStore = JSON.parse(raw) as typeof segStore;
@@ -577,7 +584,7 @@ export function cachedSegment(address: string): Segment | null | undefined {
   if (segMem.has(address)) return segMem.get(address) ?? null;
   const c = segStore[address];
   if (c && Date.now() - c.ts < NFD_CACHE_MS) {
-    const seg: Segment | null = c.name ? { name: c.name, active: !!c.active, root: !!c.root } : null;
+    const seg: Segment | null = c.name ? { name: c.name, active: !!c.active, root: !!c.root, domain: !!c.domain } : null;
     segMem.set(address, seg);
     return seg;
   }
@@ -593,7 +600,7 @@ export async function segmentFor(address: string): Promise<Segment | null> {
     seg = await fetchNfdSegment(address);
   } catch { /* cosmetic */ }
   segMem.set(address, seg);
-  segStore[address] = { name: seg ? seg.name : '', active: seg ? seg.active : false, root: !!(seg && seg.root), ts: Date.now() };
+  segStore[address] = { name: seg ? seg.name : '', active: seg ? seg.active : false, root: !!(seg && seg.root), domain: !!(seg && seg.domain), ts: Date.now() };
   lsSet(KEY_NFD_SEGS, JSON.stringify(segStore));
   return seg;
 }
