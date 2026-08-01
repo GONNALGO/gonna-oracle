@@ -24,7 +24,7 @@ const KEY_ELIG = 'gonna.elig.v2'; // {address, ok, algo, gonna, gonnaDecimals, n
 const KEY_ELIG_OLD = 'gonna.elig';
 const KEY_MOCK = 'gonna.mockwallet'; // CI mock state
 const KEY_DECIMALS = 'gonna.asa.decimals';
-const KEY_NFD = 'gonna.nfd.v4'; // {address, name, active, ts} — 24h per-address (v2: segments-only)
+const KEY_NFD = 'gonna.nfd.v5'; // {address, name, active, ts} — 24h per-address (v5: on-chain primary NFD)
 const NFD_CACHE_MS = 24 * 60 * 60 * 1000;
 
 export type WalletProvider = 'pera' | 'defly';
@@ -161,6 +161,7 @@ interface NfdEntry {
   caAlgo?: string[];
   expired?: boolean;
   state?: string;
+  appID?: number; // v9.2.8: on-chain appID, matched against the reverse record
 }
 
 function nfdEntries(d: unknown): NfdEntry[] {
@@ -174,6 +175,33 @@ function nfdEntries(d: unknown): NfdEntry[] {
   return [];
 }
 
+// v9.2.8: on-chain PRIMARY (reverse record) from the NFD registry app
+// 760937186 via the CORS-safe indexer (api.nf.domains /nfd/lookup has no CORS).
+// box name = base64( SHA-256( "addr/algo/" + 32-byte address pubkey ) );
+// value = base64, first 8 bytes big-endian uint64 = primary NFD appID.
+// Never throws — 404/any failure -> null -> heuristic fallback.
+async function primaryAppId(addr: string): Promise<number | null> {
+  try {
+    const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let bits = 0, val = 0; const out: number[] = [];
+    for (const c of addr) { const i = B32.indexOf(c); if (i < 0) return null;
+      val = (val << 5) | i; bits += 5;
+      if (bits >= 8) { out.push((val >> (bits - 8)) & 255); bits -= 8; } }
+    const pk = Uint8Array.from(out.slice(0, 32));
+    const pre = new TextEncoder().encode('addr/algo/');
+    const buf = new Uint8Array(pre.length + 32); buf.set(pre); buf.set(pk, pre.length);
+    const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
+    let bin = ''; for (const b of hash) bin += String.fromCharCode(b);
+    const r = await fetch('https://mainnet-idx.algonode.cloud/v2/applications/760937186/box?name=' +
+      encodeURIComponent('b64:' + btoa(bin)));
+    if (!r.ok) return null;
+    const d = await r.json(); if (!d?.value) return null;
+    const vb = atob(d.value); if (vb.length < 8) return null;
+    let id = 0; for (let i = 0; i < 8; i++) id = id * 256 + vb.charCodeAt(i);
+    return id || null;
+  } catch { return null; }
+}
+
 async function fetchNfdSegment(address: string): Promise<{ name: string; active: boolean; root?: boolean; domain?: boolean } | null> {
   const gather = async (url: string): Promise<NfdEntry[]> => {
     const r = await fetch(url);
@@ -182,28 +210,35 @@ async function fetchNfdSegment(address: string): Promise<{ name: string; active:
     return nfdEntries(d).filter((n) => n.owner === address || (Array.isArray(n.caAlgo) && n.caAlgo.includes(address)));
   };
   // both garage endpoints in parallel: lookup is the primary, search is the
-  // fallback AND the only one that surfaces expired .gonna.algo segments
-  const [a, b] = await Promise.allSettled([
+  // fallback AND the only one that surfaces expired .gonna.algo segments.
+  // v9.2.8: the on-chain reverse record (primary NFD appID) rides along.
+  const [a, b, p] = await Promise.allSettled([
     gather('https://api.nf.domains/nfd/lookup?address=' + address),
     gather('https://api.nf.domains/nfd/v2/search?owner=' + address + '&view=brief&limit=10'),
+    primaryAppId(address),
   ]);
+  const primary = p.status === 'fulfilled' ? p.value : null;
+  const isPrimary = (n: NfdEntry): boolean => primary !== null && typeof n.appID === 'number' && n.appID === primary;
   // v9.2.5: ONLY .gonna.algo segments count as GONNAVERSE identity. Root NFDs
   // (friedbean.algo, mj.algo, gonna.algo itself, ...) do NOT — a wallet without
   // a .gonna.algo segment shows the plain address. Active segment = green,
   // expired segment = gray.
   const raw = [...(a.status === 'fulfilled' ? a.value : []), ...(b.status === 'fulfilled' ? b.value : [])];
-  // v9.2.7 LO SPETTRO hierarchy: creator ROOT (gold) > active segment (green
-  // quantum light) > dormant segment (ember) > active root .algo domain (cyan,
-  // below the family) > plain address.
+  // v9.2.7/v9.2.8 hierarchy: creator ROOT (gold) > active segment (green
+  // quantum light; primary first) > dormant segment (ember; primary first) >
+  // PRIMARY root .algo domain (cyan) > first active domain > plain address.
   const cr = raw.find((n) => typeof n.name === 'string' && n.name.toLowerCase() === 'gonna.algo' && !n.expired);
   if (cr) return { name: 'gonna.algo', active: true, root: true };
   const all = raw.filter((n) => typeof n.name === 'string' && n.name.toLowerCase().endsWith('.gonna.algo'));
   if (all.length === 0) {
-    const dom = raw.find((n) => typeof n.name === 'string' && !n.expired);
+    // no segment: the PRIMARY non-expired domain wins the domain tier
+    const doms = raw.filter((n) => typeof n.name === 'string' && !n.expired);
+    const pd = doms.find(isPrimary);
+    const dom = pd ?? doms[0];
     return dom && dom.name ? { name: dom.name.toLowerCase(), active: true, domain: true } : null;
   }
-  // among own segments prefer an active one
-  const score = (n: NfdEntry): number => (n.expired ? 0 : 1);
+  // among own segments prefer an active one (primary breaks ties)
+  const score = (n: NfdEntry): number => (n.expired ? 0 : 2) + (isPrimary(n) ? 1 : 0);
   const seen = new Set<string>();
   let best: NfdEntry | null = null;
   for (const n of all) {
@@ -572,7 +607,7 @@ export interface Segment {
   root?: boolean; // owns the ROOT gonna.algo — creator (gold)
   domain?: boolean; // owns an active root .algo domain, no segment (cyan)
 }
-const KEY_NFD_SEGS = 'gonna.nfd.segs.v4'; // {addr: {name, active, root, domain, ts}} (v4: + domains)
+const KEY_NFD_SEGS = 'gonna.nfd.segs.v5'; // {addr: {name, active, root, domain, ts}} (v5: + on-chain primary)
 const segMem = new Map<string, Segment | null>();
 let segStore: Record<string, { name: string; active: boolean; root?: boolean; domain?: boolean; ts: number }> = {};
 try {
