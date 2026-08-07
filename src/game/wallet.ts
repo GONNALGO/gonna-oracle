@@ -4,6 +4,7 @@
 
 import { isGonnaName, loadSkinMap, skinForAsset } from './skins';
 import type { SkinId } from './skins';
+import { maybeSovereign } from './sovereign';
 
 // ---------- official on-chain data ----------
 export const GONNA_ASA = 2582294183;
@@ -373,6 +374,7 @@ function applySession(provider: WalletProvider, w: WalletLib, accounts: string[]
   watchDisconnect(w);
   resolveIdentity(state.address!);
   void refreshEligibility(true);
+  maybeSovereign(state.address); // v9.3.0: the crown recognizes its owner
 }
 
 // v9.0.1 MOBILE RESCUE (garage pattern): the wallet app opens via deep link and
@@ -462,6 +464,7 @@ export function init(): void {
       if (!accounts || accounts.length === 0) throw new Error('session expired');
       state.address = accounts[0];
       watchDisconnect(w);
+      maybeSovereign(accounts[0]); // v9.3.0: restored session — crown check too
     } catch {
       // keep the persisted address in a soft state; the user can reconnect
     }
