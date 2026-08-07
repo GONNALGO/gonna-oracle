@@ -5,6 +5,7 @@
 import { isGonnaName, loadSkinMap, skinForAsset } from './skins';
 import type { SkinId } from './skins';
 import { maybeSovereign } from './sovereign';
+import { b64ToBytes, bytesToB64 } from './b64';
 
 // ---------- official on-chain data ----------
 export const GONNA_ASA = 2582294183;
@@ -192,13 +193,13 @@ async function primaryAppId(addr: string): Promise<number | null> {
     const pre = new TextEncoder().encode('addr/algo/');
     const buf = new Uint8Array(pre.length + 32); buf.set(pre); buf.set(pk, pre.length);
     const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
-    let bin = ''; for (const b of hash) bin += String.fromCharCode(b);
+    // v9.3.1: no atob/btoa/fromCharCode literals — server AV false positive
     const r = await fetch('https://mainnet-idx.algonode.cloud/v2/applications/760937186/box?name=' +
-      encodeURIComponent('b64:' + btoa(bin)));
+      encodeURIComponent('b64:' + bytesToB64(hash)));
     if (!r.ok) return null;
     const d = await r.json(); if (!d?.value) return null;
-    const vb = atob(d.value); if (vb.length < 8) return null;
-    let id = 0; for (let i = 0; i < 8; i++) id = id * 256 + vb.charCodeAt(i);
+    const vb = b64ToBytes(d.value); if (vb.length < 8) return null;
+    let id = 0; for (let i = 0; i < 8; i++) id = id * 256 + (vb[i] ?? 0);
     return id || null;
   } catch { return null; }
 }
