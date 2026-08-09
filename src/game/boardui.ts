@@ -701,8 +701,16 @@ export class BoardUI {
     const crown = board.isCrown(e);
     const me = wallet.getWallet().address;
     const mine = me !== null && e.sender === me;
-    ctx.fillStyle = crown ? '#14100a' : rank & 1 ? '#0a0e14' : '#0d1118';
+    // v9.3.7: THE SOVEREIGN — the COMPETITION 01 winner's row is gold FOREVER
+    const sov = (this.tab === 'wallets' && e.sender === board.SOVEREIGN) ||
+      (this.tab === 'gonnas' && e.assetId === board.SOVEREIGN_ASSET);
+    ctx.fillStyle = sov ? '#171208' : crown ? '#14100a' : rank & 1 ? '#0a0e14' : '#0d1118';
     ctx.fillRect(ROW_X, y, ROW_W, ROW_H - 2);
+    if (sov) {
+      ctx.strokeStyle = (t & 16) !== 0 ? '#f5c542' : '#8a6518';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(ROW_X + 0.5, y + 0.5, ROW_W - 1, ROW_H - 3);
+    }
     if (mine) {
       // MY RANK green row highlight
       ctx.fillStyle = 'rgba(57,255,20,0.10)';
@@ -731,7 +739,8 @@ export class BoardUI {
     }
     // primary label: NFD segment (green/gray) / short address / NFT name
     const p = this.primary(e);
-    const pColor = p.kind === 'root' ? '#f5c542' : p.kind === 'dom' ? '#57c8d8' : p.kind === 'seg-active' ? '#7fd858' : p.kind === 'seg-inactive' ? '#5f7a52' : p.kind === 'nft' ? '#f5c542' : '#c8ccd4';
+    // v9.3.7: the sovereign's label is struck in gold, whatever its kind
+    const pColor = sov ? '#f5c542' : p.kind === 'root' ? '#f5c542' : p.kind === 'dom' ? '#57c8d8' : p.kind === 'seg-active' ? '#7fd858' : p.kind === 'seg-inactive' ? '#5f7a52' : p.kind === 'nft' ? '#f5c542' : '#c8ccd4';
     if (p.kind === 'seg-active') {
       // LO SPETTRO: quantum light — a breathing glow behind the live segment
       const gw = textWidth(p.label, 1) + 26;
@@ -744,6 +753,11 @@ export class BoardUI {
     // badges right after the label
     let bx = ROW_X + 32 + textWidth(p.label, 1) + 4;
     const key = this.tab === 'wallets' ? e.sender : e.assetId;
+    if (sov) {
+      // v9.3.7: the minted coin — the winner's permanent badge
+      drawCoin(ctx, bx, y + 3);
+      bx += 11;
+    }
     if (crown) {
       drawCrown(ctx, bx, y + 3);
       bx += 14;
@@ -811,6 +825,14 @@ export class BoardUI {
       color = w.kind === 'seg-active' ? '#7fd858' : w.kind === 'seg-inactive' ? '#8a8f9c' : '#c8ccd4';
     }
     drawTextSh(ctx, label, 54, 28, 1, color);
+    // v9.3.7: THE SOVEREIGN — permanent seal on the winner's card (and on the
+    // fighter card of the NFT that took the TOP GONNAS throne)
+    const sovCard = (!isF && this.cardKey === board.SOVEREIGN) ||
+      (isF && this.cardKey === board.SOVEREIGN_ASSET);
+    if (sovCard) {
+      drawCoin(ctx, 42, 28);
+      drawText(ctx, 'SOVEREIGN OF GENESIS', 54, 38, 1, (t & 16) !== 0 ? '#f5d76e' : '#b8860b');
+    }
     if (isF && typeof this.cardKey === 'number') {
       const owner = board.currentOwner(this.cardKey);
       if (owner) {
@@ -853,9 +875,11 @@ export class BoardUI {
       ctx.fillStyle = sel ? '#142a10' : ri & 1 ? '#0a0e14' : '#0d1118';
       ctx.fillRect(12, y, VW - 24, 10);
       if (ri === 0 && hist.length > 1) {
-        // v9.3.6: gold spine on the personal record (trophy case row 1)
+        // v9.3.6/v9.3.7: gold spine + mini coin on the personal record —
+        // the best run carries the strongest mark, crowned or not
         ctx.fillStyle = '#f5c542';
         ctx.fillRect(12, y, 2, 10);
+        drawCoin(ctx, 94, y + 1);
       }
       drawText(ctx, String(ri + 1).padStart(2, ' '), 16, y + 2, 1, '#5a5f6c');
       drawText(ctx, board.fmtScore(e.score, false), 40, y + 2, 1, '#f5c542');
@@ -1044,6 +1068,22 @@ function glowSprite(): HTMLCanvasElement {
   g.fillRect(0, 0, 64, 16);
   glowCv = c;
   return c;
+}
+
+// THE SOVEREIGN COIN — 8x8 mini of the minted ceremony coin (same palette).
+// The winner's permanent badge: rank can change, this cannot.
+function drawCoin(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  ctx.fillStyle = '#b8860b'; // rim
+  ctx.fillRect(x + 2, y, 4, 1); ctx.fillRect(x + 2, y + 7, 4, 1);
+  ctx.fillRect(x, y + 2, 1, 4); ctx.fillRect(x + 7, y + 2, 1, 4);
+  ctx.fillRect(x + 1, y + 1, 1, 1); ctx.fillRect(x + 6, y + 1, 1, 1);
+  ctx.fillRect(x + 1, y + 6, 1, 1); ctx.fillRect(x + 6, y + 6, 1, 1);
+  ctx.fillStyle = '#f5c542'; // face
+  ctx.fillRect(x + 2, y + 1, 4, 1); ctx.fillRect(x + 1, y + 2, 6, 4); ctx.fillRect(x + 2, y + 6, 4, 1);
+  ctx.fillStyle = '#f5d76e'; // glint
+  ctx.fillRect(x + 2, y + 2, 2, 1); ctx.fillRect(x + 2, y + 3, 1, 1);
+  ctx.fillStyle = '#d4a937'; // shade
+  ctx.fillRect(x + 5, y + 5, 2, 1);
 }
 
 function drawFlame(ctx: CanvasRenderingContext2D, x: number, y: number): void {

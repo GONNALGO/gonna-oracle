@@ -22,6 +22,12 @@ const CAP = 1000;
 export const TOP_N = 50;
 export const NEW_MS = 24 * 60 * 60 * 1000; // a seal is NEW for 24h
 
+// v9.3.7: THE SOVEREIGN — winner of COMPETITION 01 (BOTH thrones: top wallet
+// AND top GONNA NFT). This is FOREVER: the coin was minted, the flag is set,
+// the badge never leaves his rows. (Ceremony: gonna.sovereign.v1)
+export const SOVEREIGN = '7XB3ADS5HLBXFJH6NGY7S4Z5AJ6FYT7JOSDALYTOO3SIW3BCAC2Y2NQK4I'; // friedbean.algo
+export const SOVEREIGN_ASSET = 3564239452; // GONNA404 — the TOP GONNAS throne
+
 // v9.2: stage shown as its name, not a bare number (stages.ts sub titles)
 export const STAGE_NAMES = [
   'GHETTO GONNA',
