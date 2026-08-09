@@ -191,9 +191,14 @@ export class BoardUI {
   }
 
   private cardEntries(): BoardEntry[] {
-    if (typeof this.cardKey === 'string') return board.sealsBySender(this.cardKey);
-    if (typeof this.cardKey === 'number') return board.sealsByAsset(this.cardKey);
-    return [];
+    const list = typeof this.cardKey === 'string'
+      ? board.sealsBySender(this.cardKey)
+      : typeof this.cardKey === 'number'
+        ? board.sealsByAsset(this.cardKey)
+        : [];
+    // v9.3.6: TROPHY CASE — best score first. The record is ALWAYS row 1,
+    // never buried under newer-but-smaller runs.
+    return list.sort((a, b) => b.score - a.score || b.round - a.round);
   }
 
   private openRun(e: BoardEntry): void {
@@ -347,6 +352,14 @@ export class BoardUI {
       if (id.startsWith('row:')) {
         const e = this.rows()[Number(id.slice(4))];
         if (e) this.openCard(e);
+        return { act: 'move' };
+      }
+      if (id === 'histup' || id === 'histdn') {
+        // v9.3.6: mouse scroll buttons on the match history
+        const n = this.cardEntries().length;
+        const max = Math.max(0, n - HIST_VISIBLE);
+        this.histFirst = clamp(this.histFirst + (id === 'histdn' ? 1 : -1), 0, max);
+        this.histCursor = clamp(this.histCursor, this.histFirst, this.histFirst + HIST_VISIBLE - 1);
         return { act: 'move' };
       }
       if (id.startsWith('hist:')) {
@@ -839,16 +852,45 @@ export class BoardUI {
       const sel = ri === this.histCursor;
       ctx.fillStyle = sel ? '#142a10' : ri & 1 ? '#0a0e14' : '#0d1118';
       ctx.fillRect(12, y, VW - 24, 10);
+      if (ri === 0 && hist.length > 1) {
+        // v9.3.6: gold spine on the personal record (trophy case row 1)
+        ctx.fillStyle = '#f5c542';
+        ctx.fillRect(12, y, 2, 10);
+      }
       drawText(ctx, String(ri + 1).padStart(2, ' '), 16, y + 2, 1, '#5a5f6c');
       drawText(ctx, board.fmtScore(e.score, false), 40, y + 2, 1, '#f5c542');
       drawText(ctx, 'S' + e.stage + (e.win ? ' WIN' : ''), 110, y + 2, 1, e.win ? '#7fd858' : '#8a8f9c');
       if (board.isCrown(e)) drawCrown(ctx, 158, y + 1);
-      drawText(ctx, 'R' + e.round, 180, y + 2, 1, '#5a5f6c');
+      // v9.3.6: the date answers "when" right in the list (UTC)
+      if (e.ts > 0) {
+        const d = new Date(e.ts * 1000);
+        const pad = (n: number): string => String(n).padStart(2, '0');
+        drawText(ctx, pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()), 180, y + 2, 1, '#8a8f9c');
+      }
+      drawText(ctx, 'R' + e.round, 216, y + 2, 1, '#5a5f6c');
       drawText(ctx, wallet.truncatePixel(e.msg, 14), VW - 16, y + 2, 1, '#8a8f9c', 'right');
       this.hots.push({ x: 12, y, w: VW - 24, h: 10, id: 'hist:' + ri });
     }
     if (hist.length > HIST_VISIBLE) {
       drawText(ctx, (this.histFirst + 1) + '-' + Math.min(hist.length, this.histFirst + HIST_VISIBLE) + '/' + hist.length, VW - 16, 130, 1, '#5a5f6c', 'right');
+      // v9.3.6: real scroll buttons for mouse users (swipe/keys still work)
+      const maxFirst = Math.max(0, hist.length - HIST_VISIBLE);
+      const up = { x: VW - 116, y: 127, w: 16, h: 11 };
+      const dn = { x: VW - 96, y: 127, w: 16, h: 11 };
+      for (const [b, ena, upArrow] of [[up, this.histFirst > 0, true], [dn, this.histFirst < maxFirst, false]] as [{ x: number; y: number; w: number; h: number }, boolean, boolean][]) {
+        ctx.fillStyle = '#0d1118';
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+        ctx.strokeStyle = ena ? '#1e8c0a' : '#2a2f3a';
+        ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+        ctx.fillStyle = ena ? FLUO : '#3a3f4c';
+        const ax = b.x + b.w / 2, ay = b.y + b.h / 2;
+        if (upArrow) {
+          ctx.fillRect(ax - 1, ay - 2, 2, 2); ctx.fillRect(ax - 2, ay - 1, 4, 2); ctx.fillRect(ax - 3, ay, 6, 2);
+        } else {
+          ctx.fillRect(ax - 3, ay - 1, 6, 2); ctx.fillRect(ax - 2, ay, 4, 2); ctx.fillRect(ax - 1, ay + 1, 2, 2);
+        }
+        this.hots.push({ x: b.x, y: b.y, w: b.w, h: b.h, id: upArrow ? 'histup' : 'histdn' });
+      }
     }
     const back = { x: VW / 2 - 40, y: 206, w: 80, h: 13 };
     this.drawBtn(ctx, back, 'BACK', t);
@@ -899,6 +941,13 @@ export class BoardUI {
       vy += 12;
     }
     drawText(ctx, 'SEAL V' + e.v + '  BLOCK ' + (e.round > 0 ? e.round : '?'), lx, vy, 1, '#5a5f6c');
+    // v9.3.6: WHEN the record was sealed — right on the run card (UTC)
+    if (e.ts > 0) {
+      const d = new Date(e.ts * 1000);
+      const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      const pad = (n: number): string => String(n).padStart(2, '0');
+      drawText(ctx, d.getUTCDate() + ' ' + MON[d.getUTCMonth()] + ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + 'Z', rx, vy, 1, '#8a8f9c', 'right');
+    }
     // message
     if (e.msg) drawTextSh(ctx, '"' + wallet.truncatePixel(e.msg, 30) + '"', VW / 2, 140, 1, '#ffffff', 'center');
     else drawText(ctx, '(NO MESSAGE)', VW / 2, 140, 1, '#3a3f4c', 'center');
