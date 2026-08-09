@@ -32,35 +32,51 @@ const RING_M = '#b8860b', RING_D = '#8a6518', RIM = '#6b4a12', NOTCH = '#4a320c'
 const PLATE_BG = '#0d1017', PLATE_B1 = '#b8860b', PLATE_B2 = '#f5c542';
 const TXT_A = '#f5d76e', TXT_SUB = '#a0a8b4', SPARK = '#fff3c4', EMBOSS = '#6b4a12';
 
-// the gecko — hand-authored from the GONNA logo, profile left, cream throat
-const GECKO = [
-  '..........................',
-  '..........KKKKKKKK........',
-  '........KKMMMMMMMMKKK.....',
-  '......KMMMMMMLLMMMMMMMK...',
-  '.....KMMMMMLLLLLLMMMMMMK..',
-  '....KMMMMLLLLLLLLMMMMMMMK.',
-  '...KMMMLLLLKKLLLLMMMMMMMMK',
-  '..KMMMLLLKEEKLLLMMMMMMMMMK',
-  '..KMMLLLKEEEKLLMMMMMMMMMMK',
-  '.KMMLLLLKEEKLLMMMMMMMMMMMK',
-  '.KMLLLLLLKKLLMMMMMMMMMMMMK',
-  'KMMLLLLMMMMMMMMMMMMMMMMMK.',
-  'KMMMMLLMMMMMMMMMMMKK......',
-  '.KKMMMMMMMMMMMKKK.........',
-  '..KMMMMMMMMMMK............',
-  '..KMMMMMMKMMK.............',
-  '...KMMMMKCCCKKK...........',
-  '....KMMKCCCCCCMK..........',
-  '....KMKCCCCCCCCMK.........',
-  '.....KMKCCCCCCCMK.........',
-  '.....KMMKCCCCCKK..........',
-  '......KMMKKKKK............',
-  '......KMMMK...............',
-  '.......KKK................',
+// THE HEAD — the real GONNA fighter head, extracted pixel-for-pixel from the
+// game's own sprite frames (frames/skins/gonna_r0_c0.png, idle pose) and
+// quantized to an 8-color palette. Profile right, like a proper struck coin.
+const HEAD = [
+  '.............................................................',
+  '...........................KDMDDDDDDDMMMDDKEE................',
+  '..........................DDDMMMMMMMMMMDDDDDKK...............',
+  '........................KDDDDDDDDMMMMMMMKDDDDK...............',
+  '........................DDDDDKKKKDMMMMMMEDMMMKDMK............',
+  '.......................DDDDEEEEEKEEMMMMMEKMMMELcDE...........',
+  '......................DMMDKKccCCMKKDMMMMDDMMMEMLLDE..........',
+  '.....................KMMMEKCCKEcCDKDDMMMMKMMMKMcLLEE.........',
+  '.....................DMDDEcCCKBBCCLKDMMMMMMMMKEEEECcK........',
+  '....................KMMDKDCCCMBBCCcKDMMMMMMMMMDKKEccc........',
+  '....................DMMDKDcCCDBECCDEDMMMMMMMMMMDDKDKD........',
+  '...................KDDMMMMEBBBEEBBBEKDMMMMMMMMMMMMMMKEE......',
+  '...................DDDDDDMMLLLMMMMMDDDKDMDMMMMMMMMMMMMDK.....',
+  '.................KDMDDDDDDMMMMMMMMMMMDKKEKMDMMMMMMMMMMMMDD...',
+  '.................KDDDKDDDDDDDDDDMMMMMMMMDKDKMMMMMMMMMMMMMD...',
+  '................KDMDDEDDDDDDKKKDMMMMMMMMMKKMMMMMMMMMMMMMMM...',
+  '................DDMDKEKDDDKKKEEKDMMMMMMMMMMMMMMMMMMMMMMMMMD..',
+  '................DKMMKEKDMDKKKKKKKDDMMMMMMMMMMMMMMMMMMDDDMMDD.',
+  '...............KKKMDKEEKDMMEEKEEDKDMMMMMMMMMMMMMMMMMMEEEKDDD.',
+  '...............DDDDDDKEcCcccLKEEKKDDDDDMMMMMMMMMMMMMMMMMMMMMK',
+  '..............KDDDDDMMMDLCccCCccDEBEKKDDDDMDMMMMMMMMMMMMMMMMK',
+  '..............KKDDDMMcMDDCCCCCCCCcMKEKKKDDDDDDMMMMMDMMMMMMMD.',
+  '.............KKKDDKccccDDLcCCCCCccccLMMDKKKKKKKDDKKKKKKKDKK..',
+  '............DKEKDDDcccccMKMcCCCCCCCCCCcccLDKKKKKKKKKKKKEEEE..',
+  '...........DMKEKDDDccccccLDDcccCCCCCCCCCcccCCCcccccccccMLM...',
+  '..........DDDKEKDDDcccCcccLDDMLcCCCCCCCCccCCCCCCCCCcCCCcc....',
+  '.........DLLMEBKDDDcccCcCcccLMEEDMMcLccLMLccCCcccccLDDKK.....',
+  '........DMLLMKKLDMMLCCCCCLccccLDKKKKKKKKDDDMMDMMMMDDK........',
+  '......KKMLLLDKKLMMMLCCCCCcccccccLLMDDMK......................',
+  '.....KDMLLLLKKDLLLMMcCCCCccccccccLLLLLD......................',
+  '....MLLLLLLLKEMMLLMLcCCCCccccccccccLLLD......................',
+  '..EMLLLLLLLLDDLLLLLLcCCCCCCCCCCCCccccLD......................',
+  '.KKMLLLLLLLLLLLLLLLLLCCCCCCCCCCCccLcLDKD.....................',
+  'KKELLLLLLLLLLLLLLLLLMLcccCCCCCCCCCCCcLLMDD...................',
+  '.........LLLLLLLLLLLMMccCCCCCCC..............................',
+  '.........LLLLLLLLLMLLLcccCCCCCc..............................',
+  '.........LLLLLLLLMLLLMLLLcCCccL..............................',
 ];
-const GECKO_PAL: Record<string, string> = {
-  K: '#123d1c', M: '#4ea833', L: '#7fd858', C: '#e8e4c8', E: '#0a0f0a',
+const HEAD_PAL: Record<string, string> = {
+  C: '#ddf2b0', c: '#b8db8f', L: '#6fba3e', M: '#5ba635',
+  D: '#428d2a', K: '#2d6421', E: '#153010', B: '#000000',
 };
 
 const SPARKS_A = [[-30, -26], [27, -8], [-16, 24]];
@@ -98,10 +114,19 @@ function paintScene(cv: HTMLCanvasElement, face: 'blank' | 'A' | 'B', sparkPhase
 
   // emboss
   if (face === 'A') {
-    const gx = cx - 13, gy = cy - 14;
-    for (let yy = 0; yy < GECKO.length; yy++) {
-      for (let xx = 0; xx < GECKO[yy].length; xx++) {
-        const p = GECKO_PAL[GECKO[yy][xx]];
+    const gx = cx - 30, gy = cy - 19;
+    // struck-metal shadow: the head silhouette, offset +1,+1 in dark gold
+    ctx.fillStyle = EMBOSS;
+    for (let yy = 0; yy < HEAD.length; yy++) {
+      for (let xx = 0; xx < HEAD[yy].length; xx++) {
+        if (HEAD[yy][xx] === '.') continue;
+        const sx = gx + xx + 1, sy = gy + yy + 1;
+        if (Math.hypot(sx - cx, sy - cy) <= R - 1) ctx.fillRect(sx, sy, 1, 1);
+      }
+    }
+    for (let yy = 0; yy < HEAD.length; yy++) {
+      for (let xx = 0; xx < HEAD[yy].length; xx++) {
+        const p = HEAD_PAL[HEAD[yy][xx]];
         if (!p) continue;
         ctx.fillStyle = p;
         ctx.fillRect(gx + xx, gy + yy, 1, 1);
