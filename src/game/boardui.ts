@@ -965,12 +965,15 @@ export class BoardUI {
       vy += 12;
     }
     drawText(ctx, 'SEAL V' + e.v + '  BLOCK ' + (e.round > 0 ? e.round : '?'), lx, vy, 1, '#5a5f6c');
-    // v9.3.6: WHEN the record was sealed — right on the run card (UTC)
+    // v9.3.6/v9.3.8: WHEN the record was sealed — right on the run card, in
+    // the VIEWER's local time with an explicit GMT offset (no cryptic "Z")
     if (e.ts > 0) {
       const d = new Date(e.ts * 1000);
       const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
       const pad = (n: number): string => String(n).padStart(2, '0');
-      drawText(ctx, d.getUTCDate() + ' ' + MON[d.getUTCMonth()] + ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + 'Z', rx, vy, 1, '#8a8f9c', 'right');
+      const off = -d.getTimezoneOffset() / 60; // local offset incl. DST
+      const gmt = 'GMT' + (off >= 0 ? '+' : '-') + (Number.isInteger(Math.abs(off)) ? Math.abs(off) : Math.abs(off).toFixed(1));
+      drawText(ctx, d.getDate() + ' ' + MON[d.getMonth()] + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ' ' + gmt, rx, vy, 1, '#8a8f9c', 'right');
     }
     // message
     if (e.msg) drawTextSh(ctx, '"' + wallet.truncatePixel(e.msg, 30) + '"', VW / 2, 140, 1, '#ffffff', 'center');
