@@ -426,8 +426,8 @@ export class TouchControls {
     const y = e.clientY;
     const scene = this.hooks.sceneName();
 
-    // tap anywhere = confirm on non-play scenes
-    if (scene !== 'play') {
+    // tap anywhere = confirm on non-play scenes (v9.4: THE MINTING fights like play)
+    if (scene !== 'play' && scene !== 'mint') {
       // v9: canvas-UI hotspots (connect/gate/fighter + title FIGHTER) consume first
       if (this.hooks.uiTap(x, y)) {
         this.track(e.pointerId, null, false);
@@ -534,7 +534,7 @@ export class TouchControls {
     if (!this.active) return;
     const f = this.fit;
     const scene = this.hooks.sceneName();
-    const inPlay = scene === 'play';
+    const inPlay = scene === 'play' || scene === 'mint'; // v9.4: fight controls in THE MINTING too
     c.save();
     c.setTransform(f.dpr, 0, 0, f.dpr, 0, 0); // CSS px space
     c.imageSmoothingEnabled = false;

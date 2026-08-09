@@ -8,6 +8,8 @@ import { VH, VW, rand } from './types';
 import type { EnemyKind } from './enemies';
 import type { ItemKind, ObstacleKind } from './items';
 import type { BossKind } from './boss';
+import { SKIN_INFO, skinPortrait } from './skins';
+import type { SkinId } from './skins';
 
 export interface WaveDef {
   triggerX: number;
@@ -36,6 +38,7 @@ export interface StageDef {
   bossKind: BossKind | null;
   bossTrack: 'boss' | 'boss2';
   arenaX: number;
+  mint?: boolean; // v9.4: THE MINTING bonus stage (single-screen arena, own scene)
   far: HTMLCanvasElement;
   mid: HTMLCanvasElement;
   ground: HTMLCanvasElement;
@@ -1975,5 +1978,409 @@ export function buildStage(idx: number): StageDef {
     ground: s6Ground(len),
     back: an.back,
     props: an.props,
+  };
+}
+
+
+// ---------------- BONUS STAGE: THE MINTING (v9.4) ----------------
+// SF2-style static bonus: one obsidian ALGORAND monument on a pedestal in the
+// forge. Single-screen arena (camX never moves). Live state flows through
+// MINT_FX, written each frame by mint.ts: chart pump, dip, god candle, klaxon,
+// crowd hype. The crew is the GONNA roster itself — never random lizards.
+
+export const MINT_FX = {
+  chart: 0, // 0..1 — the live candle pumps with your damage
+  dip: 0, // 0..1 — red dip while the player stands still
+  godCandle: 0, // 0..1 — GOD CANDLE beam when the monument shatters
+  klaxon: false, // red alert under 10 seconds
+  hype: 0, // 0..1 — crowd/crew excitement (decays)
+};
+
+export function resetMintFx(): void {
+  MINT_FX.chart = 0;
+  MINT_FX.dip = 0;
+  MINT_FX.godCandle = 0;
+  MINT_FX.klaxon = false;
+  MINT_FX.hype = 0;
+}
+
+function sMintFar(w: number): HTMLCanvasElement {
+  const [c, x] = mk(w, VH);
+  // foundry depth: cold dark above, molten glow below
+  const grd = x.createLinearGradient(0, 0, 0, VH);
+  grd.addColorStop(0, '#05070d');
+  grd.addColorStop(0.7, '#0a0e18');
+  grd.addColorStop(1, '#161006');
+  x.fillStyle = grd;
+  x.fillRect(0, 0, w, VH);
+  // distant arch windows breathing chart-green
+  for (let i = 0; i < 4; i++) {
+    const wx = 40 + i * 130;
+    R(x, wx, 46, 26, 44, '#0d2417');
+    R(x, wx + 2, 48, 22, 40, '#123a22');
+    R(x, wx + 2, 48, 22, 3, '#1d5c34');
+    R(x, wx + 11, 48, 2, 40, '#0d2417');
+  }
+  // THE GOLDFALL: a vertical river of molten gold, right of center
+  const fx0 = Math.floor(w * 0.72);
+  R(x, fx0, 0, 34, VH, '#6e5318');
+  for (let i = 0; i < 9; i++) {
+    const sx0 = fx0 + 2 + i * 4;
+    R(x, sx0, 0, 2, VH, i % 3 === 0 ? '#f5d76e' : '#b8860b');
+  }
+  R(x, fx0 - 10, VH - 30, 54, 30, '#8a6518'); // splash pool
+  disc(x, fx0 + 17, VH - 22, 22, '#b8860b');
+  disc(x, fx0 + 17, VH - 24, 14, '#f5d76e');
+  // silhouette machines
+  R(x, 0, 96, 70, VH - 96, '#080b12');
+  R(x, 120, 116, 44, VH - 116, '#080b12');
+  R(x, fx0 + 70, 106, 90, VH - 106, '#080b12');
+  return c;
+}
+
+function sMintMid(w: number): HTMLCanvasElement {
+  const [c, x] = mk(w, VH);
+  // wall panels + rivets
+  R(x, 0, 0, w, 140, '#12161f');
+  for (let px = 0; px < w; px += 48) {
+    R(x, px, 0, 1, 140, '#0c0f16');
+    R(x, px + 4, 4, 2, 2, '#232a38');
+    R(x, px + 4, 134, 2, 2, '#232a38');
+  }
+  // big gears (static silhouettes, shadows of industry)
+  for (const [gx, gy, gr] of [
+    [30, 60, 26],
+    [356, 54, 22],
+  ] as const) {
+    disc(x, gx, gy, gr, '#0c0f16');
+    disc(x, gx, gy, gr - 8, '#12161f');
+    for (let a = 0; a < 8; a++) {
+      const tx = gx + Math.cos((a * Math.PI) / 4) * gr;
+      const ty = gy + Math.sin((a * Math.PI) / 4) * gr;
+      R(x, tx - 3, ty - 3, 6, 6, '#0c0f16');
+    }
+  }
+  // top pipe run (the cat walks here)
+  R(x, 0, 14, w, 6, '#1a2030');
+  for (let px = 20; px < w; px += 60) R(x, px, 12, 6, 10, '#232a38');
+  // ---- THE CHART WALL: bezel + dead screen (the live chart is animated) ----
+  R(x, 88, 22, 208, 88, '#232a38');
+  R(x, 92, 26, 200, 80, '#040805');
+  drawText(x, 'ALGORAND', 192, 8, 2, '#2c3444', 'center');
+  // ticker bezel under the chart
+  R(x, 88, 112, 208, 14, '#232a38');
+  R(x, 92, 114, 200, 10, '#05070a');
+  // crew platforms (left + right ledges)
+  for (const px0 of [16, 300]) {
+    R(x, px0, 118, 68, 6, '#1d2330');
+    R(x, px0, 118, 68, 2, '#2c3444');
+    R(x, px0 + 8, 124, 4, 16, '#12161f');
+    R(x, px0 + 56, 124, 4, 16, '#12161f');
+  }
+  // engraved plate on the wall
+  drawText(x, 'THE MINTING', 192, 132, 1, '#2c3444', 'center');
+  return c;
+}
+
+function sMintGround(len: number): HTMLCanvasElement {
+  const [c, x] = mk(len, 84);
+  R(x, 0, 0, len, 84, '#181c26');
+  // metal plates
+  for (let px = 0; px < len; px += 32) {
+    R(x, px, 0, 1, 84, '#0e1119');
+    R(x, px + 16, 20, 1, 44, '#10141d');
+  }
+  R(x, 0, 20, len, 1, '#0e1119');
+  R(x, 0, 64, len, 1, '#0e1119');
+  // molten seams glowing through the floor near the monument
+  for (let px = 190; px < 320; px += 14) {
+    R(x, px, 34 + ((px * 7) % 12), 8, 1, '#6e5318');
+    R(x, px + 3, 35 + ((px * 7) % 12), 3, 1, '#f5c542');
+  }
+  // drain grate
+  R(x, 56, 60, 28, 10, '#0c0f16');
+  for (let i = 0; i < 6; i++) R(x, 58 + i * 5, 61, 2, 8, '#181c26');
+  // front rivets
+  for (let px = 8; px < len; px += 24) R(x, px, 76, 2, 2, '#2c3444');
+  return c;
+}
+
+const MINT_TICKER =
+  "$GONNA +69420% * $ALGO +420% * BTC +0.1% (BOOMER) * ETH GAS: $48 * SOL: OFFLINE (AGAIN) * WAGMI * SKRRT SKRRT * ";
+
+const MINT_CREW: { skin: SkinId; x: number; feet: number; hat: boolean; flip: boolean }[] = [
+  { skin: 'acid', x: 34, feet: 118, hat: false, flip: false }, // pickaxe shift
+  { skin: 'black', x: 64, feet: 118, hat: true, flip: true }, // the foreman
+  { skin: 'patriot', x: 318, feet: 118, hat: false, flip: true }, // ingot hauler
+  { skin: 'pollution', x: 346, feet: 118, hat: true, flip: false }, // smoke break
+  { skin: 'fire', x: 128, feet: 138, hat: false, flip: false }, // feeds the forge
+  { skin: 'alien', x: 60, feet: 138, hat: false, flip: false }, // stares at the chart, understands nothing
+];
+
+const MINT_CROWD_TINTS = ['#6fba3e', '#5ba635', '#7fd858', '#4a7d2a', '#b8db8f', '#428d2a'];
+const MINT_SIGNS = ['WAGMI', 'LFG', 'SKRRT', 'FRIED', '218K', 'HODL', 'GM'];
+
+function sMintBack(): StageAnim {
+  return (c, camX, t) => {
+    const mo = -camX * 0.55;
+    c.save();
+    c.translate(Math.round(mo), 0);
+    const hype = MINT_FX.hype;
+
+    // ---------- THE CHART WALL (live) ----------
+    // grid
+    c.fillStyle = '#0d2417';
+    for (let gy = 40; gy < 100; gy += 15) c.fillRect(94, gy, 196, 1);
+    // history candles (deterministic)
+    for (let i = 0; i < 13; i++) {
+      const cx0 = 100 + i * 12;
+      const h = 8 + hash01(i * 7 + 3) * 42;
+      const up = hash01(i * 13 + 5) > 0.35;
+      c.fillStyle = up ? '#1d8a3e' : '#7d2a30';
+      c.fillRect(cx0, 96 - h, 7, h);
+      c.fillRect(cx0 + 3, 96 - h - 4, 1, h + 6);
+    }
+    // THE LIVE CANDLE — you are the pump
+    const dip = MINT_FX.dip;
+    const liveH = 6 + MINT_FX.chart * 56;
+    const liveCol = dip > 0.5 ? '#e5484d' : '#39ff14';
+    c.fillStyle = liveCol;
+    c.fillRect(262, 96 - liveH, 9, liveH);
+    c.fillRect(266, 96 - liveH - 5, 1, liveH + 7);
+    if (dip > 0) {
+      c.globalAlpha = dip * 0.5;
+      c.fillStyle = '#e5484d';
+      c.fillRect(94, 28, 196, 76);
+      c.globalAlpha = 1;
+    }
+    // GOD CANDLE: the beam that breaks the ceiling
+    const god = MINT_FX.godCandle;
+    if (god > 0) {
+      const bh = god * 52;
+      c.globalAlpha = 0.35;
+      c.fillStyle = '#39ff14';
+      c.fillRect(261, 96 - liveH - bh, 11, bh);
+      c.globalAlpha = 0.9;
+      c.fillStyle = '#eaffea';
+      c.fillRect(264, 96 - liveH - bh, 5, bh);
+      c.globalAlpha = 1;
+      for (let i = 0; i < 4; i++) {
+        if (hash01((t >> 2) + i * 13) > 0.5) {
+          c.fillStyle = '#eaffea';
+          c.fillRect(258 + Math.round(hash01(i * 29) * 18), 30 + Math.round(hash01(i * 41) * 60), 2, 2);
+        }
+      }
+    }
+    // readouts
+    const pct = Math.round(MINT_FX.chart * 69420);
+    drawText(c, '$GONNA', 96, 30, 1, '#5ba635');
+    drawText(c, '+' + pct + '%', 288, 30, 1, dip > 0.5 ? '#e5484d' : '#39ff14', 'right');
+
+    // ---------- ticker (clipped to its bezel) ----------
+    c.save();
+    c.beginPath();
+    c.rect(92, 113, 200, 12);
+    c.clip();
+    const scroll = (t * 0.9) % 640;
+    drawText(c, MINT_TICKER, 92 - scroll, 116, 1, '#39ff14');
+    drawText(c, MINT_TICKER, 92 - scroll + 640, 116, 1, '#39ff14');
+    c.restore();
+
+    // ---------- crew: the roster at work ----------
+    for (let i = 0; i < MINT_CREW.length; i++) {
+      const m = MINT_CREW[i];
+      const img = skinPortrait(m.skin);
+      const bob = Math.round(Math.sin(t * (0.08 + hype * 0.12) + i * 1.7) * (1 + hype * 2));
+      const w = 30;
+      const h = 53;
+      const dx = m.x - w / 2;
+      const dy = m.feet - h + bob;
+      if (img) {
+        if (m.flip) {
+          c.save();
+          c.translate(m.x * 2, 0);
+          c.scale(-1, 1);
+          c.drawImage(img, dx, dy, w, h);
+          c.restore();
+        } else {
+          c.drawImage(img, dx, dy, w, h);
+        }
+      } else {
+        c.fillStyle = SKIN_INFO[m.skin].accent;
+        c.fillRect(dx + 8, dy + 14, 14, h - 14);
+      }
+      if (m.hat) {
+        c.fillStyle = '#f5c542';
+        c.fillRect(m.x - 7, dy + 7, 14, 4);
+        c.fillRect(m.x - 9, dy + 10, 18, 2);
+      }
+    }
+
+    // ---------- degen at the terminal ----------
+    c.fillStyle = '#1d2330';
+    c.fillRect(298, 128, 64, 10); // desk
+    for (let i = 0; i < 3; i++) {
+      c.fillStyle = '#040805';
+      c.fillRect(302 + i * 20, 114, 16, 12);
+      const up = hash01((t >> 4) + i * 7) > (dip > 0.5 ? 0.75 : 0.35);
+      c.fillStyle = up ? '#39ff14' : '#e5484d';
+      c.fillRect(304 + i * 20, 116 + Math.round(hash01((t >> 3) + i) * 6), 12, 2);
+    }
+    const dimg = skinPortrait('leaf');
+    const panic = dip > 0.5 ? (t & 2 ? 1 : -1) : 0;
+    const djump = god > 0 ? -Math.round(Math.sin(god * Math.PI) * 6) : 0;
+    if (dimg) c.drawImage(dimg, 330 + panic, 138 - 53 + djump, 30, 53);
+    else {
+      c.fillStyle = SKIN_INFO.leaf.accent;
+      c.fillRect(338 + panic, 100 + djump, 14, 38);
+    }
+
+    // ---------- the international degen crowd ----------
+    c.fillStyle = '#10141d';
+    c.fillRect(0, 136, VW, 4); // bench strip
+    for (let i = 0; i < 16; i++) {
+      const cx0 = 10 + i * 24;
+      const bounce = Math.abs(Math.round(Math.sin(t * (0.1 + hype * 0.15) + i * 2.3) * (1 + hype * 2.5)));
+      const by = 136 - bounce;
+      c.fillStyle = MINT_CROWD_TINTS[i % MINT_CROWD_TINTS.length];
+      c.fillRect(cx0, by - 9, 7, 9); // body
+      c.fillRect(cx0 + 1, by - 14, 5, 5); // head
+      c.fillRect(cx0 + 5, by - 12, 3, 2); // snout (no tail. never a tail)
+      c.fillStyle = '#0b0d12';
+      c.fillRect(cx0 + 2, by - 12, 1, 1); // eye
+      if (i % 4 === 1) {
+        // sign on a stick
+        const word = MINT_SIGNS[(i >> 2) % MINT_SIGNS.length];
+        c.fillStyle = '#8a8f9c';
+        c.fillRect(cx0 + 3, by - 26, 1, 13);
+        c.fillStyle = i % 8 === 1 ? '#e8ecf4' : '#f5c542';
+        c.fillRect(cx0 - 13, by - 36, 34, 11);
+        drawText(c, word, cx0 + 4, by - 33, 1, '#101218', 'center');
+      }
+      if (i % 5 === 2) {
+        // flags of the degen nations
+        const fy = by - 34;
+        c.fillStyle = '#8a8f9c';
+        c.fillRect(cx0 + 3, fy, 1, 12);
+        const kind = (i >> 1) % 4;
+        if (kind === 0) {
+          c.fillStyle = '#2a9d4f';
+          c.fillRect(cx0 + 4, fy, 3, 6);
+          c.fillStyle = '#e8ecf4';
+          c.fillRect(cx0 + 7, fy, 3, 6);
+          c.fillStyle = '#e5484d';
+          c.fillRect(cx0 + 10, fy, 3, 6);
+        } else if (kind === 1) {
+          c.fillStyle = '#e8ecf4';
+          c.fillRect(cx0 + 4, fy, 9, 6);
+          disc(c, cx0 + 8, fy + 3, 2, '#e5484d');
+        } else if (kind === 2) {
+          c.fillStyle = '#2a9d4f';
+          c.fillRect(cx0 + 4, fy, 9, 6);
+          c.fillStyle = '#f5d76e';
+          c.fillRect(cx0 + 7, fy + 2, 3, 2);
+        } else {
+          c.fillStyle = '#e5484d';
+          c.fillRect(cx0 + 4, fy, 9, 2);
+          c.fillStyle = '#e8ecf4';
+          c.fillRect(cx0 + 4, fy + 2, 9, 2);
+          c.fillStyle = '#39489c';
+          c.fillRect(cx0 + 4, fy, 4, 3);
+        }
+      }
+    }
+
+    // ---------- the cat (unbothered, Capcom-certified) ----------
+    const catX = ((t * 0.4) % (VW + 80)) - 40;
+    c.fillStyle = '#5a5f6c';
+    c.fillRect(catX, 9, 12, 4); // body
+    c.fillRect(catX + 10, 6, 5, 5); // head
+    c.fillRect(catX + 10, 5, 2, 2); // ear
+    c.fillRect(catX + 13, 5, 2, 2); // ear
+    c.fillRect(catX - 3, 7 + ((t & 8) >> 3), 3, 2); // tail sways
+    c.fillStyle = '#3a3f4c';
+    c.fillRect(catX + 2, 13, 2, 2);
+    c.fillRect(catX + 8, 13, 2, 2);
+
+    // ---------- BLOCK CONFIRMED (<4s finality flex) ----------
+    if (t % 240 < 70 && ((t >> 2) & 1) === 0) {
+      drawText(c, 'BLOCK CONFIRMED', VW - 6, 4, 1, '#39ff14', 'right');
+    }
+
+    // ---------- steam vents + pistons ----------
+    for (let i = 0; i < 3; i++) {
+      const vx = [30, 200, 372][i];
+      const ph = (t + i * 53) % 150;
+      if (ph < 46) {
+        for (let k = 0; k < 3; k++) {
+          c.globalAlpha = ((46 - ph) / 46) * 0.3;
+          disc(c, vx, 128 - ph * 1.3 - k * 9, 3 + k, '#c8cdd7');
+        }
+        c.globalAlpha = 1;
+      }
+    }
+    for (let i = 0; i < 2; i++) {
+      const px0 = [56, 330][i];
+      const off = Math.round(Math.sin(t * 0.09 + i * 2) * 5);
+      c.fillStyle = '#39404e';
+      c.fillRect(px0, 20, 6, 34 + off);
+      c.fillStyle = '#8a6518';
+      c.fillRect(px0 - 4, 52 + off, 14, 8);
+    }
+
+    // ---------- klaxon ----------
+    if (MINT_FX.klaxon && (t & 16) === 0) {
+      disc(c, 14, 10, 5, '#e5484d');
+      disc(c, VW - 14, 10, 5, '#e5484d');
+      c.globalAlpha = 0.25;
+      disc(c, 14, 10, 9, '#e5484d');
+      disc(c, VW - 14, 10, 9, '#e5484d');
+      c.globalAlpha = 1;
+    }
+    c.restore();
+  };
+}
+
+function sMintFront(): StageAnim {
+  return (c, _camX, t) => {
+    // hanging chains, foreground silhouettes
+    c.fillStyle = 'rgba(5,7,11,0.85)';
+    for (const cx0 of [10, VW - 18]) {
+      for (let k = 0; k < 5; k++) c.fillRect(cx0 + (k & 1), k * 9, 4, 7);
+    }
+    // klaxon red wash
+    if (MINT_FX.klaxon && (t & 16) === 0) {
+      c.fillStyle = 'rgba(229,72,77,0.06)';
+      c.fillRect(0, 0, VW, VH);
+    }
+    // foreground steam wisps
+    const ph = (t * 0.7) % 200;
+    if (ph < 60) {
+      c.globalAlpha = 0.08 * (1 - ph / 60);
+      disc(c, 330, 210 - ph, 14, '#c8cdd7');
+      c.globalAlpha = 1;
+    }
+  };
+}
+
+export function buildMintStage(): StageDef {
+  const len = VW; // single-screen arena: the camera never moves
+  return {
+    name: 'BONUS STAGE',
+    sub: 'THE MINTING',
+    track: 'stage3', // the Wall Street drive rolls straight into the forge
+    len,
+    arenaX: len,
+    boss: false,
+    bossKind: null,
+    bossTrack: 'boss',
+    mint: true,
+    waves: [],
+    obstacles: [],
+    far: sMintFar(len * 0.3 + VW),
+    mid: sMintMid(len * 0.6 + VW),
+    ground: sMintGround(len),
+    back: sMintBack(),
+    front: sMintFront(),
   };
 }

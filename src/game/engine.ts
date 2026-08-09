@@ -13,8 +13,9 @@ import { Item, Obstacle } from './items';
 import type { ItemKind } from './items';
 import { Proj } from './proj';
 import type { ProjKind } from './proj';
-import { buildStage } from './stages';
+import { buildMintStage, buildStage, MINT_FX, resetMintFx } from './stages';
 import type { StageDef } from './stages';
+import { drawMintHud, MINT_FLAWLESS_TIME, MINT_SECONDS, MintState } from './mint';
 import { clamp, comboRankName, LANE_BOT, LANE_TOP, rand, VH, VW } from './types';
 import type { Facing } from './types';
 import type { GameCtx } from './ctx';
@@ -40,7 +41,7 @@ import * as share from './share';
 import { shareCheckRect, shareIconRect } from './shareicons';
 import { captureInstallPrompt, FsGuide } from './fsguide';
 
-type Scene = 'title' | 'intro' | 'play' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter' | 'save' | 'board' | 'sealanim';
+type Scene = 'title' | 'intro' | 'play' | 'mint' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter' | 'save' | 'board' | 'sealanim';
 
 // v9.1: the run record waiting on the SAVE RECORD screen
 interface SaveRec {
@@ -51,7 +52,7 @@ interface SaveRec {
   fighter: Fighter;
 }
 
-type Drawable = Player | Enemy | BossLike | Item | Obstacle | Proj;
+type Drawable = Player | Enemy | BossLike | Item | Obstacle | Proj | MintState;
 
 // v9.2: tiny ⛶ icon in the PAUSE menu reopens the FULLSCREEN GUIDE
 const PAUSE_FS_ICON = { x: VW / 2 + 64, y: 92, w: 22, h: 22 };
@@ -1057,6 +1058,28 @@ export class Game implements GameCtx {
   }
 
   // ---------- debug hooks (window.__gonna) ----------
+  // v9.4: QA hook — jump straight into THE MINTING (dev only)
+  debugMint(): void {
+    this.loadMint();
+    this.setScene('mint');
+    if (this.stage) this.audio.playTrack(this.stage.track);
+  }
+  debugMintHit(dmg: number): void {
+    if (this.scene === 'mint' && this.mint && !this.mint.broken) {
+      this.mint.hit(this, dmg);
+      if (this.mint.broken && this.timeLeft > MINT_FLAWLESS_TIME) this.mint.awardFlawless(this);
+    }
+  }
+  get mintInfo(): { scene: boolean; hp: number; broken: boolean; done: boolean; earned: number; timeLeft: number } {
+    return {
+      scene: this.scene === 'mint',
+      hp: this.mint?.hp ?? -1,
+      broken: this.mint?.broken ?? false,
+      done: this.mint?.done ?? false,
+      earned: this.mint?.earned ?? 0,
+      timeLeft: this.timeLeft,
+    };
+  }
   get carriedObject(): Obstacle | null {
     return this.player.carrying;
   }
@@ -1424,6 +1447,100 @@ export class Game implements GameCtx {
     this.player.reset(60, 178);
   }
 
+  // ---------- v9.4: THE MINTING (SF2-style bonus stage after Stage 3) ----------
+  private loadMint(): void {
+    this.stage = buildMintStage();
+    this.stageLen = VW; // single-screen arena: camX never moves
+    this.enemies = [];
+    this.items = [];
+    this.obstacles = [];
+    this.boss = null;
+    this.bossSpawned = false;
+    this.waveIdx = 0;
+    this.waveActive = false;
+    this.spawnQueue = [];
+    this.camX = 0;
+    this.camLock = 0;
+    this.timeLeft = MINT_SECONDS;
+    this.stageScoreStart = this.score;
+    this.goArrow = false;
+    this.fx.reset();
+    for (const pr of this.projs) pr.on = false;
+    this.player.reset(96, 178);
+    this.player.hp = this.player.maxHp;
+    this.mint = new MintState();
+    resetMintFx();
+    this.setScene('intro'); // the BONUS STAGE / THE MINTING title card
+  }
+
+  private updateMint(): void {
+    this.totalFrames++;
+    const m = this.mint;
+    if (!m) {
+      this.setScene('play');
+      return;
+    }
+    // v9.2 note v2: combo chains on the monument count toward the record
+    if (this.player.comboHits > this.maxCombo) this.maxCombo = this.player.comboHits;
+    // hit-stop / slow-mo freeze the sim but never the fx (same contract as play)
+    if (this.freezeT > 0) {
+      this.freezeT--;
+      this.fx.update();
+      this.holdInput = true;
+      return;
+    }
+    if (this.slowmoT > 0) {
+      this.slowmoT--;
+      if (this.frame % 3 !== 0) {
+        this.fx.update();
+        this.holdInput = true;
+        return;
+      }
+    }
+    const p = this.player;
+    // 40 seconds on the clock — frozen once the monument is down / results are up
+    if (!m.done && !m.broken) {
+      this.timeLeft -= 1 / 60;
+      if (this.timeLeft <= 10) MINT_FX.klaxon = true;
+      if (this.timeLeft <= 0) {
+        this.timeLeft = 0;
+        m.timeUp(this);
+      }
+    }
+    p.update(this);
+    this.updateCamera();
+    if (!m.broken && !m.done) {
+      // BYZANTINE SLAM hits the monument too (it's on screen, it's gold, it counts)
+      if (p.state === 'special' && p.t === 10) m.hit(this, 40);
+      const box = p.attackBox();
+      if (box && m.lastHitId !== box.id && m.hitTest(box)) {
+        m.lastHitId = box.id;
+        const comboAtk = p.state === 'punch' || p.state === 'kick';
+        const dmg = comboAtk ? p.scaledDmg(box.dmg) : box.dmg;
+        m.hit(this, dmg);
+        if (comboAtk) p.registerHit(this, dmg);
+        // FLAWLESS MINT: monument down with time to spare
+        if (m.broken && this.timeLeft > MINT_FLAWLESS_TIME) m.awardFlawless(this);
+      }
+    }
+    m.update(this);
+    this.fx.update();
+    if (m.done && m.wrapFrames > 40 && this.input.pressed.start) {
+      this.input.pressed.start = false;
+      this.exitMint();
+    }
+  }
+
+  private exitMint(): void {
+    this.mint = null;
+    this.stageIdx = 3;
+    this.loadStage(3);
+    this.setScene('intro');
+    this.audio.uiSelect();
+  }
+
+  private mint: MintState | null = null; // v9.4: THE MINTING bonus stage state
+
   private setScene(s: Scene): void {
     this.scene = s;
     this.sceneT = 0;
@@ -1470,7 +1587,7 @@ export class Game implements GameCtx {
     }
     // v7: desktop pause (P / ESC) — same veil + sim freeze as the touch II button
     // v9: only consume the edge in play/paused — menu scenes use ESC as BACK
-    if (inp.pressed.pause && (this.scene === 'play' || this.paused)) {
+    if (inp.pressed.pause && (this.scene === 'play' || this.scene === 'mint' || this.paused)) {
       inp.pressed.pause = false;
       this.togglePause();
     }
@@ -1499,13 +1616,16 @@ export class Game implements GameCtx {
       case 'intro': {
         this.sceneT++;
         if (this.sceneT > 150 || (this.sceneT > 30 && inp.pressed.start)) {
-          this.setScene('play');
+          this.setScene(this.stage?.mint ? 'mint' : 'play'); // v9.4: the forge has its own scene
           if (this.stage) this.audio.playTrack(this.stage.track);
         }
         break;
       }
       case 'play':
         this.updatePlay();
+        break;
+      case 'mint':
+        this.updateMint();
         break;
       case 'clear': {
         this.sceneT++;
@@ -1525,6 +1645,10 @@ export class Game implements GameCtx {
           if (next === 1 && !wallet.isEligible()) {
             this.audio.uiSelect();
             this.openGateScene(wallet.isConnected() ? 'gate' : 'connect', next);
+          } else if (this.stageIdx === 2) {
+            // v9.4: THE MINTING — the bonus forge opens after BYZANTINE WALL STREET
+            this.audio.uiSelect();
+            this.loadMint();
           } else {
             this.stageIdx = next;
             this.loadStage(next);
@@ -2145,6 +2269,7 @@ export class Game implements GameCtx {
     for (const e of this.enemies) dl.push(e);
     for (const pr of this.projs) if (pr.on) dl.push(pr);
     if (this.boss) dl.push(this.boss);
+    if (this.mint) dl.push(this.mint); // v9.4: the monument z-sorts with the player
     dl.push(this.player);
     dl.sort((a, b) => a.y - b.y);
     for (const d of dl) d.draw(c, this);
@@ -2164,6 +2289,7 @@ export class Game implements GameCtx {
     c.save();
     this.fitView(false);
     drawHud(c, this, this.score, this.timeLeft, this.goArrow, this.frame, this.audio.muted);
+    if (this.scene === 'mint' && this.mint) drawMintHud(c, this.mint, this.timeLeft, this.frame, this.touchActive); // v9.4
     if (this.scene === 'clear') drawClear(c, this.tally, this.score);
     if (this.scene === 'gameover') drawGameOver(c, this.sceneT);
     if (this.scene === 'continue') drawContinue(c, this.continueCount, this.sceneT, this.continuesUsed, this.touchActive);
