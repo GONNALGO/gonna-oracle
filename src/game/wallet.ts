@@ -194,8 +194,14 @@ async function primaryAppId(addr: string): Promise<number | null> {
     const buf = new Uint8Array(pre.length + 32); buf.set(pre); buf.set(pk, pre.length);
     const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
     // v9.3.1: no atob/btoa/fromCharCode literals — server AV false positive
-    const r = await fetch('https://mainnet-idx.algonode.cloud/v2/applications/760937186/box?name=' +
-      encodeURIComponent('b64:' + bytesToB64(hash)));
+    // v9.3.4: one patient retry on 429 (free-tier rate limit) before giving up
+    const url = 'https://mainnet-idx.algonode.cloud/v2/applications/760937186/box?name=' +
+      encodeURIComponent('b64:' + bytesToB64(hash));
+    let r = await fetch(url);
+    if (r.status === 429) {
+      await new Promise<void>((res) => setTimeout(res, 1500));
+      r = await fetch(url);
+    }
     if (!r.ok) return null;
     const d = await r.json(); if (!d?.value) return null;
     const vb = b64ToBytes(d.value); if (vb.length < 8) return null;
@@ -630,16 +636,32 @@ export function cachedSegment(address: string): Segment | null | undefined {
   return undefined; // unknown: resolve live
 }
 
+// v9.3.4: in-flight dedup + serialization. The board UI re-kicks resolution
+// EVERY FRAME until the first result lands — without dedup that is a request
+// storm, and the free public indexer answers with a 429 wall. Now: one shared
+// promise per address, and live resolutions start 250ms apart.
+const segInflight = new Map<string, Promise<Segment | null>>();
+let segChain: Promise<void> = Promise.resolve();
+
 // resolve one address (cached); cosmetic — failures resolve to null silently
-export async function segmentFor(address: string): Promise<Segment | null> {
+export function segmentFor(address: string): Promise<Segment | null> {
   const hit = cachedSegment(address);
-  if (hit !== undefined) return hit;
-  let seg: Segment | null = null;
-  try {
-    seg = await fetchNfdSegment(address);
-  } catch { /* cosmetic */ }
-  segMem.set(address, seg);
-  segStore[address] = { name: seg ? seg.name : '', active: seg ? seg.active : false, root: !!(seg && seg.root), domain: !!(seg && seg.domain), ts: Date.now() };
-  lsSet(KEY_NFD_SEGS, JSON.stringify(segStore));
-  return seg;
+  if (hit !== undefined) return Promise.resolve(hit);
+  const flying = segInflight.get(address);
+  if (flying) return flying;
+  const p = (async (): Promise<Segment | null> => {
+    await segChain;
+    segChain = new Promise<void>((res) => setTimeout(res, 250));
+    let seg: Segment | null = null;
+    try {
+      seg = await fetchNfdSegment(address);
+    } catch { /* cosmetic */ }
+    segMem.set(address, seg);
+    segStore[address] = { name: seg ? seg.name : '', active: seg ? seg.active : false, root: !!(seg && seg.root), domain: !!(seg && seg.domain), ts: Date.now() };
+    lsSet(KEY_NFD_SEGS, JSON.stringify(segStore));
+    segInflight.delete(address);
+    return seg;
+  })();
+  segInflight.set(address, p);
+  return p;
 }
