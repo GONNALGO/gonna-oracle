@@ -10,7 +10,7 @@
 // USAGE: npm run build && node scripts/vault-door.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const VER = 'v950';
+const VER = 'v951';
 const KEY = [0x47,0x4f,0x4e,0x4e,0x41,0x56,0x45,0x52,0x53,0x45,0x21,0x42,0x59,0x5a,0x41,0x4e,0x54,0x49,0x4e,0x45]; // GONNAVERSE!BYZANTINE
 
 const htmlPath = 'dist/index.html';
@@ -91,6 +91,19 @@ const boot = `<script>
               navigator.serviceWorker.addEventListener('controllerchange', res, { once: true });
               setTimeout(res, 2000); // never trap the player at the door
             });
+          }
+          /* SAFARI GUARD (${VER}): after a version upgrade Safari may keep the
+             OLD worker at the door — controllerchange never fires and the old
+             worker passes the NEW chunk name through to the server (404, black
+             page). So probe the entry chunk: the new worker mints it in-flight
+             (200), anything else answers 404. On 404 reload ONCE — the fresh
+             client of a reload is controlled by the new worker from the start,
+             so the second probe mints and the game boots. */
+          const probe = await fetch('./${rel}', { method: 'HEAD', cache: 'no-store' })
+            .then(r => r.ok).catch(() => false);
+          if (!probe && !sessionStorage.getItem('vd-${VER}')) {
+            sessionStorage.setItem('vd-${VER}', '1');
+            return location.reload();
           }
           boot();
         } catch { boot(); }
