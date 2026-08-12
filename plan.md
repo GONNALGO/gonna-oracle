@@ -6,7 +6,8 @@ Design: /mnt/agents/output/GDD-THE-MINTING-THRONE-ROOM.md (approvato 6/6, 2026-0
 - Mappare il sistema scene/stage dell'engine: come vengono definiti stage, nemici, transizioni, punteggio, sprite/background loading
 - Identificare i punti di integrazione del bonus stage post-Stage 3
 
-## Stage 1 — v9.4.0 THE MINTING (skill: vibecoding-general-swarm)
+## Stage 1 — v9.4.0 THE MINTING (skill: vibecoding-general-swarm) ✅ CONSEGNATA
+<!-- live: commit be9f26c, version 2527e48, zip gonnafight-v940.zip, gauntlet OK -->
 1. Bonus-scene engine: oggetto statico HP, timer 40s, 4 stati di danno, reveal statua (flip)
 2. Chart-pump wall procedurale (candela cresce col danno, rossa se idle 2s, GOD CANDLE finale)
 3. Forgia: parallasse + crew dal roster sprite esistente + folla degen + ticker + gatto

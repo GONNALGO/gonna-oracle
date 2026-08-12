@@ -1142,6 +1142,21 @@ export class Game implements GameCtx {
   debugHurtBoss(dmg: number): void {
     if (this.boss) this.boss.hurt({ dmg, kb: 0, down: false, dir: 1 }, this);
   }
+  get bossInfo(): { kind: string; hp: number; state: string; x: number } | null {
+    return this.boss ? { kind: this.boss.kind, hp: this.boss.hp, state: this.boss.state, x: Math.round(this.boss.x) } : null;
+  }
+  get playInfo(): { px: number; camX: number; wave: number; waveActive: boolean; enemies: number; queue: number; lives: number; pstate: string } {
+    return {
+      px: Math.round(this.player.x),
+      camX: Math.round(this.camX),
+      wave: this.waveIdx,
+      waveActive: this.waveActive,
+      enemies: this.enemies.filter((e) => e.alive).length,
+      queue: this.spawnQueue.length,
+      lives: this.player.lives,
+      pstate: this.player.state,
+    };
+  }
   // ---- v5 debug ----
   get flameCount(): number {
     let n = 0;
@@ -1428,6 +1443,7 @@ export class Game implements GameCtx {
 
   private loadStage(idx: number): void {
     this.stage = buildStage(idx);
+    if (idx === 6) void loadSkinFrames('rainbow'); // v9.5: GONNA 404 wears the REAL rainbow skin
     this.stageLen = this.stage.len;
     this.enemies = [];
     this.items = [];
@@ -1848,7 +1864,8 @@ export class Game implements GameCtx {
 
     // boss defeat -> stage clear tally (final boss -> FINAL VICTORY)
     if (this.boss && this.boss.removeMe) {
-      const wasFinal = this.stage?.bossKind === 'fud';
+      // v9.5: FUD is no longer the end — beyond the launchpad waits THE THRONE ROOM
+      const wasFinal = this.stage?.bossKind === 'gonna404';
       this.boss = null;
       this.haptics.ko(); // v6: boss KO buzz
       if (wasFinal) {
@@ -2196,7 +2213,7 @@ export class Game implements GameCtx {
     if (this.scene === 'victory') {
       c.save();
       this.fitView(true);
-      drawVictory(c, { score: this.score, timeFrames: this.totalFrames, kos: this.kos }, this.sceneT, this.finalVictory);
+      drawVictory(c, { score: this.score, timeFrames: this.totalFrames, kos: this.kos }, this.sceneT, this.finalVictory, this.continuesUsed === 0);
       c.restore();
       return;
     }

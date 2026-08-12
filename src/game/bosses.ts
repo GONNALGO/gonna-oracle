@@ -12,6 +12,7 @@ export function makeBoss(kind: BossKind, x: number): BossLike {
     case 'darkgonna': return new DarkGonna(x);
     case 'golem': return new SlotGolem(x);
     case 'fud': return new EmperorFud(x);
+    case 'gonna404': return new Gonna404(x);
     default: return new Boss(x);
   }
 }
@@ -804,6 +805,463 @@ export class EmperorFud implements BossLike {
       if (this.face === -1) ctx2d.scale(-1, 1);
       ctx2d.drawImage(img, -img.width / 2, -img.height);
     }
+    ctx2d.restore();
+    ctx2d.globalAlpha = 1;
+  }
+}
+
+
+// ---------------- GONNA 404 — the Sovereign's echo (Stage 7, v9.5) ----------------
+// The champion's own ghost: REAL rainbow skin frames, the player's moveset,
+// the record's signature 10-hit combo, glitch teleport (NOT FOUND), rainbow rage.
+// Entrance: the golden statue minted in THE MINTING cracks open on the pedestal.
+
+import { skinFramesLoaded } from './skins';
+import { THRONE_FX } from './stages';
+
+type G4State = 'intro' | 'idle' | 'combo' | 'combo10' | 'kick' | 'jumpkick' | 'teleport' | 'stun' | 'dead';
+
+const G4_IDLE = ['0_0', '0_1', '0_3', '0_5'];
+const G4_WALK = ['3_0', '3_1', '3_2', '3_5'];
+const G4_SCALE = 0.55;
+const G4_RAINBOW = ['#ff5a5a', '#ffb02e', '#f5d76e', '#39ff14', '#3cc9ff', '#b07eff'];
+
+function g4tint(img: HTMLImageElement | HTMLCanvasElement, color: string): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = img.width;
+  c.height = img.height;
+  const x = c.getContext('2d')!;
+  x.imageSmoothingEnabled = false;
+  x.drawImage(img, 0, 0);
+  x.globalCompositeOperation = 'source-in';
+  x.fillStyle = color;
+  x.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+
+export class Gonna404 implements BossLike {
+  x: number;
+  y = 178;
+  z = 0;
+  vx = 0;
+  vz = 0;
+  face: Facing = -1;
+  hp = 420; // tankier than FUD (350): the final throne
+  maxHp = 420;
+  state: G4State = 'intro';
+  t = 0;
+  animT = 0;
+  flashT = 0;
+  atkCd = 70;
+  tpCd = 0;
+  comboN = 1;
+  queued = false;
+  dmgAccum = 0;
+  hitPlayer = false;
+  lastHitId = 0;
+  swingId = 0;
+  alive = true;
+  removeMe = false;
+  readonly kind: BossKind = 'gonna404';
+  readonly name = 'GONNA 404';
+  readonly introLine = 'THE SOVEREIGN ANSWERS';
+  readonly deathLine = '404: FOUND';
+  readonly slowmo = 50;
+  private lastPhase = 1;
+  private statueCv: HTMLCanvasElement | null = null;
+
+  constructor(x: number) {
+    this.x = x;
+  }
+
+  get phase(): number {
+    const r = this.hp / this.maxHp;
+    return r > 0.6 ? 1 : r > 0.25 ? 2 : 3;
+  }
+  get rage(): boolean {
+    return this.phase === 3;
+  }
+
+  private set(s: G4State): void {
+    this.state = s;
+    this.t = 0;
+  }
+  setDead(): void {
+    this.set('dead');
+  }
+  setStun(): void {
+    this.set('stun');
+  }
+
+  hurt(hit: HitInfo, g: GameCtx): boolean {
+    if (!this.alive || this.state === 'intro' || this.state === 'dead') return false;
+    if (this.state === 'teleport') return false; // NOT FOUND — he is not there
+    this.hp -= hit.dmg;
+    this.flashT = 5;
+    this.dmgAccum += hit.dmg;
+    g.fx.spark(this.x + hit.dir * 16, this.y - this.z - 50, hit.down);
+    g.fx.popup(this.x + hit.dir * 12, this.y - this.z - 80, '-' + hit.dmg, '#ffe08a');
+    g.addMeter(0.1);
+    g.hitStop(3);
+    g.audio.punch();
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.alive = false;
+      this.setDead();
+      g.audio.explode();
+      g.fx.shake(10);
+      // NO white flash. The throne deserves gold.
+      g.fx.ring(this.x, this.y - 50, 90, '#f5c542');
+      g.fx.ring(this.x, this.y - 50, 60, '#39ff14');
+    } else if (this.dmgAccum >= 52 && this.state !== 'stun') {
+      this.dmgAccum = 0;
+      this.setStun();
+      g.fx.popup(this.x, this.y - 110, 'STAGGERED!', '#7fd858');
+    }
+    return true;
+  }
+
+  attackBox(): BossAttack | null {
+    if (!this.alive) return null;
+    const mk = (reach: number, dmg: number, kb: number, down: boolean): BossAttack => ({
+      x0: this.face === 1 ? this.x + 4 : this.x - 4 - reach,
+      x1: this.face === 1 ? this.x + 4 + reach : this.x - 4,
+      laneTol: 13,
+      dmg,
+      kb,
+      down,
+    });
+    if (this.state === 'combo' && this.t >= 4 && this.t <= 8) {
+      if (this.comboN === 3) return mk(38, 11, 4, true);
+      return mk(34, 7, 2, false);
+    }
+    // THE SIGNATURE: 10 rapid hits — the 218,540 combo
+    if (this.state === 'combo10') {
+      const sub = this.t % 7;
+      if (sub >= 2 && sub <= 4) return mk(36, 4, 1.5, this.comboN >= 10);
+    }
+    if (this.state === 'kick' && this.t >= 9 && this.t <= 14) return mk(46, 14, 4, true);
+    if (this.state === 'jumpkick' && this.z > 4) return mk(40, 12, 3, true);
+    return null;
+  }
+
+  update(g: GameCtx): void {
+    this.t++;
+    this.animT++;
+    if (this.flashT > 0) this.flashT--;
+    if (this.atkCd > 0) this.atkCd--;
+    if (this.tpCd > 0) this.tpCd--;
+    if (THRONE_FX.gasp > 0) THRONE_FX.gasp--;
+    const p = g.player;
+    const spd = this.rage ? 1.5 : this.phase === 2 ? 1.15 : 1.0;
+
+    // phase transitions are EVENTS
+    if (this.phase !== this.lastPhase && this.alive) {
+      this.lastPhase = this.phase;
+      if (this.phase === 2) {
+        g.fx.popup(this.x, this.y - 118, 'CONNECTION LOST', '#3cc9ff', 90);
+        g.fx.debris(this.x, this.y - 50, '#3cc9ff', '#b07eff', 16);
+        this.tpCd = 60;
+      } else if (this.phase === 3) {
+        g.fx.popup(this.x, this.y - 118, 'RAINBOW RAGE', '#ff5a5a', 90);
+        g.fx.debris(this.x, this.y - 50, '#ff5a5a', '#f5d76e', 16);
+        g.fx.shake(5);
+        THRONE_FX.rage = true;
+      }
+    }
+
+    switch (this.state) {
+      case 'intro': {
+        // THE CONTINUITY BOMB: the statue you minted cracks open
+        if (this.t === 1) {
+          this.x = g.camX + 250; // snap to the pedestal
+          this.face = -1;
+        }
+        if (this.t === 40) {
+          g.audio.thud();
+          g.fx.debris(this.x, this.y - 80, '#8a6518', '#f5c542', 6);
+          g.fx.shake(2);
+        }
+        if (this.t === 75) {
+          g.audio.thud();
+          g.fx.popup(this.x, this.y - 130, '...', '#f5d76e', 60);
+          g.fx.debris(this.x, this.y - 70, '#8a6518', '#f5c542', 8);
+          g.fx.shake(3);
+        }
+        if (this.t === 105) {
+          // the explosion: gold everywhere, the rainbow walks out
+          g.audio.explode();
+          g.fx.debris(this.x, this.y - 70, '#f5c542', '#8a6518', 24);
+          g.fx.coinsBurst(this.x, this.y - 80, 18);
+          g.fx.ring(this.x, this.y - 60, 80, '#f5c542');
+          g.fx.shake(8);
+          THRONE_FX.gasp = 50; // the crowd gasps
+        }
+        if (this.t === 125) g.fx.popup(this.x - 70, this.y - 120, this.introLine, '#f5c542', 120);
+        if (this.t > 160) this.set('idle');
+        break;
+      }
+      case 'idle': {
+        this.face = p.x >= this.x ? 1 : -1;
+        const dx = p.x - this.x;
+        const dy = p.y - this.y;
+        if (Math.abs(dy) > 6) this.y = clamp(this.y + Math.sign(dy) * spd * 0.85, LANE_TOP, LANE_BOT);
+        if (Math.abs(dx) > 36) this.x += Math.sign(dx) * spd;
+        if (this.atkCd <= 0 && p.state !== 'dead') {
+          const adx = Math.abs(dx);
+          const ady = Math.abs(dy);
+          // glitch teleport: phase 2+, from mid-range, often in rage
+          if (this.phase >= 2 && this.tpCd <= 0 && adx > 50 && adx < 260 && chance(this.rage ? 0.8 : 0.45)) {
+            this.set('teleport');
+            g.audio.jump();
+          } else if (adx < 42 && ady < 14) {
+            this.comboN = 1;
+            this.queued = false;
+            // the signature 10-hit is rare in p1, common later
+            if (chance(this.phase === 1 ? 0.18 : 0.34)) {
+              this.set('combo10');
+              g.fx.popup(this.x, this.y - 112, '218,540!', '#f5c542', 60);
+            } else {
+              this.set(chance(0.62) ? 'combo' : 'kick');
+            }
+            this.swingId++;
+            this.hitPlayer = false;
+            g.audio.swing();
+          } else if (adx >= 44 && adx < 160 && chance(0.5)) {
+            this.set('jumpkick');
+            this.vz = 4.6;
+            this.vx = clamp(dx / 30, -4.4, 4.4);
+            this.swingId++;
+            this.hitPlayer = false;
+            g.audio.jump();
+          }
+        }
+        break;
+      }
+      case 'combo': {
+        if (this.t >= 5 && (this.rage || chance(0.06))) this.queued = true;
+        if (this.t < 8) this.x += this.face * 1.4;
+        if (this.t === 8) this.hitPlayer = false;
+        const dur = this.comboN === 3 ? 20 : 15;
+        if (this.t >= dur) {
+          if (this.queued && this.comboN < 3) {
+            this.comboN++;
+            this.queued = false;
+            this.swingId++;
+            this.hitPlayer = false;
+            this.set('combo');
+            g.audio.swing();
+          } else {
+            this.set('idle');
+            this.atkCd = this.rage ? 26 : 50;
+          }
+        }
+        break;
+      }
+      case 'combo10': {
+        // 10 sub-hits of 7 frames: relentless forward pressure
+        if (this.t % 7 === 0) {
+          this.comboN = Math.min(10, Math.floor(this.t / 7) + 1);
+          this.swingId++;
+          this.hitPlayer = false;
+          if (this.t > 0) g.audio.swing();
+        }
+        if (this.t % 7 < 4) this.x += this.face * (this.rage ? 2.2 : 1.6);
+        if (this.t >= 70) {
+          this.set('idle');
+          this.atkCd = this.rage ? 50 : 90;
+          this.comboN = 1;
+        }
+        break;
+      }
+      case 'kick': {
+        if (this.t >= 26) {
+          this.set('idle');
+          this.atkCd = this.rage ? 30 : 60;
+        }
+        break;
+      }
+      case 'jumpkick': {
+        this.vz -= GRAV;
+        this.z += this.vz;
+        this.x += this.vx;
+        if (this.z <= 0) {
+          this.z = 0;
+          this.vz = 0;
+          g.audio.land();
+          g.fx.ring(this.x, this.y, 16, '#b07eff');
+          this.set('idle');
+          this.atkCd = this.rage ? 30 : 55;
+        }
+        break;
+      }
+      case 'teleport': {
+        if (this.t === 1) {
+          g.fx.popup(this.x, this.y - 100, 'NOT FOUND', '#3cc9ff', 46);
+          for (let i = 0; i < 6; i++) {
+            g.fx.debris(this.x + rand(-16, 16), this.y - rand(10, 80), G4_RAINBOW[i], '#101018', 3);
+          }
+          THRONE_FX.gasp = 40; // the crowd gasps at the glitch
+        }
+        if (this.t === 22) {
+          // reappear BEHIND the player, already swinging
+          const side = p.face === 1 ? -1 : 1;
+          this.x = clamp(p.x + side * 44, g.camX + 20, g.camX + VW - 20);
+          this.y = clamp(p.y + rand(-8, 8), LANE_TOP, LANE_BOT);
+          this.face = p.x >= this.x ? 1 : -1;
+          g.audio.land();
+          for (let i = 0; i < 6; i++) {
+            g.fx.debris(this.x + rand(-14, 14), this.y - rand(10, 80), G4_RAINBOW[5 - i], '#101018', 3);
+          }
+          this.swingId++;
+          this.hitPlayer = false;
+          this.set('kick');
+          this.tpCd = this.rage ? 170 : 300;
+          this.atkCd = this.rage ? 34 : 60;
+        }
+        break;
+      }
+      case 'stun': {
+        if (this.t >= 36) this.set('idle');
+        break;
+      }
+      case 'dead': {
+        THRONE_FX.rage = false;
+        // dissolves into rainbow pixels while the crowd throws coins
+        if (this.t % 4 === 0 && this.t < 120) {
+          const col = G4_RAINBOW[(this.t >> 2) % G4_RAINBOW.length];
+          g.fx.debris(this.x + rand(-16, 16), this.y - rand(0, 70), col, '#f5d76e', 4);
+          if (this.t % 20 === 0) g.audio.punch();
+        }
+        if (this.t === 30 || this.t === 70 || this.t === 110) g.fx.coinsBurst(this.x, this.y - 60, 12);
+        if (this.t > 165) this.removeMe = true;
+        break;
+      }
+    }
+  }
+
+  private frame(g: GameCtx, key: string): HTMLImageElement | HTMLCanvasElement | null {
+    const rb = skinFramesLoaded('rainbow');
+    const img = rb?.get(key) ?? g.frames.get(key) ?? null;
+    return img;
+  }
+
+  draw(ctx2d: CanvasRenderingContext2D, g: GameCtx): void {
+    const sx = Math.round(this.x - g.camX);
+    const sy = Math.round(this.y - this.z);
+
+    // ---- the statue (intro, before the explosion) ----
+    if (this.state === 'intro' && this.t < 105) {
+      const base = this.frame(g, '0_0');
+      if (!base) return;
+      if (!this.statueCv) {
+        const shade = g4tint(base, '#8a6518');
+        const main = g4tint(base, '#f5c542');
+        const glint = g4tint(base, '#f5d76e');
+        const cv = document.createElement('canvas');
+        cv.width = base.width + 1;
+        cv.height = base.height + 1;
+        const cx = cv.getContext('2d')!;
+        cx.imageSmoothingEnabled = false;
+        cx.drawImage(shade, 1, 1);
+        cx.drawImage(main, 0, 0);
+        cx.drawImage(glint, 0, 0, glint.width, Math.floor(glint.height * 0.38), 0, 0, glint.width, Math.floor(glint.height * 0.38));
+        this.statueCv = cv;
+      }
+      const st = this.statueCv;
+      const sc = 0.85; // monumental
+      const dw = st.width * sc;
+      const dh = st.height * sc;
+      const py = this.y - 22; // on the pedestal
+      // pedestal shadow
+      ctx2d.globalAlpha = 0.35;
+      ctx2d.fillStyle = '#000';
+      ctx2d.beginPath();
+      ctx2d.ellipse(sx, this.y - 20, 26, 7, 0, 0, Math.PI * 2);
+      ctx2d.fill();
+      ctx2d.globalAlpha = 1;
+      ctx2d.save();
+      ctx2d.translate(sx, py);
+      ctx2d.scale(-1, 1); // faces the incoming player
+      ctx2d.drawImage(st, -dw / 2, -dh, dw, dh);
+      ctx2d.restore();
+      // cracks spread after the first thuds
+      if (this.t > 40) {
+        ctx2d.strokeStyle = this.t > 75 ? '#fff2c0' : '#8a6518';
+        ctx2d.lineWidth = 1;
+        const n = this.t > 75 ? 5 : 2;
+        for (let i = 0; i < n; i++) {
+          ctx2d.beginPath();
+          const x0 = sx - 14 + ((i * 37 + 11) % 28);
+          ctx2d.moveTo(x0, py - dh + 8 + i * 12);
+          ctx2d.lineTo(x0 + 6, py - dh + 22 + i * 12);
+          ctx2d.lineTo(x0 - 3, py - dh + 34 + i * 12);
+          ctx2d.stroke();
+        }
+      }
+      return;
+    }
+
+    // ---- glitch teleport: he is NOT THERE ----
+    if (this.state === 'teleport' && this.t < 22) {
+      for (let i = 0; i < 8; i++) {
+        const gx = sx + Math.round(Math.sin(this.t * 1.7 + i * 2.3) * 20);
+        const gy = sy - 10 - i * 9;
+        ctx2d.globalAlpha = 0.7 - i * 0.07;
+        ctx2d.fillStyle = G4_RAINBOW[i % G4_RAINBOW.length];
+        ctx2d.fillRect(gx, gy, 10 - i, 3);
+      }
+      ctx2d.globalAlpha = 1;
+      return;
+    }
+
+    // shadow
+    ctx2d.globalAlpha = clamp(0.4 - this.z / 220, 0.08, 0.4);
+    ctx2d.fillStyle = '#000';
+    ctx2d.beginPath();
+    ctx2d.ellipse(sx, this.y + 2, 16 - this.z * 0.04, 5 - this.z * 0.015, 0, 0, Math.PI * 2);
+    ctx2d.fill();
+    ctx2d.globalAlpha = 1;
+
+    // rainbow rage aura
+    if (this.rage && this.state !== 'dead') {
+      const ri = (this.animT >> 2) % G4_RAINBOW.length;
+      ctx2d.globalAlpha = 0.22 + 0.1 * Math.sin(this.animT * 0.15);
+      ctx2d.fillStyle = G4_RAINBOW[ri];
+      ctx2d.beginPath();
+      ctx2d.ellipse(sx, this.y + 2, 24, 8, 0, 0, Math.PI * 2);
+      ctx2d.fill();
+      ctx2d.globalAlpha = 1;
+    }
+
+    let key = '0_0';
+    switch (this.state) {
+      case 'intro':
+      case 'idle': {
+        const moving = Math.abs(g.player.x - this.x) > 36;
+        key = moving ? G4_WALK[(this.animT >> 3) & 3] : G4_IDLE[(this.animT >> 3) & 3];
+        break;
+      }
+      case 'combo': key = this.comboN === 1 ? '1_1' : this.comboN === 2 ? '1_2' : '1_3'; break;
+      case 'combo10': key = ['1_1', '1_2', '1_3'][(this.t / 7 | 0) % 3]; break;
+      case 'kick':
+      case 'teleport': key = this.t < 13 ? '1_4' : '1_5'; break;
+      case 'jumpkick': key = '1_4'; break;
+      case 'stun': key = '3_3'; break;
+      case 'dead': key = '3_3'; break;
+    }
+    const img = this.frame(g, key);
+    if (!img) return;
+    const dw = img.width * G4_SCALE;
+    const dh = img.height * G4_SCALE;
+    ctx2d.save();
+    if (this.flashT > 0) ctx2d.filter = 'brightness(3)';
+    if (this.state === 'dead') {
+      ctx2d.globalAlpha = this.t > 30 ? Math.max(0, 1 - (this.t - 30) / 100) : 1;
+    }
+    ctx2d.translate(sx, sy);
+    if (this.face === -1) ctx2d.scale(-1, 1);
+    ctx2d.drawImage(img, -dw / 2, -dh, dw, dh);
     ctx2d.restore();
     ctx2d.globalAlpha = 1;
   }

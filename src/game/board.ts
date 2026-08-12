@@ -36,9 +36,10 @@ export const STAGE_NAMES = [
   'TEMPLE OF CONSENSUS',
   'THE HOUSE',
   'MOON LAUNCHPAD',
+  'THE THRONE ROOM', // v9.5
 ] as const;
 export function stageName(stage: number): string {
-  return STAGE_NAMES[Math.min(6, Math.max(1, stage)) - 1];
+  return STAGE_NAMES[Math.min(7, Math.max(1, stage)) - 1];
 }
 
 // $GONNA-branded score with thousands separators: 7350 -> "7,350 $GONNA"

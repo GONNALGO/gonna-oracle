@@ -100,7 +100,7 @@ export function drawTitle(
   ctx.scale(-1, 1);
   ctx.drawImage(art.lizIcon, 0, 0, m[1].w, m[1].h);
   ctx.restore();
-  drawText(ctx, 'V9.4.0 THE MINTING', VW - textWidth('V9.4.0 THE MINTING', 1) - 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, 'V9.5.0 THRONE ROOM', VW - textWidth('V9.5.0 THRONE ROOM', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 
@@ -184,7 +184,7 @@ export interface FinalStats {
   kos: number;
 }
 
-export function drawVictory(ctx: CanvasRenderingContext2D, stats: FinalStats, t: number, final = false): void {
+export function drawVictory(ctx: CanvasRenderingContext2D, stats: FinalStats, t: number, final = false, byzClear = false): void {
   ctx.fillStyle = '#070a14';
   ctx.fillRect(0, 0, VW, VH);
   mosaicBorder(ctx);
@@ -214,8 +214,10 @@ export function drawVictory(ctx: CanvasRenderingContext2D, stats: FinalStats, t:
     ctx.fillRect(rx + 3, ry, 10, fl);
     ctx.fillStyle = '#ff8a3c';
     ctx.fillRect(rx + 5, ry, 6, fl + 5);
-    drawTextSh(ctx, 'FUD ELIMINATED.', VW / 2, 26, 2, '#e23b3b', 'center');
-    drawTextSh(ctx, 'TO THE MOON.', VW / 2, 46, 2, '#f5c542', 'center');
+    // v9.5: the throne has fallen — GONNA 404 is the final boss now
+    drawTextSh(ctx, '404: FOUND.', VW / 2, 26, 2, '#3cc9ff', 'center');
+    drawTextSh(ctx, 'THE THRONE IS YOURS.', VW / 2, 46, 2, '#f5c542', 'center');
+    if (byzClear) drawTextSh(ctx, 'BYZANTINE CLEAR — NO CONTINUES. LEGEND.', VW / 2, 60, 1, '#f5d76e', 'center');
     const secs = Math.floor(stats.timeFrames / 60);
     const mm = Math.floor(secs / 60);
     const ss = String(secs % 60).padStart(2, '0');
@@ -226,7 +228,7 @@ export function drawVictory(ctx: CanvasRenderingContext2D, stats: FinalStats, t:
       drawTextSh(ctx, 'GONNA + THE BYZANTINES', VW / 2 + 60, 124, 1, '#f5c542', 'center');
       drawTextSh(ctx, 'A GONNAVERSE PRODUCTION', VW / 2 + 60, 138, 1, '#8a8f9c', 'center');
       drawTextSh(ctx, 'STARRING GONNA AS HIMSELF', VW / 2 + 60, 152, 1, '#8a8f9c', 'center');
-      drawTextSh(ctx, 'WHALE - DARK GONNA - SLOT GOLEM - FUD', VW / 2 + 60, 166, 1, '#8a8f9c', 'center');
+      drawTextSh(ctx, 'WHALE-DARK GONNA-SLOT GOLEM-FUD-GONNA 404', VW / 2 + 60, 166, 1, '#8a8f9c', 'center');
       drawTextSh(ctx, 'THANK YOU FOR PLAYING', VW / 2 + 60, 184, 1, '#7fd858', 'center');
     }
     if (t > 200 && (t & 32) !== 0) drawTextSh(ctx, 'PRESS ENTER', VW / 2, 206, 1, '#ffffff', 'center');

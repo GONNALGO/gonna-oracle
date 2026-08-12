@@ -5,7 +5,7 @@ import type { GameCtx } from './ctx';
 
 export type BState = 'intro' | 'idle' | 'swing' | 'flop' | 'summon' | 'stun' | 'dead';
 
-export type BossKind = 'whale' | 'darkgonna' | 'golem' | 'fud';
+export type BossKind = 'whale' | 'darkgonna' | 'golem' | 'fud' | 'gonna404';
 
 export interface BossAttack {
   x0: number;

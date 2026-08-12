@@ -10,6 +10,7 @@ import type { ItemKind, ObstacleKind } from './items';
 import type { BossKind } from './boss';
 import { SKIN_INFO, skinPortrait } from './skins';
 import type { SkinId } from './skins';
+import { latestAlgorandRound } from './chain';
 
 export interface WaveDef {
   triggerX: number;
@@ -1946,6 +1947,7 @@ export function buildStage(idx: number): StageDef {
       front: an.front,
     };
   }
+  if (idx === 5) {
   const len = 1680;
   const an = s6Anim(len * 0.6 + VW, len * 0.3 + VW);
   return {
@@ -1978,6 +1980,383 @@ export function buildStage(idx: number): StageDef {
     ground: s6Ground(len),
     back: an.back,
     props: an.props,
+  };
+  }
+  if (idx === 6) return buildThroneRoom();
+  return buildStage(5); // unreachable — keeps the compiler honest
+}
+
+// ---------------- STAGE 7: THE THRONE ROOM (v9.5) ----------------
+// The candle cathedral above the clouds. A love letter to the Algorand
+// community: stained-glass ALGO windows, candlestick columns, the Corridor
+// of the Dead (BTC/ETH/SOL relics), the live block-number frieze, the degen
+// crowd — and the golden statue YOU minted, waiting on its pedestal.
+
+export const THRONE_FX = {
+  rage: false, // phase 3: candles gutter, glitch storm intensifies
+  gasp: 0, // frames of crowd shock (statue explosion / NOT FOUND teleport)
+};
+
+const S7_PEDESTAL_MID_X = 864; // mid-layer x: aligns with the boss statue at fight time
+const S7_WINDOWS_FAR = [320, 430, 540]; // far-layer x of the stained-glass arches
+
+function s7Far(w: number): HTMLCanvasElement {
+  const [c, x] = mk(w, VH);
+  // cathedral depth: violet-black above the clouds
+  const grd = x.createLinearGradient(0, 0, 0, VH);
+  grd.addColorStop(0, '#0a0714');
+  grd.addColorStop(0.65, '#100b20');
+  grd.addColorStop(1, '#1a1026');
+  x.fillStyle = grd;
+  x.fillRect(0, 0, w, VH);
+  // clouds below (we are above the world, past the MOON LAUNCHPAD)
+  for (let i = 0; i < 10; i++) {
+    disc(x, 30 + i * 85, VH - 14 + (i % 3) * 5, 26, '#141026');
+    disc(x, 60 + i * 85, VH - 8 + (i % 2) * 4, 20, '#18122e');
+  }
+  // ---- stained-glass arches: ALGO / GONNA / THE CHART ----
+  for (let i = 0; i < S7_WINDOWS_FAR.length; i++) {
+    const wx = S7_WINDOWS_FAR[i];
+    // arch frame
+    R(x, wx - 4, 18, 56, 108, '#241c3a');
+    R(x, wx - 1, 21, 50, 102, '#0a0714');
+    // glitch sky inside (the storm is animated in the back pass)
+    R(x, wx + 1, 23, 46, 98, '#0d0a1e');
+    if (i === 0) {
+      // ALGORAND pane: green glass triangle-A
+      x.strokeStyle = '#1d5c34';
+      x.lineWidth = 4;
+      x.beginPath();
+      x.moveTo(wx + 8, 100);
+      x.lineTo(wx + 24, 44);
+      x.lineTo(wx + 40, 100);
+      x.stroke();
+      x.beginPath();
+      x.moveTo(wx + 14, 78);
+      x.lineTo(wx + 34, 78);
+      x.stroke();
+      x.fillStyle = '#39ff14';
+      x.globalAlpha = 0.35;
+      x.fillRect(wx + 1, 23, 46, 98);
+      x.globalAlpha = 1;
+    } else if (i === 1) {
+      // GONNA pane: golden lizard head silhouette
+      x.fillStyle = '#8a6518';
+      x.fillRect(wx + 10, 50, 26, 34);
+      x.fillRect(wx + 26, 58, 12, 12); // snout
+      x.fillStyle = '#f5c542';
+      x.fillRect(wx + 12, 52, 22, 28);
+      x.fillRect(wx + 26, 59, 10, 8);
+      x.fillStyle = '#0a0714';
+      x.fillRect(wx + 17, 58, 4, 4); // eye
+      x.globalAlpha = 0.25;
+      x.fillStyle = '#f5c542';
+      x.fillRect(wx + 1, 23, 46, 98);
+      x.globalAlpha = 1;
+    } else {
+      // THE CHART pane: green candlesticks in glass
+      for (let k = 0; k < 4; k++) {
+        const ch = 14 + k * 9;
+        R(x, wx + 7 + k * 10, 104 - ch, 6, ch, k === 3 ? '#f5c542' : '#1d8a3e');
+        R(x, wx + 9 + k * 10, 100 - ch, 2, ch + 5, k === 3 ? '#f5d76e' : '#2a9d4f');
+      }
+      x.globalAlpha = 0.3;
+      x.fillStyle = '#39ff14';
+      x.fillRect(wx + 1, 23, 46, 98);
+      x.globalAlpha = 1;
+    }
+    // leading lines
+    x.fillStyle = '#241c3a';
+    x.fillRect(wx + 22, 23, 2, 98);
+    x.fillRect(wx + 1, 66, 46, 2);
+  }
+  return c;
+}
+
+function s7Mid(w: number): HTMLCanvasElement {
+  const [c, x] = mk(w, VH);
+  R(x, 0, 0, w, 140, '#171226');
+  // wall paneling + gold trim
+  R(x, 0, 36, w, 3, '#3a2f14');
+  R(x, 0, 126, w, 2, '#3a2f14');
+  // ---- THE FRIEZE: the living blockchain band ----
+  R(x, 0, 8, w, 24, '#0d0a18');
+  R(x, 0, 8, w, 2, '#6e5318');
+  R(x, 0, 30, w, 2, '#6e5318');
+  for (let bx = 10; bx < w; bx += 46) {
+    R(x, bx, 13, 14, 14, '#1d1730');
+    R(x, bx + 2, 15, 10, 10, '#2c2244');
+    R(x, bx + 14, 19, 32, 2, '#4a3a1a'); // the chain link
+  }
+  // ---- candlestick columns ----
+  for (let cx0 = 60; cx0 < w; cx0 += 160) {
+    // green candle body as column
+    R(x, cx0, 40, 26, 100, '#14542a');
+    R(x, cx0 + 2, 40, 4, 100, '#1d8a3e');
+    R(x, cx0 + 20, 40, 4, 100, '#0d3a1d');
+    // capital + base (gold)
+    R(x, cx0 - 5, 36, 36, 5, '#8a6518');
+    R(x, cx0 - 5, 138, 36, 5, '#8a6518');
+    R(x, cx0 - 3, 36, 32, 2, '#b8860b');
+  }
+  // ---- tapestries between columns ----
+  for (let i = 0; i * 160 + 130 < w; i++) {
+    const tx = i * 160 + 130;
+    R(x, tx, 44, 44, 76, '#2a0f1e'); // cloth
+    R(x, tx, 44, 44, 4, '#6e5318'); // rod
+    R(x, tx + 2, 46, 40, 2, '#3a2f14');
+    // candle chart motif on the cloth
+    for (let k = 0; k < 4; k++) {
+      const ch = 8 + ((i * 5 + k * 7) % 22);
+      R(x, tx + 7 + k * 9, 104 - ch, 5, ch, '#1d8a3e');
+    }
+    R(x, tx + 4, 112, 36, 3, '#6e5318'); // hem
+  }
+  // ---- THE COMPETITION 01 TAPESTRY (near the throne) ----
+  R(x, 760, 42, 52, 82, '#241432');
+  R(x, 760, 42, 52, 4, '#8a6518');
+  for (let k = 0; k < 5; k++) {
+    const ch = 10 + k * 8;
+    R(x, 767 + k * 9, 108 - ch, 6, ch, k === 4 ? '#f5c542' : '#1d8a3e');
+  }
+  drawText(x, '218540', 786, 112, 1, '#f5c542', 'center');
+  // ---- SOVEREIGN OF GENESIS banner ----
+  R(x, 690, 46, 56, 30, '#171208');
+  R(x, 690, 46, 56, 2, '#b8860b');
+  R(x, 690, 74, 56, 2, '#b8860b');
+  drawText(x, 'SOVEREIGN', 718, 52, 1, '#f5c542', 'center');
+  drawText(x, 'OF GENESIS', 718, 62, 1, '#b8860b', 'center');
+  // ---- THE CORRIDOR OF THE DEAD (inferior chains, fondly remembered) ----
+  // ETH: the rusted gas pump
+  R(x, 152, 96, 26, 42, '#2c2a26');
+  R(x, 156, 100, 18, 12, '#3a3f4c');
+  drawText(x, 'GAS', 165, 102, 1, '#8a8f9c', 'center');
+  drawText(x, '$48', 165, 116, 1, '#e5484d', 'center');
+  R(x, 158, 126, 14, 3, '#4a3a28'); // rust
+  R(x, 178, 104, 8, 4, '#2c2a26'); // broken hose
+  // SOL: the cracked obelisk
+  R(x, 414, 84, 22, 54, '#232030');
+  R(x, 414, 84, 22, 4, '#2e2a3c');
+  drawText(x, 'SOL', 425, 92, 1, '#5a5f6c', 'center');
+  drawText(x, 'OFFLINE', 425, 108, 1, '#e5484d', 'center');
+  x.strokeStyle = '#0d0a18';
+  x.lineWidth = 1;
+  x.beginPath();
+  x.moveTo(418, 90);
+  x.lineTo(424, 108);
+  x.lineTo(420, 126);
+  x.stroke();
+  // BTC: the stone turtle
+  R(x, 616, 122, 30, 14, '#3a3f4c');
+  disc(x, 648, 126, 6, '#3a3f4c');
+  R(x, 620, 134, 6, 5, '#2c313c');
+  R(x, 636, 134, 6, 5, '#2c313c');
+  drawText(x, 'BTC', 633, 124, 1, '#8a8f9c', 'center');
+  drawText(x, '~10 MIN', 633, 142, 1, '#5a5f6c', 'center');
+  // ---- THE THRONE + the statue pedestal ----
+  const px = S7_PEDESTAL_MID_X;
+  // throne: golden high-back silhouette behind the pedestal
+  R(x, px + 34, 44, 44, 96, '#6e5318');
+  R(x, px + 38, 48, 36, 88, '#8a6518');
+  R(x, px + 42, 52, 28, 80, '#3a2f14');
+  disc(x, px + 56, 44, 10, '#b8860b'); // halo crown of the throne
+  R(x, px + 44, 84, 24, 4, '#b8860b'); // armrest
+  // pedestal (the statue from THE MINTING stands here — the boss intro)
+  R(x, px - 34, 156, 68, 8, '#3a2f14');
+  R(x, px - 34, 156, 68, 2, '#8a6518');
+  R(x, px - 28, 164, 56, 18, '#2c240f');
+  R(x, px - 28, 164, 56, 2, '#6e5318');
+  return c;
+}
+
+function s7Ground(len: number): HTMLCanvasElement {
+  const [c, x] = mk(len, 84);
+  R(x, 0, 0, len, 84, '#141020'); // dark marble
+  for (let px = 0; px < len; px += 40) {
+    R(x, px, 0, 1, 84, '#0d0a18');
+    R(x, px + 20, 0, 1, 84, '#100c1c');
+  }
+  R(x, 0, 28, len, 1, '#0d0a18');
+  R(x, 0, 56, len, 1, '#0d0a18');
+  // gold inlay veins
+  for (let px = 12; px < len; px += 90) {
+    R(x, px, 12 + (px % 20), 22, 1, '#4a3a1a');
+    R(x, px + 8, 13 + (px % 20), 6, 1, '#8a6518');
+  }
+  // THE RED CARPET to the throne (walkable band)
+  R(x, 0, 18, len, 48, '#4a1020');
+  R(x, 0, 18, len, 3, '#8a6518');
+  R(x, 0, 63, len, 3, '#8a6518');
+  for (let px = 8; px < len; px += 16) {
+    R(x, px, 21, 2, 2, '#b8860b'); // carpet studs
+    R(x, px, 60, 2, 2, '#b8860b');
+  }
+  return c;
+}
+
+const S7_CROWD_TINTS = ['#6fba3e', '#5ba635', '#7fd858', '#4a7d2a', '#b8db8f', '#428d2a'];
+const S7_SIGNS = ['FRIED', '218540', 'SKRRT', 'WAGMI', 'LFG', 'HODL'];
+
+function s7Back(): StageAnim {
+  return (c, camX, t) => {
+    const gasp = THRONE_FX.gasp > 0;
+    const rage = THRONE_FX.rage;
+
+    // ---- glitch storm inside the stained-glass windows ----
+    for (let i = 0; i < S7_WINDOWS_FAR.length; i++) {
+      const wx = S7_WINDOWS_FAR[i] - camX * 0.25;
+      if (wx < -60 || wx > VW + 20) continue;
+      // pixel rain
+      const drops = rage ? 7 : 4;
+      for (let k = 0; k < drops; k++) {
+        const dx = wx + 3 + ((k * 17 + i * 31) % 42);
+        const dy = 24 + ((t * (1.2 + k * 0.3) + k * 40) % 94);
+        c.fillStyle = k % 3 === 0 ? '#3cc9ff' : '#b07eff';
+        c.globalAlpha = 0.5;
+        c.fillRect(dx, dy, 2, 5);
+      }
+      c.globalAlpha = 1;
+      // floating 404 fragments
+      if (((t >> 4) + i) % 3 === 0) {
+        const fy = 34 + ((t * 0.4 + i * 30) % 80);
+        drawText(c, '404', wx + 24, fy, 1, '#3cc9ff', 'center');
+      }
+      // buffering blocks
+      const buf = (t * 0.6 + i * 53) % 90;
+      if (buf < 10) {
+        c.globalAlpha = 0.25;
+        c.fillStyle = '#8a9bd4';
+        c.fillRect(wx + 1, 23 + buf * 9, 46, 6);
+        c.globalAlpha = 1;
+      }
+    }
+
+    // ---- candle wick flames on the columns ----
+    for (let cx0 = 60; cx0 < 1500; cx0 += 160) {
+      const fx = cx0 + 13 - camX * 0.55;
+      if (fx < -20 || fx > VW + 20) continue;
+      const h = (rage ? 3 : 6) + Math.sin(t * 0.2 + cx0) * 1.5;
+      c.globalAlpha = 0.85;
+      disc(c, fx, 34 - h / 2, 2.5, '#ff9d2e');
+      c.globalAlpha = 0.5;
+      disc(c, fx, 34 - h / 2 - 2, 1.5, '#f5d76e');
+      c.globalAlpha = 1;
+    }
+
+    // ---- the live frieze: BLOCK <number> counting in real time ----
+    const round = latestAlgorandRound();
+    const label = round > 0 ? 'BLOCK ' + round.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') : 'BLOCK -------';
+    // HUD strip owns y0..44 during combat — keep the frieze readout low-right,
+    // above the boss HP bar, dimmed so it never fights the HUD for attention
+    drawText(c, label, VW - 8, VH - 42, 1, 'rgba(57,255,20,0.8)', 'right');
+    drawText(c, 'ALGORAND', 8, VH - 42, 1, 'rgba(110,83,24,0.85)');
+    // tiny blocks streaming along the chain (bottom edge, clear of HUD)
+    for (let k = 0; k < 4; k++) {
+      const bx = VW - ((t * 0.8 + k * 110) % (VW + 40));
+      c.fillStyle = '#2c2244';
+      c.fillRect(bx, VH - 34, 8, 8);
+      c.fillStyle = '#4a3a6e';
+      c.fillRect(bx + 1, VH - 33, 6, 6);
+    }
+
+    // ---- the degen crowd (GONNAs of every nation of the trench) ----
+    c.fillStyle = '#100c1c';
+    c.fillRect(0, 134, VW, 6);
+    for (let i = 0; i < 15; i++) {
+      const cx0 = 14 + i * 26;
+      const amp = gasp ? 5 : 2;
+      const bounce = Math.abs(Math.round(Math.sin(t * (gasp ? 0.3 : 0.12) + i * 2.1) * amp));
+      const by = 134 - bounce;
+      c.fillStyle = S7_CROWD_TINTS[i % S7_CROWD_TINTS.length];
+      c.fillRect(cx0, by - 9, 7, 9);
+      c.fillRect(cx0 + 1, by - 14, 5, 5);
+      c.fillRect(cx0 + 5, by - 12, 3, 2); // snout, never a tail
+      c.fillStyle = '#0b0d12';
+      c.fillRect(cx0 + 2, by - 12, 1, 1);
+      if (gasp && i % 3 === 0) drawText(c, '!', cx0 + 3, by - 26, 1, '#f5d76e', 'center');
+      if (i % 3 === 1) {
+        const word = S7_SIGNS[(i / 3 | 0) % S7_SIGNS.length];
+        c.fillStyle = '#8a8f9c';
+        c.fillRect(cx0 + 3, by - 26, 1, 13);
+        c.fillStyle = i % 6 === 1 ? '#f5c542' : '#e8ecf4';
+        c.fillRect(cx0 - 16, by - 37, 40, 11);
+        drawText(c, word, cx0 + 4, by - 34, 1, '#101218', 'center');
+      }
+    }
+
+    // ---- rage: the cathedral holds its breath ----
+    if (rage) {
+      c.globalAlpha = 0.18;
+      c.fillStyle = '#1a0a14';
+      c.fillRect(0, 0, VW, 140);
+      c.globalAlpha = 1;
+      // glitch lightning outside
+      if (hash01(t >> 3) > 0.72) {
+        c.strokeStyle = '#b07eff';
+        c.globalAlpha = 0.7;
+        c.lineWidth = 1;
+        const lx = hash01(t) * VW;
+        c.beginPath();
+        c.moveTo(lx, 20);
+        c.lineTo(lx + 8, 50);
+        c.lineTo(lx - 4, 80);
+        c.lineTo(lx + 10, 110);
+        c.stroke();
+        c.globalAlpha = 1;
+      }
+    }
+  };
+}
+
+function s7Front(): StageAnim {
+  return (c, camX, t) => {
+    // foreground column silhouettes sliding past (cathedral scale)
+    const off = -camX * 1.0;
+    c.fillStyle = 'rgba(8,6,14,0.9)';
+    for (let i = 0; i < 5; i++) {
+      const fx = ((i * 420 + off) % 2100 + 2100) % 2100 - 60;
+      if (fx > VW || fx + 34 < 0) continue;
+      c.fillRect(fx, 0, 34, 140);
+      c.fillRect(fx - 5, 0, 44, 8);
+    }
+    // incense smoke
+    const ph = (t * 0.5) % 220;
+    if (ph < 80) {
+      c.globalAlpha = 0.06 * (1 - ph / 80);
+      disc(c, 90 + ph * 0.4, 200 - ph * 0.6, 16, '#c8cdd7');
+      disc(c, 300 - ph * 0.3, 205 - ph * 0.5, 13, '#c8cdd7');
+      c.globalAlpha = 1;
+    }
+  };
+}
+
+export function buildThroneRoom(): StageDef {
+  const len = 1500;
+  return {
+    name: 'STAGE 7',
+    sub: 'THE THRONE ROOM',
+    track: 'stage6', // the launchpad theme, requiem mode
+    len,
+    arenaX: len - VW,
+    boss: true,
+    bossKind: 'gonna404',
+    bossTrack: 'boss2',
+    waves: [
+      // THE GOLD GUARD — the elite, gilded by the light of the cathedral
+      { triggerX: 120, spawns: ['bouncer', 'ninja', 'cultist'] },
+      { triggerX: 480, spawns: ['bull', 'ninja', 'coinsnek', 'cultist'] },
+      { triggerX: 840, spawns: ['bouncer', 'bull', 'ninja', 'cultist', 'moltov'] },
+    ],
+    obstacles: [
+      { kind: 'can', x: 300, y: 170, contains: 'coinG' },
+      { kind: 'safe', x: 620, y: 180, contains: 'chest' },
+      { kind: 'barrel', x: 950, y: 175, contains: 'chicken' },
+    ],
+    far: s7Far(len * 0.3 + VW),
+    mid: s7Mid(len * 0.6 + VW),
+    ground: s7Ground(len),
+    back: s7Back(),
+    front: s7Front(),
   };
 }
 
