@@ -100,7 +100,7 @@ export function drawTitle(
   ctx.scale(-1, 1);
   ctx.drawImage(art.lizIcon, 0, 0, m[1].w, m[1].h);
   ctx.restore();
-  drawText(ctx, 'V9.5.1 THRONE ROOM', VW - textWidth('V9.5.1 THRONE ROOM', 1) - 8, VH - 14, 1, '#5a5f6c');
+  drawText(ctx, 'V9.5.2 THRONE ROOM', VW - textWidth('V9.5.2 THRONE ROOM', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
 }
 
@@ -383,7 +383,7 @@ export function drawSaveRecord(ctx: CanvasRenderingContext2D, t: number, v: Save
   drawText(ctx, 'SCORE', lx, 46, 1, '#8a8f9c');
   drawText(ctx, String(v.score).padStart(8, '0'), rx, 46, 1, '#f5c542', 'right');
   drawText(ctx, 'STAGE REACHED', lx, 58, 1, '#8a8f9c');
-  drawText(ctx, v.stage + ' / 6', rx, 58, 1, '#f2f2f2', 'right');
+  drawText(ctx, v.stage + ' / 7', rx, 58, 1, '#f2f2f2', 'right');
   drawText(ctx, 'CONTINUES USED', lx, 70, 1, '#8a8f9c');
   drawText(ctx, String(v.continues), rx, 70, 1, v.continues === 0 ? '#7fd858' : '#f2f2f2', 'right');
   drawText(ctx, 'FIGHTER', lx, 82, 1, '#8a8f9c');

@@ -475,7 +475,7 @@ export class Game implements GameCtx {
   private openSave(win: 0 | 1): void {
     this.saveRec = {
       score: this.score,
-      stage: Math.min(6, this.stageIdx + 1),
+      stage: Math.min(7, this.stageIdx + 1),
       win,
       continues: this.continuesUsed,
       fighter: { ...this.fighter },

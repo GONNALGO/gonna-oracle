@@ -51,7 +51,7 @@ export function buildNote(r: SealRecord): string {
   return (
     'GONNAFIGHT|2|' +
     Math.max(0, Math.floor(r.score)) + '|' +
-    Math.min(6, Math.max(1, Math.floor(r.stage))) + '|' +
+    Math.min(7, Math.max(1, Math.floor(r.stage))) + '|' +
     (r.win ? 1 : 0) + '|' +
     Math.max(0, Math.floor(r.timeSec)) + '|' +
     Math.max(0, Math.floor(r.deaths)) + '|' +

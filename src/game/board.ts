@@ -57,7 +57,7 @@ export function fmtTime(sec: number | null): string {
 export interface BoardEntry {
   sender: string;
   score: number;
-  stage: number; // 1-6
+  stage: number; // 1-7
   win: 0 | 1;
   continues: number;
   assetId: number; // 0 = free default GONNA
@@ -124,7 +124,7 @@ function parseNote(b64: string): Omit<BoardEntry, 'sender' | 'round' | 'txid' | 
   };
   const score = uint(f[2], Number.MAX_SAFE_INTEGER);
   if (score === null) return null;
-  const stage = uint(f[3], 6);
+  const stage = uint(f[3], 7);
   if (stage === null || stage < 1) return null;
   if (f[4] !== '0' && f[4] !== '1') return null;
   const win = (f[4] === '1' ? 1 : 0) as 0 | 1;

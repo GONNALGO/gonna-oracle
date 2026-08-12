@@ -10,7 +10,17 @@
 // USAGE: npm run build && node scripts/vault-door.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const VER = 'v951';
+const VER = 'v952';
+// v9.5.2 ZOMBIE KILLER — every entry chunk ever shipped. Old cached index.html
+// files boot their old chunk through whatever SW is at the door; the new worker
+// answers 404 for these names, the page probe reloads, and the fresh index.html
+// boots the current build. Never serve a stale game again.
+const STALE_ENTRIES = [
+  'index-BQ7DsRx2.js', 'index-C4nn9W_x.js', 'index-Bzw464uN.js',
+  'index-BjVGszzm.js', 'index-BdpbslYZ.js', 'index-CKGAgjUp.js',
+  'index-DVM2qo6Z.js', 'index-CnvMRE8Y.js', 'index-BiwnS_wV.js',
+  'index-D1VfMD4K.js', 'index-DlbDmeEe.js',
+];
 const KEY = [0x47,0x4f,0x4e,0x4e,0x41,0x56,0x45,0x52,0x53,0x45,0x21,0x42,0x59,0x5a,0x41,0x4e,0x54,0x49,0x4e,0x45]; // GONNAVERSE!BYZANTINE
 
 const htmlPath = 'dist/index.html';
@@ -34,6 +44,7 @@ const sw = `/* GONNA FIGHT — THE VAULT DOOR (${VER}).
    in-flight and serves it as the real ES module. If the real file is ever
    present (a sane host), it simply wins. */
 const ENTRY = /\\/assets\\/${entryName.replace(/\./g, '\\.')}$/;
+const STALE = [${STALE_ENTRIES.map(s => `'${s}'`).join(',')}];
 const KEY = [${KEY.join(',')}];
 let cached = null;
 
@@ -58,7 +69,20 @@ self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
 self.addEventListener('fetch', e => {
-  if (!ENTRY.test(e.request.url)) return; // everything else passes through
+  const url = e.request.url;
+  // v9.5.2: navigations always get a FRESH index.html — a stale cached
+  // index.html is how zombie versions boot. Fall back to cache offline.
+  if (e.request.mode === 'navigate') {
+    e.respondWith(fetch(e.request, { cache: 'no-store' }).catch(() => fetch(e.request)));
+    return;
+  }
+  // v9.5.2 ZOMBIE KILLER: entry chunks of past builds are dead on arrival.
+  const name = url.split('/assets/')[1];
+  if (name && STALE.indexOf(name) !== -1) {
+    e.respondWith(new Response('// retired build', { status: 404 }));
+    return;
+  }
+  if (!ENTRY.test(url)) return; // everything else passes through
   e.respondWith(
     fetch(e.request)
       .then(r => (r.ok ? r : mintFromPayload()))
