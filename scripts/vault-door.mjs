@@ -10,7 +10,7 @@
 // USAGE: npm run build && node scripts/vault-door.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const VER = 'v953';
+const VER = 'v954';
 // v9.5.2 ZOMBIE KILLER — every entry chunk ever shipped. Old cached index.html
 // files boot their old chunk through whatever SW is at the door; the new worker
 // answers 404 for these names, the page probe reloads, and the fresh index.html
@@ -20,6 +20,7 @@ const STALE_ENTRIES = [
   'index-BjVGszzm.js', 'index-BdpbslYZ.js', 'index-CKGAgjUp.js',
   'index-DVM2qo6Z.js', 'index-CnvMRE8Y.js', 'index-BiwnS_wV.js',
   'index-D1VfMD4K.js', 'index-DlbDmeEe.js', 'index-DDi_h0ej.js',
+  'index-BgMMFtZV.js',
 ];
 const KEY = [0x47,0x4f,0x4e,0x4e,0x41,0x56,0x45,0x52,0x53,0x45,0x21,0x42,0x59,0x5a,0x41,0x4e,0x54,0x49,0x4e,0x45]; // GONNAVERSE!BYZANTINE
 
@@ -91,51 +92,42 @@ self.addEventListener('fetch', e => {
 });
 `;
 writeFileSync('dist/sw.js', sw);
+// v9.5.4: also ship the worker under a VERSIONED FILENAME. sw.js is cached
+// max-age=691200 by LiteSpeed and browsers may reuse a <24h-old cached worker
+// script — a fresh file name is always a fresh download, at every cache layer.
+writeFileSync(`dist/sw-${VER}.js`, sw);
 
-// 3) index.html: entry script tag → SW bootstrap
+// 3) index.html: entry script tag → SW bootstrap (OPTIMISTIC BOOT)
 const boot = `<script>
-      /* THE VAULT DOOR (${VER}): the host AV quarantines our entry chunk on disk.
-         sw.js decodes it in-flight from the armored payload. Register + claim
-         the worker BEFORE the module fetch, then boot. Sane hosts: the real
-         file answers 200 and the worker just passes through. */
-      (async () => {
-        const boot = () => {
-          const s = document.createElement('script');
-          s.type = 'module';
-          s.crossOrigin = true;
-          s.src = './${rel}';
-          document.head.appendChild(s);
+      /* THE VAULT DOOR (${VER}) — OPTIMISTIC BOOT.
+         The entry module is injected IMMEDIATELY: with an armed worker at the
+         door it is minted in-flight and the game appears with ZERO waiting.
+         The worker registers in parallel (versioned FILENAME — LiteSpeed
+         caches sw.js for 8 days, a fresh name is always a fresh download).
+         Only if the module fetch truly fails (first-ever visit, retired
+         worker at the door) do we wait for the worker and reload ONCE —
+         the reloaded client is controlled from the start and boots instantly.
+         Instant for every returning player; self-healing for everyone else. */
+      (() => {
+        const arm = () => {
+          if (!('serviceWorker' in navigator)) return Promise.resolve();
+          return navigator.serviceWorker
+            .register('./sw-${VER}.js', { updateViaCache: 'none' })
+            .then(() => navigator.serviceWorker.ready)
+            .catch(() => {});
         };
-        try {
-          if (!('serviceWorker' in navigator)) return boot();
-          /* v9.5.3: LiteSpeed serves sw.js with max-age=691200 and browsers may
-             reuse a <24h-old cached worker script — that trapped players on a
-             retired worker after the v952 deploy. A versioned script URL busts
-             the HTTP cache entry, and updateViaCache:'none' makes every future
-             update check bypass HTTP cache for good. */
-          await navigator.serviceWorker.register('./sw.js?${VER}', { updateViaCache: 'none' });
-          await navigator.serviceWorker.ready;
-          if (!navigator.serviceWorker.controller) {
-            await new Promise(res => {
-              navigator.serviceWorker.addEventListener('controllerchange', res, { once: true });
-              setTimeout(res, 2000); // never trap the player at the door
-            });
-          }
-          /* SAFARI GUARD (${VER}): after a version upgrade Safari may keep the
-             OLD worker at the door — controllerchange never fires and the old
-             worker passes the NEW chunk name through to the server (404, black
-             page). So probe the entry chunk: the new worker mints it in-flight
-             (200), anything else answers 404. On 404 reload ONCE — the fresh
-             client of a reload is controlled by the new worker from the start,
-             so the second probe mints and the game boots. */
-          const probe = await fetch('./${rel}', { method: 'HEAD', cache: 'no-store' })
-            .then(r => r.ok).catch(() => false);
-          if (!probe && !sessionStorage.getItem('vd-${VER}')) {
-            sessionStorage.setItem('vd-${VER}', '1');
-            return location.reload();
-          }
-          boot();
-        } catch { boot(); }
+        const armed = arm(); // parallel — never blocks the boot
+        const s = document.createElement('script');
+        s.type = 'module';
+        s.crossOrigin = true;
+        s.src = './${rel}';
+        s.onerror = () => {
+          if (sessionStorage.getItem('vd-${VER}')) return; // one rescue only
+          sessionStorage.setItem('vd-${VER}', '1');
+          Promise.race([armed, new Promise(r => setTimeout(r, 2500))])
+            .then(() => location.reload());
+        };
+        document.head.appendChild(s);
       })();
     </script>`;
 writeFileSync(htmlPath, html.replace(tag, boot));

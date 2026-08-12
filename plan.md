@@ -44,3 +44,10 @@ Design: /mnt/agents/output/GDD-THE-MINTING-THRONE-ROOM.md (approvato 6/6, 2026-0
 - sw.js: 404 per tutti gli 11 entry chunk storici (STALE_ENTRIES), navigazioni sempre no-store (index.html mai più dalla cache)
 - Fix contatori: save record "/ 6" → "/ 7", openSave clamp 6→7, seal note clamp 6→7, board parser uint max 6→7 (i record stage-7 venivano SCARTATI dalla leaderboard!)
 - Deploy instructions: cancellare vecchi payload-v9*.dat dal server + hard refresh una volta
+
+## Hotfix — v9.5.3 SW CACHE TRAP ✅ (commit 6ac5c11, version 113af43)
+- Diagnosi: LiteSpeed serve sw.js con max-age=691200; regola 24h dei browser → Chrome riusava sw.js v950 dalla cache, SW v952 mai installato → chunk nuovo 404 → pagina nera
+- Fix: register('./sw.js?v953', { updateViaCache: 'none' }) — URL versionato buca la cache HTTP, updateViaCache:none per sempre
+- STALE_ENTRIES += index-DDi_h0ej.js (v952)
+- Gauntlet PASS: boot + mint + zombie 404 + legit 200
+- Self-heal: index.html ha max-age=0 → bootstrap v953 → nuovo URL SW → installazione forzata → il player si sblocca con UN reload normale
