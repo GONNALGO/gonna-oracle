@@ -35,3 +35,12 @@ Design: /mnt/agents/output/GDD-THE-MINTING-THRONE-ROOM.md (approvato 6/6, 2026-0
 - Frieze live: BLOCK <numero> dal mainnet Algorand (indexer /health, cache 30s, stima +1/2.9s)
 - FUD non più finale: stageClear → Stage 7; vittoria finale solo con gonna404 ("404: FOUND." / "THE THRONE IS YOURS." / BYZANTINE CLEAR se 0 continue)
 - QA: spawn boss ✓ intro statua ✓ teleport NOT FOUND ✓ fasi ✓ morte→vittoria ✓ transizione FUD→Stage7 ✓ gauntlet armor ✓ fix collisioni HUD (frieze BLOCK spostato, BYZ line, cast line)
+
+## Hotfix — v9.5.1 SAFARI GUARD ✅ (commit 7c503ea, version 4bcdb2c)
+- Probe HEAD del chunk entry nel bootstrap + reload singolo auto-guaritore (Safari non fa controllerchange)
+
+## Hotfix — v9.5.2 ZOMBIE KILLER ✅ (commit 79174e3, version c67b46b)
+- Diagnosi: Chrome dell'utente ha giocato la v9.4.0 ZOMBIE (index.html vecchio in HTTP cache + SW v940 + payload-v940.dat ancora sul server) → game over al lvl 6 con FUD finale
+- sw.js: 404 per tutti gli 11 entry chunk storici (STALE_ENTRIES), navigazioni sempre no-store (index.html mai più dalla cache)
+- Fix contatori: save record "/ 6" → "/ 7", openSave clamp 6→7, seal note clamp 6→7, board parser uint max 6→7 (i record stage-7 venivano SCARTATI dalla leaderboard!)
+- Deploy instructions: cancellare vecchi payload-v9*.dat dal server + hard refresh una volta

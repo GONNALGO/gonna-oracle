@@ -10,7 +10,7 @@
 // USAGE: npm run build && node scripts/vault-door.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const VER = 'v952';
+const VER = 'v953';
 // v9.5.2 ZOMBIE KILLER — every entry chunk ever shipped. Old cached index.html
 // files boot their old chunk through whatever SW is at the door; the new worker
 // answers 404 for these names, the page probe reloads, and the fresh index.html
@@ -19,7 +19,7 @@ const STALE_ENTRIES = [
   'index-BQ7DsRx2.js', 'index-C4nn9W_x.js', 'index-Bzw464uN.js',
   'index-BjVGszzm.js', 'index-BdpbslYZ.js', 'index-CKGAgjUp.js',
   'index-DVM2qo6Z.js', 'index-CnvMRE8Y.js', 'index-BiwnS_wV.js',
-  'index-D1VfMD4K.js', 'index-DlbDmeEe.js',
+  'index-D1VfMD4K.js', 'index-DlbDmeEe.js', 'index-DDi_h0ej.js',
 ];
 const KEY = [0x47,0x4f,0x4e,0x4e,0x41,0x56,0x45,0x52,0x53,0x45,0x21,0x42,0x59,0x5a,0x41,0x4e,0x54,0x49,0x4e,0x45]; // GONNAVERSE!BYZANTINE
 
@@ -108,7 +108,12 @@ const boot = `<script>
         };
         try {
           if (!('serviceWorker' in navigator)) return boot();
-          await navigator.serviceWorker.register('./sw.js');
+          /* v9.5.3: LiteSpeed serves sw.js with max-age=691200 and browsers may
+             reuse a <24h-old cached worker script — that trapped players on a
+             retired worker after the v952 deploy. A versioned script URL busts
+             the HTTP cache entry, and updateViaCache:'none' makes every future
+             update check bypass HTTP cache for good. */
+          await navigator.serviceWorker.register('./sw.js?${VER}', { updateViaCache: 'none' });
           await navigator.serviceWorker.ready;
           if (!navigator.serviceWorker.controller) {
             await new Promise(res => {
