@@ -18,8 +18,9 @@
 import * as wallet from '../wallet';
 import type { AccountType, ChallengePlayer } from './chainAdapter';
 import { arenaMode, mockAccountType, setTestnetIdentityProvider } from './chainAdapter';
-import { connectTestnetPera, peraSignFn, reconnectTestnetPera, testnetAddress } from './testnetWallet';
+import { connectTestnetPera, liveTestnetSignFn, testnetAddress } from './testnetWallet';
 import { qaActive, qaPlayerAddress, qaSignFn } from './qaSigner';
+import type { TxSignFn } from './testnetKit';
 
 export type ArenaWalletProvider = wallet.WalletProvider;
 
@@ -78,22 +79,34 @@ export async function connectArenaWallet(provider: ArenaWalletProvider): Promise
 }
 
 // TESTNET identity provider for the real adapter: QA signer (automation)
-// first, then the arena-side Pera testnet session, and finally the MAIN
-// GATE session (ONE GATE, ONE NETWORK: on the staging path the gate itself
-// speaks testnet, so its WalletConnect session signs ARENA groups too).
+// first, then whichever Pera session is ALIVE — the arena-side instance OR
+// the main gate (ONE GATE, ONE NETWORK). The sign fn is BULLETPROOF: it
+// probes the arena instance per call and falls back to the gate session;
+// if nothing can sign, it throws a VISIBLE error instead of a dead click.
 setTestnetIdentityProvider(async () => {
   if (qaActive()) {
     const address = await qaPlayerAddress();
     if (address) return { address, sign: await qaSignFn() };
   }
-  const addr = testnetAddress() ?? (await reconnectTestnetPera());
-  if (addr) return { address: addr, sign: await peraSignFn(addr) };
-  // final fallback: main-gate session (wallet.ts signs via Pera/Defly lib)
-  const w = wallet.getWallet();
-  if (w.address && wallet.isConnected()) {
-    return { address: w.address, sign: (groups) => wallet.signTransactions(groups) };
-  }
-  return null;
+  const arenaAddr = testnetAddress(); // adopted at gate connect or board CONNECT
+  const gateAddr = wallet.isConnected() ? wallet.getWallet().address : null;
+  const target = arenaAddr ?? gateAddr;
+  if (!target) return null;
+  const sign: TxSignFn = async (groups) => {
+    // 1) arena-side Pera instance — only with a verified live session
+    const arenaSign = await liveTestnetSignFn(target);
+    if (arenaSign) {
+      try {
+        return await arenaSign(groups);
+      } catch { /* session died mid-flow: fall through to the gate */ }
+    }
+    // 2) main-gate session (same WC storage; the gate speaks testnet here)
+    if (gateAddr === target && wallet.isConnected()) {
+      return wallet.signTransactions(groups);
+    }
+    throw new Error('WALLET NOT CONNECTED - TAP CONNECT');
+  };
+  return { address: target, sign };
 });
 
 export async function disconnectArenaWallet(): Promise<void> {

@@ -28,6 +28,7 @@ export interface ChallengeConfig {
   stageIdx: number | null; // 0-6 for single; null = full run / random pending
   stake: number; // $GONNA display units per seat
   fighter: FighterPick;
+  sealedScore?: number; // v11: the run score sealed BEFORE signing (testnet)
 }
 
 export interface ChallengePlayer {
@@ -644,7 +645,9 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const a = await kit.sdk();
     if (cfg.stageMode === 'random') throw new Error('RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY');
     const cid = await kit.nextChallengeId(); // oracle score sig is cid-bound
-    const score = qaScore();
+    // v11: the creator's score is the SEALED RUN score (PLAY -> SEAL -> SIGN);
+    // qaScore() remains the deterministic fallback for the QA harness
+    const score = cfg.sealedScore ?? qaScore();
     const sig = await devOracleSign(kit.scoreMsg(cid, 0, a.decodeAddress(me.address).publicKey, score));
     const txns = await kit.buildCreateGroup({
       creator: me.address,

@@ -39,7 +39,7 @@ const DIM = '#5a5f6c';
 const RED = '#e23b3b';
 const PQCYAN = '#57c8d8';
 
-export type ArenaAction = { act: 'none' } | { act: 'move' } | { act: 'title' };
+export type ArenaAction = { act: 'none' } | { act: 'move' } | { act: 'title' } | { act: 'run'; stageMode: 'full' | 'stage'; stageIdx: number };
 
 interface Hot {
   x: number;
@@ -49,7 +49,7 @@ interface Hot {
   id: string;
 }
 
-type Screen = 'board' | 'create' | 'versus' | 'history' | 'legacy' | 'share' | 'notfound';
+type Screen = 'board' | 'create' | 'versus' | 'history' | 'legacy' | 'share' | 'notfound' | 'seal';
 type WizardStep = 'visibility' | 'format' | 'battle' | 'stake' | 'fighter' | 'confirm';
 
 const STAGE_NAMES = ['GHETTO GONNA', 'PUMP HARBOR', 'WALL STREET', 'CONSENSUS', 'THE HOUSE', 'LAUNCHPAD', 'THRONE ROOM'];
@@ -85,6 +85,9 @@ interface CoinFx {
 
 export class ArenaUI {
   private screen: Screen = 'board';
+  // v11: PLAY -> SEAL -> SIGN. The contract needs the creator score INSIDE
+  // the create group, so the run happens BEFORE the atomic group is signed.
+  private sealedScore: number | null = null;
   private hots: Hot[] = [];
   private focus = 0;
   private busy = false;
@@ -327,6 +330,14 @@ export class ArenaUI {
     }
     if (this.screen === 'history' || this.screen === 'legacy' || this.screen === 'notfound') {
       this.screen = 'board';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (this.screen === 'seal') {
+      // discard the sealed score — no tx was ever sent, nothing to clean up
+      this.sealedScore = null;
+      this.screen = 'create';
+      this.step = 'confirm';
       this.focus = 0;
       return { act: 'move' };
     }
@@ -811,6 +822,20 @@ export class ArenaUI {
       this.focus = 0;
       return { act: 'move' };
     }
+    if (id === 'playrun') {
+      // QA shortcut (?qa=1): the deterministic score is sealed instantly so
+      // E2E stays assertable without a live beat-em-up run
+      if (qaActive()) {
+        this.onRunFinished(qaScore());
+        return { act: 'move' };
+      }
+      return {
+        act: 'run',
+        stageMode: this.cfg.stageMode === 'full' ? 'full' : 'stage',
+        stageIdx: this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0),
+      };
+    }
+    if (id === 'seal:discard') return this.back();
     if (id === 'sign') return this.doSign();
 
     // ---- versus ----
@@ -834,9 +859,27 @@ export class ArenaUI {
     }
   }
 
+  // v11: the engine calls this when the ARENA run ends — the score is SEALED
+  onRunFinished(score: number): void {
+    this.sealedScore = Math.max(0, Math.floor(score));
+    this.screen = 'seal';
+    this.err = '';
+    this.focus = 0;
+  }
+
+  onRunAborted(): void {
+    this.sealedScore = null;
+    if (this.screen === 'seal') this.screen = 'board';
+  }
+
   private doSign(): ArenaAction {
     const cfg: ChallengeConfig = { ...this.cfg };
     if (cfg.stageMode === 'random' && this.shuffleT >= 0) cfg.stageIdx = this.shuffleTarget;
+    // never a dead click: on testnet a real create NEEDS a sealed run score
+    if (this.adapter().mode === 'testnet' && !qaActive() && this.sealedScore === null) {
+      return this.fail('PLAY YOUR RUN FIRST');
+    }
+    if (this.sealedScore !== null) cfg.sealedScore = this.sealedScore;
     const player = arenaPlayer(cfg.fighter);
     void this.run(
       () => this.adapter().createChallenge(cfg, player),
@@ -845,6 +888,7 @@ export class ArenaUI {
         this.screen = 'versus';
         this.verdict = false;
         this.rematchOf = null; // the rematch became its own card
+        this.sealedScore = null; // consumed — the score lives on-chain now
         this.focus = 0;
         this.buildFeed();
       },
@@ -1010,6 +1054,7 @@ export class ArenaUI {
     else if (this.screen === 'history') this.drawHistory(c, frame);
     else if (this.screen === 'legacy') this.drawLegacy(c, frame);
     else if (this.screen === 'share') this.drawShare(c, frame);
+    else if (this.screen === 'seal') this.drawSeal(c, frame);
     else if (this.screen === 'notfound') this.drawNotfound(c, frame);
     else this.drawVersus(c, frame, art);
     // gold coin rain rides over the versus verdict
@@ -1386,7 +1431,32 @@ export class ArenaUI {
       const armed = hasDevOracle();
       drawTextSh(c, armed ? 'ORACLE ARMED - TESTNET DEV KEY' : 'ORACLE OFFLINE - USE THE MASTER LINK', VW / 2, 152, 1, armed ? FLUO : '#ff4444', 'center', armed ? '#0a3d00' : '#2a0505');
     }
-    this.btn(c, frame, { id: 'sign', x: 92, y: 162, w: 200, h: 22 }, this.busy ? 'SIGNING...' : 'SIGN & STAKE', { gold: true });
+    // v11: PLAY -> SEAL -> SIGN. The run comes FIRST — the oracle-sealed
+    // score travels inside the atomic create group.
+    this.btn(c, frame, { id: 'playrun', x: 92, y: 162, w: 200, h: 22 }, 'PLAY YOUR RUN', { green: true });
+    drawText(c, 'YOUR SCORE GETS SEALED - YOU SIGN AFTER', VW / 2, 190, 1, GRAY, 'center');
+  }
+
+  // ---------- v11: SEAL screen (post-run, pre-sign) --------------------------
+  private drawSeal(c: CanvasRenderingContext2D, frame: number): void {
+    this.drawHeader(c, 'SCORE SEALED', this.cfg.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN TABLE');
+    const score = this.sealedScore ?? 0;
+    drawTextSh(c, String(score).padStart(7, '0'), VW / 2, 66, 2, GOLD, 'center', '#4a3005');
+    if ((frame & 16) !== 0) drawTextSh(c, 'SCORE SEALED BY ORACLE ⚛', VW / 2, 96, 1, FLUO, 'center', '#0a3d00');
+    const x = 22, w = VW - 44;
+    const pot = this.cfg.format === 'duel' ? this.cfg.stake * 2 : this.cfg.stake * this.cfg.seatsTotal;
+    const lines: [string, string][] = [
+      ['STAKE', fmtStake(this.cfg.stake) + ' $GONNA A SEAT'],
+      ['POT', fmtStake(pot) + ' $GONNA'],
+      ['FEE', feeLine('create', arenaSession().accountType, this.adapter().mode === 'testnet')],
+      ['FIGHTER', this.cfg.fighter.name],
+    ];
+    for (let i = 0; i < lines.length; i++) {
+      drawText(c, lines[i][0], x + 10, 112 + i * 12, 1, DIM);
+      drawText(c, lines[i][1], x + w - 10, 112 + i * 12, 1, i <= 1 ? GOLD : '#c8ccd4', 'right');
+    }
+    this.btn(c, frame, { id: 'sign', x: 92, y: 166, w: 200, h: 22 }, this.busy ? 'SIGNING...' : 'SIGN & STAKE', { gold: true });
+    this.btn(c, frame, { id: 'seal:discard', x: 122, y: 196, w: 140, h: 12 }, 'DISCARD - NO TX SENT', { dim: true });
   }
 
   // v10.4: aspect-preserving blit — a sprite inside a seal is FIT, never squashed

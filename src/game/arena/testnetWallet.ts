@@ -82,7 +82,23 @@ export async function reconnectTestnetPera(): Promise<string | null> {
       return accounts[0];
     }
   } catch { /* no session */ }
-  return testnetAddress();
+  // v11: a STALE adopted address is NOT a session — signing through a dead
+  // instance dies silently (the Prince's dead SIGN & STAKE). Caller must
+  // verify a LIVE session before routing signatures here.
+  return null;
+}
+
+// LIVE arena-side Pera signer: null unless this instance holds a verified
+// WalletConnect session for `address` right now.
+export async function liveTestnetSignFn(address: string): Promise<TxSignFn | null> {
+  try {
+    const p = await peraInstance();
+    const accounts = await p.reconnectSession();
+    if (!accounts.includes(address)) return null;
+    return peraSignFn(address);
+  } catch {
+    return null;
+  }
 }
 
 export async function disconnectTestnetPera(): Promise<void> {

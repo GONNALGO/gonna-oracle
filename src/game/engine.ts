@@ -475,6 +475,29 @@ export class Game implements GameCtx {
 
   // ---------- v10: THE ARENA ----------
   private pendingArenaDuel: number | null = null; // v10.4: ?duel=<id> deep-link
+  // v11: THE ARENA — PLAY YOUR RUN -> SEAL -> SIGN. While set, the run's end
+  // (stage clear / death / final victory) returns the score to the ARENA
+  // seal screen instead of the campaign flow. No pending tx state survives
+  // an abandoned run: nothing was signed, nothing to clean up.
+  private arenaRun: { stageMode: 'full' | 'stage'; stageIdx: number } | null = null;
+
+  private startArenaRun(stageMode: 'full' | 'stage', stageIdx: number): void {
+    this.arenaRun = { stageMode, stageIdx };
+    this.startNewGame(); // fresh run: score/lives/stage 0
+    if (stageMode === 'stage') {
+      this.stageIdx = stageIdx;
+      this.loadStage(stageIdx);
+      this.setScene('intro');
+    }
+  }
+
+  private finishArenaRun(): void {
+    if (!this.arenaRun) return;
+    this.arenaRun = null;
+    this.arena.onRunFinished(this.score);
+    this.setScene('arena');
+    this.audio.uiSelect();
+  }
   private openArena(): void {
     const deep = this.pendingArenaDuel;
     this.pendingArenaDuel = null;
@@ -509,7 +532,10 @@ export class Game implements GameCtx {
 
   private handleArenaAction(a: ArenaAction): void {
     if (a.act === 'move') this.audio.uiMove();
-    else if (a.act === 'title') {
+    else if (a.act === 'run') {
+      this.startArenaRun(a.stageMode, a.stageIdx);
+      this.audio.uiSelect();
+    } else if (a.act === 'title') {
       this.setScene('title');
       this.audio.uiSelect();
       if (!this.titleTrack) {
@@ -1731,11 +1757,15 @@ export class Game implements GameCtx {
           }
         } else if (inp.pressed.start) {
           const next = this.stageIdx + 1;
-          // v9: THE GATE — the Stage 1 -> 2 transition belongs to holders
-          if (next === 1 && !wallet.isEligible()) {
+          // v11 ARENA RUN: a single-stage battle seals here; full runs bypass
+          // the campaign gate/mint (the ARENA flow is its own path)
+          if (this.arenaRun && this.arenaRun.stageMode === 'stage') {
+            this.finishArenaRun();
+          } else if (!this.arenaRun && next === 1 && !wallet.isEligible()) {
+            // v9: THE GATE — the Stage 1 -> 2 transition belongs to holders
             this.audio.uiSelect();
             this.openGateScene(wallet.isConnected() ? 'gate' : 'connect', next);
-          } else if (this.stageIdx === 2) {
+          } else if (this.stageIdx === 2 && !this.arenaRun) {
             // v9.4: THE MINTING — the bonus forge opens after BYZANTINE WALL STREET
             this.audio.uiSelect();
             this.loadMint();
@@ -1799,7 +1829,9 @@ export class Game implements GameCtx {
         this.sceneT++;
         if (this.sceneT > 120 && inp.pressed.start) {
           if (this.finalVictory) {
-            this.openSave(1); // v9.1: final boss beaten -> SAVE RECORD
+            // v11 ARENA RUN: a cleared full run seals instead of SAVE RECORD
+            if (this.arenaRun) this.finishArenaRun();
+            else this.openSave(1); // v9.1: final boss beaten -> SAVE RECORD
           } else {
             this.setScene('title');
             this.audio.playTrack('title');
@@ -1932,8 +1964,13 @@ export class Game implements GameCtx {
         p.invuln = 120;
         p.vx = 0;
       } else {
-        this.setScene('gameover');
-        this.audio.playTrack('gameover'); // v7: composed game-over jingle
+        // v11 ARENA RUN: death seals the score as-is — no continue flow
+        if (this.arenaRun) {
+          this.finishArenaRun();
+        } else {
+          this.setScene('gameover');
+          this.audio.playTrack('gameover'); // v7: composed game-over jingle
+        }
       }
     }
 
