@@ -104,6 +104,8 @@ export interface ArenaAdapter {
   myChallenges(address: string): Promise<Challenge[]>;
   listHistory(): Promise<HistoryEntry[]>;
   legacyStats(address: string): Promise<LegacyStats>;
+  // v10.4: deep-link lookup (?duel=<id>) — any visibility, live cards only
+  getChallenge(id: number): Promise<Challenge | null>;
 }
 
 // ---------- FEE ENGINE ----------
@@ -463,6 +465,16 @@ export class MockArenaAdapter implements ArenaAdapter {
     return c;
   }
 
+  // v10.4: deep-link (?duel=<id>) — live cards of ANY visibility
+  async getChallenge(id: number): Promise<Challenge | null> {
+    const s = this.store();
+    const c = s.challenges.find((x) => x.id === id);
+    if (!c) return null;
+    this.refresh(c);
+    lsSave(s);
+    return c;
+  }
+
   // ---------- HISTORY / LEGACY (mock) ----------
   async listHistory(): Promise<HistoryEntry[]> {
     const s = this.store();
@@ -701,6 +713,10 @@ export class TestnetArenaAdapter implements ArenaAdapter {
   }
   async legacyStats(_address: string): Promise<LegacyStats> {
     return { played: 0, wins: 0, losses: 0, winRate: 0, won: 0, lost: 0, net: 0, bestWin: 0 };
+  }
+  // TODO(deploy): box read "m"+uint64 id -> ChallengeMeta once app id is live
+  async getChallenge(_id: number): Promise<Challenge | null> {
+    return null;
   }
 }
 

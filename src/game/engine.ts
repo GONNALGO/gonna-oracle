@@ -43,6 +43,8 @@ import { captureInstallPrompt, FsGuide } from './fsguide';
 // ---- v10: THE ARENA (staking piazza) ----
 import { ArenaUI } from './arena/arenaUI';
 import type { ArenaAction } from './arena/arenaUI';
+// v10.4: ?duel=<id> parsed once per page load (StrictMode double-boot safe)
+let bootDuelParam: number | null | undefined;
 
 type Scene = 'title' | 'intro' | 'play' | 'mint' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter' | 'save' | 'board' | 'sealanim' | 'arena';
 
@@ -207,6 +209,8 @@ export class Game implements GameCtx {
     void loadSkinMap().catch(() => { /* gate falls back to $GONNA-only checks */ });
     loadSkinPortraits();
     this.applySkinFrames();
+    // v10.4: ?duel=<id> deep-link — straight into the ARENA card detail
+    this.bootArenaDeepLink();
   }
 
   private onMouseDown = (e: PointerEvent): void => {
@@ -467,10 +471,34 @@ export class Game implements GameCtx {
   }
 
   // ---------- v10: THE ARENA ----------
+  private pendingArenaDuel: number | null = null; // v10.4: ?duel=<id> deep-link
   private openArena(): void {
+    const deep = this.pendingArenaDuel;
+    this.pendingArenaDuel = null;
     this.setScene('arena');
-    this.arena.open();
+    this.arena.open(deep);
     this.audio.uiSelect();
+  }
+
+  // v10.4: the SW bootstrap rewrites index.html — read location.search at boot
+  // and, if ?duel=<id> is there, jump straight into the ARENA card detail.
+  // React StrictMode boots the engine TWICE in dev: the param is parsed once
+  // at module level so the surviving instance always sees it.
+  private bootArenaDeepLink(): void {
+    if (bootDuelParam === undefined) {
+      bootDuelParam = null;
+      try {
+        const raw = new URLSearchParams(window.location.search).get('duel');
+        if (raw && /^\d+$/.test(raw)) {
+          bootDuelParam = Number(raw);
+          window.history.replaceState(null, '', window.location.pathname); // consume it
+        }
+      } catch { /* no window/history: ignore */ }
+    }
+    if (bootDuelParam !== null) {
+      this.pendingArenaDuel = bootDuelParam;
+      this.openArena();
+    }
   }
 
   private handleArenaAction(a: ArenaAction): void {
@@ -2304,7 +2332,7 @@ export class Game implements GameCtx {
     if (this.scene === 'arena') {
       c.save();
       this.fitView(true);
-      this.arena.draw(c, this.frame, this.art, this.touchActive, this.fit);
+      this.arena.draw(c, this.frame, this.art, this.touchActive, this.fit, this.pframes ?? this.frames);
       c.restore();
       return;
     }

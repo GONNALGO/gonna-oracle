@@ -22,6 +22,7 @@ import type { SkinId } from '../skins';
 import { getArenaAdapter, fmtAgo, fmtCountdown, fmtFee, fmtGonna, fmtStake } from './chainAdapter';
 import type { Challenge, ChallengeConfig, FighterPick, HistoryEntry, LegacyStats, Visibility } from './chainAdapter';
 import { arenaAddress, arenaPlayer, arenaSession } from './arenaWallet';
+import { renderShareCard, shareCardBlob, shareText, shareUrl } from './shareCard';
 
 const GOLD = '#f5c542';
 const GOLD_DK = '#b8860b';
@@ -44,7 +45,7 @@ interface Hot {
   id: string;
 }
 
-type Screen = 'board' | 'create' | 'versus' | 'history' | 'legacy';
+type Screen = 'board' | 'create' | 'versus' | 'history' | 'legacy' | 'share' | 'notfound';
 type WizardStep = 'visibility' | 'format' | 'battle' | 'stake' | 'fighter' | 'confirm';
 
 const STAGE_NAMES = ['GHETTO GONNA', 'PUMP HARBOR', 'WALL STREET', 'CONSENSUS', 'THE HOUSE', 'LAUNCHPAD', 'THRONE ROOM'];
@@ -94,6 +95,10 @@ export class ArenaUI {
   private hist: HistoryEntry[] = [];
   private histPage = 0;
   private legacy: LegacyStats | null = null;
+  // share sheet (v10.4)
+  private shareMsg = '';
+  private shareMsgT = 0;
+  private framesRef: Map<string, HTMLImageElement> | null = null;
   // create wizard
   private step: WizardStep = 'visibility';
   private cfg: ChallengeConfig = this.defaultCfg();
@@ -150,7 +155,7 @@ export class ArenaUI {
     return MOCK_SHELF; // mock: owned flags drive the QA flow
   }
 
-  open(): void {
+  open(deepDuel?: number | null): void {
     this.closeStakeInput(false);
     this.screen = 'board';
     this.step = 'visibility';
@@ -163,9 +168,29 @@ export class ArenaUI {
     this.page = 0;
     this.histPage = 0;
     this.fighterOpts = this.fighterShelf();
+    this.shareMsg = '';
     void this.refreshBoard();
     void this.refreshHistory();
     this.buildFeed();
+    // v10.4 deep-link: ?duel=<id> lands straight on the card detail
+    if (deepDuel != null) {
+      void this.adapter()
+        .getChallenge(deepDuel)
+        .then((ch) => {
+          if (ch) {
+            this.current = ch;
+            this.screen = 'versus';
+            this.verdict = false;
+            this.coinRain = [];
+            this.focus = 0;
+          } else {
+            this.screen = 'notfound'; // 404 lore
+          }
+        })
+        .catch(() => {
+          this.screen = 'notfound';
+        });
+    }
   }
 
   private async refreshBoard(): Promise<void> {
@@ -279,8 +304,13 @@ export class ArenaUI {
       void this.refreshHistory();
       return { act: 'move' };
     }
-    if (this.screen === 'history' || this.screen === 'legacy') {
+    if (this.screen === 'history' || this.screen === 'legacy' || this.screen === 'notfound') {
       this.screen = 'board';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (this.screen === 'share') {
+      this.screen = 'versus';
       this.focus = 0;
       return { act: 'move' };
     }
@@ -381,6 +411,43 @@ export class ArenaUI {
     el.style.fontSize = Math.max(this.touchRef ? 16 : 10, Math.round(10 * f.fitScale)) + 'px';
   }
 
+  // ---------- v10.4: SHARE ----------
+  // the poster fighter: challenger NFT portrait, or the base GONNA frame
+  private fighterImage(ch: Challenge): CanvasImageSource | null {
+    const skin = (ch.players[0]?.fighter.skin ?? 'gonna') as SkinId;
+    if (skin !== 'gonna') {
+      const p = skinPortrait(skin);
+      if (p) return p;
+    }
+    return this.framesRef?.get('0_0') ?? null;
+  }
+
+  private openShareSheet(): ArenaAction {
+    const ch = this.current;
+    if (!ch) return { act: 'none' };
+    this.screen = 'share';
+    this.shareMsg = '';
+    this.focus = 0;
+    // mobile-first: if the platform can share FILES, fire the NATIVE sheet
+    // with the generated card PNG (still inside the tap's transient gesture)
+    void (async () => {
+      try {
+        const blob = await shareCardBlob(renderShareCard(ch, this.fighterImage(ch)));
+        const file = new File([blob], 'gonna-arena-card-' + ch.id + '.png', { type: 'image/png' });
+        const nav = navigator as Navigator & {
+          canShare?: (d: { files: File[] }) => boolean;
+          share?: (d: { files?: File[]; text?: string }) => Promise<void>;
+        };
+        if (nav.canShare && nav.share && nav.canShare({ files: [file] })) {
+          await nav.share({ files: [file], text: shareText(ch) + ' ' + shareUrl(ch.id) });
+          this.shareMsg = 'SHARED - GO FETCH DEGENS';
+          this.shareMsgT = 240;
+        }
+      } catch { /* cancelled or unsupported: the four fallbacks stay up */ }
+    })();
+    return { act: 'move' };
+  }
+
   // ---------- actions ----------
   private activate(id: string): ArenaAction {
     if (this.busy) return { act: 'none' };
@@ -438,6 +505,54 @@ export class ArenaUI {
       return { act: 'move' };
     }
     if (id.startsWith('claim:')) return this.doClaim(Number(id.slice(6)));
+
+    // ---- v10.4: SHARE (private cards, owner only, while live) ----
+    if (id === 'share') return this.openShareSheet();
+    if (id === 'share:x' || id === 'share:tg') {
+      const ch = this.current;
+      if (!ch) return { act: 'none' };
+      const url = shareUrl(ch.id);
+      const text = shareText(ch);
+      const intent =
+        id === 'share:x'
+          ? 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text + '\n' + url)
+          : 'https://t.me/share/url?url=' + encodeURIComponent(url) + '&text=' + encodeURIComponent(text);
+      window.open(intent, '_blank', 'noopener');
+      this.shareMsg = id === 'share:x' ? 'POSTED ON X - TAG THE WHALES' : 'SENT TO THE TG TRENCHES';
+      this.shareMsgT = 240;
+      return { act: 'move' };
+    }
+    if (id === 'share:copy') {
+      const ch = this.current;
+      if (!ch) return { act: 'none' };
+      const link = shareUrl(ch.id);
+      try {
+        void navigator.clipboard?.writeText(link).catch(() => { /* clipboard denied */ });
+      } catch { /* no clipboard API */ }
+      this.shareMsg = 'LINK COPIED - GO PASTE IT';
+      this.shareMsgT = 240;
+      return { act: 'move' };
+    }
+    if (id === 'share:save') {
+      const ch = this.current;
+      if (!ch) return { act: 'none' };
+      void (async () => {
+        try {
+          const blob = await shareCardBlob(renderShareCard(ch, this.fighterImage(ch)));
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'gonna-arena-card-' + ch.id + '.png';
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+          this.shareMsg = 'CARD SAVED - 1200X630 OG QUALITY';
+          this.shareMsgT = 240;
+        } catch {
+          this.shareMsg = 'RENDER REKT - TRY AGAIN';
+          this.shareMsgT = 240;
+        }
+      })();
+      return { act: 'move' };
+    }
 
     // ---- wizard ----
     if (id === 'vis:public' || id === 'vis:private') {
@@ -693,6 +808,7 @@ export class ArenaUI {
   // ---------- per-frame ----------
   tick(): void {
     if (this.errT > 0) this.errT--;
+    if (this.shareMsgT > 0) this.shareMsgT--;
     this.feedT++;
     if (this.feedT > 220) {
       this.feedT = 0;
@@ -713,10 +829,11 @@ export class ArenaUI {
   }
 
   // ---------- draw ----------
-  draw(c: CanvasRenderingContext2D, frame: number, art: Art, touch: boolean, fit?: ViewFit): void {
+  draw(c: CanvasRenderingContext2D, frame: number, art: Art, touch: boolean, fit?: ViewFit, frames?: Map<string, HTMLImageElement>): void {
     this.hots = [];
     this.fitRef = fit ?? this.fitRef;
     this.touchRef = touch;
+    this.framesRef = frames ?? this.framesRef;
     // native stake keyboard only lives on the STAKE step
     if (this.stakeInput && (this.screen !== 'create' || this.step !== 'stake')) this.closeStakeInput(true);
     c.fillStyle = INK;
@@ -733,6 +850,8 @@ export class ArenaUI {
     else if (this.screen === 'create') this.drawCreate(c, frame, art);
     else if (this.screen === 'history') this.drawHistory(c, frame);
     else if (this.screen === 'legacy') this.drawLegacy(c, frame);
+    else if (this.screen === 'share') this.drawShare(c, frame);
+    else if (this.screen === 'notfound') this.drawNotfound(c, frame);
     else this.drawVersus(c, frame, art);
     // gold coin rain rides over the versus verdict
     if (this.coinRain.length > 0) {
@@ -810,7 +929,7 @@ export class ArenaUI {
     c.strokeStyle = GOLD_DK;
     c.lineWidth = 1;
     c.strokeRect(x + 0.5, y + 0.5, s - 1, s - 1);
-    if (t) c.drawImage(t, x + 2, y + 2, s - 4, s - 4);
+    if (t) this.drawFit(c, t, x + 2, y + 2, s - 4);
     drawText(c, String(idx + 1), x + 2, y + s - 8, 1, '#ffffff');
   }
 
@@ -1048,7 +1167,7 @@ export class ArenaUI {
       const skin = o.pick.skin as SkinId;
       const info = SKIN_INFO[skin] ?? SKIN_INFO.gonna;
       const port = skinPortrait(skin);
-      if (port && o.owned) c.drawImage(port, x + 18, y + 4, 24, 24);
+      if (port && o.owned) this.drawFit(c, port, x + 18, y + 4, 24);
       else {
         c.fillStyle = o.owned ? info.accent : '#1a1e28';
         c.fillRect(x + 18, y + 4, 24, 24);
@@ -1093,6 +1212,17 @@ export class ArenaUI {
     this.btn(c, frame, { id: 'sign', x: 92, y: 162, w: 200, h: 22 }, this.busy ? 'SIGNING...' : 'SIGN & STAKE', { gold: true });
   }
 
+  // v10.4: aspect-preserving blit — a sprite inside a seal is FIT, never squashed
+  private drawFit(c: CanvasRenderingContext2D, img: CanvasImageSource, x: number, y: number, box: number): void {
+    const iw = (img as HTMLCanvasElement).width || (img as HTMLImageElement).naturalWidth || 0;
+    const ih = (img as HTMLCanvasElement).height || (img as HTMLImageElement).naturalHeight || 0;
+    if (!iw || !ih) return;
+    const s = Math.min(box / iw, box / ih);
+    const w = Math.max(1, Math.round(iw * s));
+    const h = Math.max(1, Math.round(ih * s));
+    c.drawImage(img, Math.round(x + (box - w) / 2), Math.round(y + (box - h) / 2), w, h);
+  }
+
   // ---------- VERSUS (card detail) ----------
   private sealFace(c: CanvasRenderingContext2D, frame: number, x: number, y: number, name: string, skin: string, pq: boolean, lit: boolean): void {
     // pixel seal: double ring, breathing gold for the leader / live card
@@ -1104,8 +1234,8 @@ export class ArenaUI {
     c.lineWidth = 1;
     c.strokeRect(x - 17.5, y - 17.5, 35, 35);
     const info = SKIN_INFO[skin as SkinId] ?? SKIN_INFO.gonna;
-    const port = skinPortrait(skin as SkinId);
-    if (port) c.drawImage(port, x - 14, y - 14, 28, 28);
+    const port = skinPortrait(skin as SkinId) ?? (skin === 'gonna' ? this.framesRef?.get('0_0') ?? null : null);
+    if (port) this.drawFit(c, port, x - 14, y - 14, 28);
     else {
       c.fillStyle = info.accent;
       c.fillRect(x - 14, y - 14, 28, 28);
@@ -1197,8 +1327,40 @@ export class ArenaUI {
         this.btn(c, frame, { id: 'close', x: 122, y: Math.min(ay, 190), w: 140, h: 12 }, 'EARLY CLOSE', { dim: true });
       }
     }
+    // v10.4: SHARE — private cards, owner only, while the challenge is live
+    if (card.visibility === 'private' && card.creator === me && live && !this.verdict) {
+      this.btn(c, frame, { id: 'share', x: VW - 86, y: 30, w: 78, h: 12 }, 'SHARE', { gold: true });
+    }
     this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
     void art;
+  }
+
+  // ---------- SHARE SHEET (v10.4) ----------
+  private drawShare(c: CanvasRenderingContext2D, frame: number): void {
+    const ch = this.current;
+    this.drawHeader(c, 'SHARE THE CHALLENGE', ch ? fmtStake(ch.stake) + (ch.format === 'duel' ? ' PRIVATE DUEL' : ' PRIVATE TABLE') : '');
+    const btns: [string, string][] = [
+      ['share:x', 'SHARE ON X'],
+      ['share:tg', 'SHARE ON TELEGRAM'],
+      ['share:copy', 'COPY LINK'],
+      ['share:save', 'SAVE CARD'],
+    ];
+    for (let i = 0; i < btns.length; i++) {
+      this.btn(c, frame, { id: btns[i][0], x: 52, y: 62 + i * 28, w: 280, h: 22 }, btns[i][1], { gold: i >= 2 });
+    }
+    if (this.shareMsgT > 0 && this.shareMsg) drawTextSh(c, this.shareMsg, VW / 2, 178, 1, FLUO, 'center');
+    else drawText(c, 'PNG 1200X630 - OG COVER QUALITY', VW / 2, 178, 1, DIM, 'center');
+    this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
+  }
+
+  // ---------- 404 deep-link (v10.4) ----------
+  private drawNotfound(c: CanvasRenderingContext2D, frame: number): void {
+    drawTextSh(c, '404', VW / 2, 52, 4, GOLD, 'center', GOLD_DK);
+    drawTextSh(c, 'CHALLENGE NOT FOUND', VW / 2, 100, 2, RED, 'center');
+    drawText(c, 'THE VOID ATE THIS CARD', VW / 2, 128, 1, GRAY, 'center');
+    drawText(c, 'SILVIO DOES NOT REMEMBER THIS DUEL', VW / 2, 140, 1, DIM, 'center');
+    if ((frame & 16) !== 0) this.pixelCoin(c, VW / 2 - 3, 156, frame);
+    this.btn(c, frame, { id: 'back', x: 92, y: 172, w: 200, h: 18 }, 'BACK TO THE BOARD', { gold: true });
   }
 
   // verdict: black veil + gold coin rain (the rain is drawn over everything
