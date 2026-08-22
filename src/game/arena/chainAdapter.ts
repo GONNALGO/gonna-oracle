@@ -829,13 +829,14 @@ export function arenaMode(): 'mock' | 'testnet' {
       window.localStorage.setItem(LS_ADAPTER, 'mock');
       return 'mock';
     }
-    const stored = window.localStorage.getItem(LS_ADAPTER);
-    if (stored === 'testnet' || stored === 'mock') return stored;
-    // STAGING FLAG: gonna.bond/arena-testnet/ lands straight on-chain —
-    // public previews (any other origin/path) stay MOCK by default
+    // STAGING FLAG (beats any stored flag — a leftover 'mock' from old tests
+    // must NOT win on the staging path): gonna.bond/arena-testnet/ lands
+    // straight on-chain; public previews (any other origin/path) stay MOCK.
     if (window.location.hostname.includes('gonna.bond') && window.location.pathname.includes('arena-testnet')) {
       return 'testnet';
     }
+    const stored = window.localStorage.getItem(LS_ADAPTER);
+    if (stored === 'testnet' || stored === 'mock') return stored;
     return 'mock';
   } catch {
     return 'mock';

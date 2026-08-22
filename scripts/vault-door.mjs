@@ -1,4 +1,4 @@
-// scripts/vault-door.mjs — post-build armor (v9.3.2 THE VAULT DOOR)
+// scripts/vault-door.mjs — post-build armor (v9.6 THE VAULT DOOR)
 //
 // WHY: the host's antivirus quarantines our entry chunk (false positive),
 // both on upload AND on later scheduled disk sweeps. This script encodes the
@@ -9,8 +9,7 @@
 //
 // USAGE: npm run build && node scripts/vault-door.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
-
-const VER = 'v954';
+import { createHash } from 'node:crypto';
 // v9.5.2 ZOMBIE KILLER — every entry chunk ever shipped. Old cached index.html
 // files boot their old chunk through whatever SW is at the door; the new worker
 // answers 404 for these names, the page probe reloads, and the fresh index.html
@@ -20,7 +19,7 @@ const STALE_ENTRIES = [
   'index-BjVGszzm.js', 'index-BdpbslYZ.js', 'index-CKGAgjUp.js',
   'index-DVM2qo6Z.js', 'index-CnvMRE8Y.js', 'index-BiwnS_wV.js',
   'index-D1VfMD4K.js', 'index-DlbDmeEe.js', 'index-DDi_h0ej.js',
-  'index-BgMMFtZV.js',
+  'index-BgMMFtZV.js', 'index-D2kYOzbo.js', 'index-Dg-hq2nS.js',
 ];
 const KEY = [0x47,0x4f,0x4e,0x4e,0x41,0x56,0x45,0x52,0x53,0x45,0x21,0x42,0x59,0x5a,0x41,0x4e,0x54,0x49,0x4e,0x45]; // GONNAVERSE!BYZANTINE
 
@@ -33,6 +32,12 @@ const entryName = rel.split('/').pop();
 
 // 1) payload: XOR + base64 noise
 const raw = readFileSync('dist/' + rel);
+// v9.6 AUTO VERSION BUMP: VER is derived from the ENTRY CONTENT HASH, so
+// payload-<VER>.dat / sw-<VER>.js get a fresh name on EVERY build. An old
+// service worker can never serve a stale payload: its payload URL simply
+// does not exist in the new deploy, and the new worker installs under a
+// brand-new filename at every cache layer (browser, LiteSpeed, CDN).
+const VER = 'v' + createHash('sha256').update(raw).digest('hex').slice(0, 8);
 const enc = Buffer.alloc(raw.length);
 for (let i = 0; i < raw.length; i++) enc[i] = raw[i] ^ KEY[i % KEY.length];
 writeFileSync(`dist/assets/payload-${VER}.dat`, enc.toString('base64'));
@@ -51,6 +56,9 @@ let cached = null;
 
 async function mintFromPayload() {
   if (!cached) {
+    // cache-first is SAFE here and ONLY here: the payload URL carries this
+    // build's VER, so the browser cache can never hand us another version's
+    // payload. Cross-version reuse is impossible by construction.
     const url = new URL('assets/payload-${VER}.dat', self.registration.scope);
     const r = await fetch(url, { cache: 'force-cache' });
     if (!r.ok) throw new Error('payload http ' + r.status);
@@ -67,7 +75,16 @@ async function mintFromPayload() {
 }
 
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+// v9.6: purge EVERY cache that does not belong to THIS build — cross-version
+// payload reuse is how stale code boots. Then take control immediately.
+self.addEventListener('activate', e => e.waitUntil(
+  (self.caches
+    ? caches.keys().then(keys => Promise.all(
+        keys.filter(k => k.indexOf('${VER}') === -1).map(k => caches.delete(k))
+      ))
+    : Promise.resolve()
+  ).then(() => self.clients.claim())
+));
 
 self.addEventListener('fetch', e => {
   const url = e.request.url;

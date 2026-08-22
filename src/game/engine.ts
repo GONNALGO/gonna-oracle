@@ -2429,3 +2429,4 @@ export class Game implements GameCtx {
     this.touch.draw(this.ctx);
   }
 }
+// v9.6 stale-sw regression marker
