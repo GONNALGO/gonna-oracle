@@ -1414,21 +1414,40 @@ export class ArenaUI {
       this.drawVerdict(c, frame, card);
     } else {
       const acct = arenaSession().accountType;
+      const testnet = this.adapter().mode === 'testnet';
+      const myEntry = card.players.find((p) => p.address === me) ?? null;
+      const joiners = card.players.slice(1);
+      const tableFull = card.players.length >= card.seatsTotal;
+      const allSigned = card.players.length > 0 && card.players.every((p) => p.score > 0);
+      // contract truth: resolve is allowed when (full && all signed) OR
+      // (deadline passed && at least one JOINER signed). Never before.
+      const joinerSigned = joiners.some((p) => p.score > 0);
+      const resolvable = (live && tableFull && allSigned) || (card.status === 'expired' && joinerSigned);
+      // on testnet the creator_score is COMMITTED AT CREATE (seat 0, oracle
+      // signed) — the owner never owes a score; only a joiner who has not
+      // played yet does.
+      const iOweScore = seated && myEntry !== null && myEntry.score === 0;
       let ay = 148;
       if (live && !seated) {
-        drawText(c, 'NETWORK FEE: ' + feeLine('join', acct, this.adapter().mode === 'testnet'), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
+        drawText(c, 'NETWORK FEE: ' + feeLine('join', acct, testnet), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
         ay += 12;
         this.btn(c, frame, { id: 'accept', x: 92, y: ay, w: 200, h: 20 }, 'ACCEPT & STAKE ' + fmtStake(card.stake), { gold: true });
         ay += 24;
-      } else if (live && seated && card.players.some((p) => p.score === 0)) {
-        drawText(c, 'NETWORK FEE: ' + feeLine('submit', acct, this.adapter().mode === 'testnet'), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
+      } else if (live && seated && (testnet ? iOweScore : card.players.some((p) => p.score === 0))) {
+        drawText(c, 'NETWORK FEE: ' + feeLine('submit', acct, testnet), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
         ay += 12;
         this.btn(c, frame, { id: 'submit', x: 92, y: ay, w: 200, h: 20 }, 'SUBMIT SCORE', { green: true });
         ay += 24;
-      } else if (live && seated) {
+      } else if ((live && seated && (testnet ? resolvable : true)) || (card.status === 'expired' && seated && joinerSigned)) {
         this.btn(c, frame, { id: 'resolve', x: 92, y: ay, w: 200, h: 20 }, 'RESOLVE THE BATTLE', { gold: true });
         ay += 24;
-      } else if (card.status === 'resolved' && card.winner === me) {
+      } else if (live && seated) {
+        // committed but nobody can resolve yet — wait it out (or shill it)
+        const waitLine = tableFull ? 'WAITING FOR SCORES...' : 'WAITING FOR A CHALLENGER...';
+        if ((frame & 16) !== 0) drawTextSh(c, waitLine, VW / 2, ay + 4, 1, FLUO, 'center', '#0a3d00');
+        ay += 18;
+      } else if (!testnet && card.status === 'resolved' && card.winner === me) {
+        // mock-only: on testnet the pot is paid INSIDE resolve (inner axfer)
         this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM THE POT', { gold: true });
         ay += 24;
       } else if (card.status === 'expired' && seated) {
@@ -1440,8 +1459,9 @@ export class ArenaUI {
         this.btn(c, frame, { id: 'close', x: 122, y: Math.min(ay, 190), w: 140, h: 12 }, 'EARLY CLOSE', { dim: true });
       }
     }
-    // v10.4: SHARE — private cards, owner only, while the challenge is live
-    if (card.visibility === 'private' && card.creator === me && live && !this.verdict) {
+    // v11.1: SHARE — owner only, while live, PUBLIC and PRIVATE alike
+    // (the whole point of ?duel= is that anyone can open the card)
+    if (card.creator === me && live && !this.verdict) {
       this.btn(c, frame, { id: 'share', x: VW - 86, y: 30, w: 78, h: 12 }, 'SHARE', { gold: true });
     }
     this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
@@ -1451,7 +1471,7 @@ export class ArenaUI {
   // ---------- SHARE SHEET (v10.4) ----------
   private drawShare(c: CanvasRenderingContext2D, frame: number): void {
     const ch = this.current;
-    this.drawHeader(c, 'SHARE THE CHALLENGE', ch ? fmtStake(ch.stake) + (ch.format === 'duel' ? ' PRIVATE DUEL' : ' PRIVATE TABLE') : '');
+    this.drawHeader(c, 'SHARE THE CHALLENGE', ch ? fmtStake(ch.stake) + ' ' + (ch.visibility === 'private' ? 'PRIVATE ' : '') + (ch.format === 'duel' ? 'DUEL' : 'TABLE') : '');
     const btns: [string, string][] = [
       ['share:x', 'SHARE ON X'],
       ['share:tg', 'SHARE ON TELEGRAM'],

@@ -701,13 +701,9 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     });
     kit.recordTxid(id, await kit.signSend(me.sign, txns));
     const ch = await this.getChallenge(id);
-    if (!ch) {
-      // box may be gone after payout — synthesize the verdict view
-      const stale = await this.toChallenge(id, meta, players);
-      stale.status = 'resolved';
-      stale.winner = a.encodeAddress(best.addr);
-      return stale;
-    }
+    // NEVER synthesize a verdict: the UI may only crown a winner the CHAIN
+    // has confirmed (status RESOLVED + winner read from the box).
+    if (!ch || ch.status !== 'resolved') throw new Error('RESOLVE CONFIRMED - STATE SYNC PENDING, REOPEN THE CARD');
     return ch;
   }
 
