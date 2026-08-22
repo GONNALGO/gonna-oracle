@@ -83,6 +83,10 @@ const elig: Eligibility = {
 // v9.0.1: per-provider singletons (garage pattern) — a single shared instance
 // returned the wrong wallet when the user switched providers mid-session.
 const libs: Partial<Record<string, WalletLib>> = {}; // keyed provider:chainId
+const libKey = (p: WalletProvider): string => p + ':' + (arenaMode() === 'testnet' ? 416002 : 416001);
+// the cache key of the ACTIVE session's lib — disconnect/sign must use THIS
+// (a mode flip between connect and disconnect must not orphan the session)
+let activeLibKey: string | null = null;
 let pendingProvider: WalletProvider | null = null; // connect in flight (mobile app-switch)
 let visHookInstalled = false;
 let sessionListener: (() => void) | null = null; // engine hook: session killed by the wallet app
@@ -366,6 +370,7 @@ async function loadLib(provider: WalletProvider): Promise<WalletLib> {
 function sessionEnded(): void {
   state.provider = null;
   state.address = null;
+  activeLibKey = null;
   lsDel(KEY_WALLET);
   lsDel(KEY_ELIG);
   if (arenaMode() === 'testnet') clearTestnetAddress();
@@ -384,6 +389,7 @@ function watchDisconnect(w: WalletLib): void {
 function applySession(provider: WalletProvider, w: WalletLib, accounts: string[]): void {
   state.provider = provider;
   state.address = accounts[0];
+  activeLibKey = libKey(provider);
   lsSet(KEY_WALLET, JSON.stringify({ provider, address: state.address }));
   // identity bridge: a gate connect on the arena-testnet staging path is
   // ALSO the ARENA identity (same origin, same WC session storage)
@@ -425,15 +431,44 @@ export function onSessionEnded(cb: (() => void) | null): void {
 
 export async function connect(provider: WalletProvider): Promise<string> {
   if (mock) return state.address!; // CI: already "connected"
+  if (state.address && state.provider === provider) return state.address; // idempotent: already connected
   state.connecting = true;
   pendingProvider = provider;
   installVisibilityRescue();
   try {
     const w = await loadLib(provider);
-    const accounts = await w.connect();
-    if (!accounts || accounts.length === 0) throw new Error('no account selected');
-    applySession(provider, w, accounts);
-    return state.address!;
+    // v11 RECONNECT-FIRST: a live WalletConnect session must be REUSED —
+    // calling connect() on top of it throws "Session currently connected"
+    // (the Prince hit exactly this on staging).
+    try {
+      const existing = await w.reconnectSession();
+      if (existing && existing.length > 0) {
+        applySession(provider, w, existing);
+        return state.address!;
+      }
+    } catch { /* no live session: connect fresh */ }
+    try {
+      const accounts = await w.connect();
+      if (!accounts || accounts.length === 0) throw new Error('no account selected');
+      applySession(provider, w, accounts);
+      return state.address!;
+    } catch (err) {
+      const msg = String((err as { message?: string } | null)?.message ?? err);
+      if (!msg.includes('Session currently connected')) throw err;
+      // recovery path: reuse the live session; last resort = nuke + reconnect
+      try {
+        const re = await w.reconnectSession();
+        if (re && re.length > 0) {
+          applySession(provider, w, re);
+          return state.address!;
+        }
+      } catch { /* fall through to the nuke */ }
+      try { await w.disconnect(); } catch { /* already gone */ }
+      const accounts = await w.connect();
+      if (!accounts || accounts.length === 0) throw new Error('no account selected');
+      applySession(provider, w, accounts);
+      return state.address!;
+    }
   } finally {
     state.connecting = false;
     pendingProvider = null;
@@ -445,7 +480,7 @@ export async function disconnect(): Promise<void> {
     setMock(null);
     return;
   }
-  const w = state.provider ? libs[state.provider] : null;
+  const w = (activeLibKey ? libs[activeLibKey] : null) ?? (state.provider ? libs[libKey(state.provider)] : null);
   try {
     if (w) await w.disconnect();
   } catch { /* wallet already gone */ }
@@ -604,10 +639,17 @@ export function shortAddress(): string {
   return a.slice(0, 5) + '...' + a.slice(-4);
 }
 
+// QA test hook: inject/remove a fake wallet lib (reconnect-first tests)
+export function __testSetLib(provider: WalletProvider, lib: WalletLib | null): void {
+  const k = libKey(provider);
+  if (lib) libs[k] = lib;
+  else delete libs[k];
+}
+
 // v9.1 readiness: raw transaction signing through the active wallet session
 export async function signTransactions(txGroups: unknown[][]): Promise<Uint8Array[]> {
   if (mock) throw new Error('mock wallet cannot sign');
-  const w = state.provider ? libs[state.provider] : null;
+  const w = (activeLibKey ? libs[activeLibKey] : null) ?? (state.provider ? libs[libKey(state.provider)] : null);
   if (!w || !w.signTransaction) throw new Error('wallet not connected');
   return w.signTransaction(txGroups, state.address ?? undefined);
 }

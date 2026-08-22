@@ -43,12 +43,32 @@ export function clearTestnetAddress(): void {
 
 export async function connectTestnetPera(): Promise<string> {
   const p = await peraInstance();
-  const accounts = await p.connect();
-  const addr = accounts[0];
+  const store = (addr: string): string => {
+    try {
+      window.localStorage.setItem(LS_ACCT, addr);
+    } catch { /* no storage */ }
+    return addr;
+  };
+  // v11 RECONNECT-FIRST: reuse a live WalletConnect session — connect() on
+  // top of it throws "Session currently connected" (Prince's staging bug)
   try {
-    window.localStorage.setItem(LS_ACCT, addr);
-  } catch { /* no storage */ }
-  return addr;
+    const existing = await p.reconnectSession();
+    if (existing && existing.length > 0) return store(existing[0]);
+  } catch { /* no live session */ }
+  try {
+    const accounts = await p.connect();
+    return store(accounts[0]);
+  } catch (err) {
+    const msg = String((err as { message?: string } | null)?.message ?? err);
+    if (!msg.includes('Session currently connected')) throw err;
+    try {
+      const re = await p.reconnectSession();
+      if (re && re.length > 0) return store(re[0]);
+    } catch { /* fall through */ }
+    try { await p.disconnect(); } catch { /* gone */ }
+    const accounts = await p.connect();
+    return store(accounts[0]);
+  }
 }
 
 export async function reconnectTestnetPera(): Promise<string | null> {

@@ -392,6 +392,11 @@ export class GateUI {
     switch (id) {
       case 'pera':
       case 'defly': {
+        // idempotent: an already-connected gate never re-triggers connect()
+        if (wallet.isConnected()) {
+          this.status = 'WALLET CONNECTED - ' + (wallet.getWallet().address ?? '').slice(0, 8) + '..';
+          return { act: 'move' };
+        }
         this.status = 'OPEN ' + id.toUpperCase() + ' WALLET...';
         wallet
           .connect(id)
