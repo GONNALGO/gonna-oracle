@@ -2304,7 +2304,7 @@ export class Game implements GameCtx {
     if (this.scene === 'arena') {
       c.save();
       this.fitView(true);
-      this.arena.draw(c, this.frame, this.art, this.touchActive);
+      this.arena.draw(c, this.frame, this.art, this.touchActive, this.fit);
       c.restore();
       return;
     }

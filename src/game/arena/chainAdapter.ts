@@ -63,6 +63,35 @@ export interface ClaimResult {
   txid: string;
 }
 
+// ---------- HISTORY / LEGACY (v10.3) ----------
+// A match leaves the BOARD the moment it resolves — it lives here forever.
+export interface HistoryEntry {
+  id: number;
+  stake: number;
+  pot: number; // total paid to the winner
+  format: Format;
+  stageMode: StageMode;
+  stageIdx: number | null;
+  seats: number;
+  winner: string; // address
+  winnerName: string;
+  players: { address: string; name: string; score: number }[];
+  resolvedAt: number; // ms epoch
+  claimed: boolean; // pot claimed (winner) or not yet
+}
+
+// MY LEGACY — per-identity stats accumulated from the history (on-chain later)
+export interface LegacyStats {
+  played: number;
+  wins: number;
+  losses: number;
+  winRate: number; // 0-100
+  won: number; // $GONNA taken home
+  lost: number; // $GONNA staked into losing matches
+  net: number; // won - lost
+  bestWin: number; // biggest pot taken
+}
+
 export interface ArenaAdapter {
   readonly mode: 'mock' | 'testnet';
   createChallenge(cfg: ChallengeConfig, creator: ChallengePlayer): Promise<Challenge>;
@@ -73,6 +102,8 @@ export interface ArenaAdapter {
   earlyClose(id: number, address: string): Promise<Challenge>;
   listOpenChallenges(): Promise<Challenge[]>;
   myChallenges(address: string): Promise<Challenge[]>;
+  listHistory(): Promise<HistoryEntry[]>;
+  legacyStats(address: string): Promise<LegacyStats>;
 }
 
 // ---------- FEE ENGINE ----------
@@ -98,6 +129,19 @@ export function fmtStake(n: number): string {
 function trim1(v: number): string {
   const s = v.toFixed(1);
   return s.endsWith('.0') ? s.slice(0, -2) : s;
+}
+// thousands-separated integer — the CUSTOM stake field / typed amounts
+export function fmtGonna(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  return Math.floor(Math.max(0, n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// degen relative time: "2H AGO" / "3D AGO" (font has no em dash, use '-')
+export function fmtAgo(ts: number, now = Date.now()): string {
+  const s = Math.max(0, Math.floor((now - ts) / 1000));
+  if (s < 3600) return Math.max(1, Math.floor(s / 60)) + 'M AGO';
+  if (s < 86400) return Math.floor(s / 3600) + 'H AGO';
+  return Math.floor(s / 86400) + 'D AGO';
 }
 
 // countdown "11:42:33" from a ms deadline (clamped at 0)
@@ -129,7 +173,9 @@ export function mockAccountType(): AccountType {
 interface Store {
   nextId: number;
   seeded: boolean;
-  challenges: Challenge[];
+  histSeeded?: boolean;
+  challenges: Challenge[]; // LIVE cards only — resolved/claimed auto-archive
+  history?: HistoryEntry[]; // every settled match, forever
 }
 
 const DEGEN_NAMES = ['GEKKORIDER', 'WHALE_X', 'SER_BUYTHE_DIP', 'LIL_LIZARD', 'ANON_404', 'PUMP_SAINT', 'HODL_GOBLIN', 'MOON_MARTIAN'];
@@ -139,10 +185,16 @@ function lsLoad(): Store {
     const raw = window.localStorage.getItem(LS_KEY);
     if (raw) {
       const s = JSON.parse(raw) as Store;
-      if (s && Array.isArray(s.challenges)) return s;
+      if (s && Array.isArray(s.challenges)) {
+        if (!Array.isArray(s.history)) {
+          s.history = []; // v10.3 migration for pre-history stores
+          s.histSeeded = false;
+        }
+        return s;
+      }
     }
   } catch { /* corrupt: rebuild */ }
-  return { nextId: 1, seeded: false, challenges: [] };
+  return { nextId: 1, seeded: false, challenges: [], history: [] };
 }
 function lsSave(s: Store): void {
   try {
@@ -212,16 +264,83 @@ function seed(s: Store): void {
   s.seeded = true;
 }
 
+// HISTORY comes pre-loaded: the piazza has a past, legends included
+function seedHistory(s: Store): void {
+  const now = Date.now();
+  const mkH = (
+    name: string,
+    _type: AccountType, // reserved: history UI may badge Falcon winners later
+    format: Format,
+    seats: number,
+    stake: number,
+    stageMode: StageMode,
+    stageIdx: number | null,
+    hrsAgo: number,
+    claimed: boolean,
+  ): void => {
+    const winner = mockAddr(name);
+    const loser = mockAddr(DEGEN_NAMES[(name.length + 3) % DEGEN_NAMES.length]);
+    s.history!.push({
+      id: s.nextId++,
+      stake,
+      pot: stake * Math.min(seats, 2), // duels pay 2x, tables approx for flavor
+      format,
+      stageMode,
+      stageIdx,
+      seats,
+      winner,
+      winnerName: name,
+      players: [
+        { address: winner, name, score: 9000 + (name.length * 137) % 4000 },
+        { address: loser, name: DEGEN_NAMES[(name.length + 3) % DEGEN_NAMES.length], score: 7000 },
+      ],
+      resolvedAt: now - hrsAgo * 3600_000,
+      claimed,
+    });
+  };
+  mkH('WHALE_X', 'ed25519', 'duel', 2, 350_000_000, 'single', 6, 2, true); // WHALE_X TOOK 700M - STAGE 7 THRONE ROOM - 2H AGO
+  mkH('GEKKORIDER', 'falcon', 'open', 8, 50_000_000, 'full', null, 26, true);
+  mkH('SER_BUYTHE_DIP', 'ed25519', 'duel', 2, 60_000_000, 'single', 2, 74, true);
+  mkH('ANON_404', 'ed25519', 'open', 4, 10_000_000, 'random', 1, 124, false); // unclaimed pot still warm
+  s.histSeeded = true;
+}
+
 export class MockArenaAdapter implements ArenaAdapter {
   readonly mode = 'mock' as const;
 
   private store(): Store {
     const s = lsLoad();
+    let dirty = false;
     if (!s.seeded) {
       seed(s);
-      lsSave(s);
+      dirty = true;
     }
+    if (!s.histSeeded) {
+      seedHistory(s);
+      dirty = true;
+    }
+    if (dirty) lsSave(s);
     return s;
+  }
+
+  // v10.3: resolve auto-archives — the match leaves the BOARD for the HISTORY
+  private archive(s: Store, c: Challenge): void {
+    const w = c.players.find((p) => p.address === c.winner);
+    s.history!.unshift({
+      id: c.id,
+      stake: c.stake,
+      pot: c.pot,
+      format: c.format,
+      stageMode: c.stageMode,
+      stageIdx: c.stageIdx,
+      seats: c.seatsTotal,
+      winner: c.winner ?? '',
+      winnerName: w ? w.name : '???',
+      players: c.players.map((p) => ({ address: p.address, name: p.name, score: p.score })),
+      resolvedAt: Date.now(),
+      claimed: false,
+    });
+    s.challenges = s.challenges.filter((x) => x.id !== c.id);
   }
 
   private find(s: Store, id: number): Challenge {
@@ -297,32 +416,35 @@ export class MockArenaAdapter implements ArenaAdapter {
   async resolve(id: number): Promise<Challenge> {
     const s = this.store();
     const c = this.find(s, id);
-    if (c.status === 'resolved' || c.status === 'claimed') return c;
     if (c.players.length === 0) throw new Error('no players');
     let best = c.players[0];
     for (const p of c.players) if (p.score > best.score) best = p;
     c.winner = best.address;
     c.status = 'resolved';
+    this.archive(s, c); // off the BOARD, into the HISTORY
     lsSave(s);
-    return c;
+    return c; // the caller keeps its copy for the verdict/versus screen
   }
 
   async claim(id: number, address: string): Promise<ClaimResult> {
     const s = this.store();
-    const c = this.find(s, id);
-    this.refresh(c);
-    // expired with the caller as the only/top seat -> refund-style claim;
-    // resolved -> winner claims the pot
-    if (c.status === 'resolved') {
-      if (c.winner !== address) throw new Error('only the winner claims the pot');
-      c.status = 'claimed';
+    // resolved match -> the winner claims the pot from the HISTORY archive
+    const h = s.history!.find((x) => x.id === id);
+    if (h) {
+      if (h.winner !== address) throw new Error('only the winner claims the pot');
+      if (h.claimed) throw new Error('pot already claimed');
+      h.claimed = true;
       lsSave(s);
-      return { payout: c.pot, txid: 'MOCK' + String(id).padStart(6, '0') };
+      return { payout: h.pot, txid: 'MOCK' + String(id).padStart(6, '0') };
     }
+    // expired live card -> seated degen takes the stake back
+    const c = s.challenges.find((x) => x.id === id);
+    if (!c) throw new Error('card not found');
+    this.refresh(c);
     if (c.status === 'expired') {
       const mine = c.players.find((p) => p.address === address);
       if (!mine) throw new Error('not seated at this table');
-      c.status = 'closed';
+      s.challenges = s.challenges.filter((x) => x.id !== id);
       lsSave(s);
       return { payout: c.stake, txid: 'MOCK' + String(id).padStart(6, '0') };
     }
@@ -336,9 +458,46 @@ export class MockArenaAdapter implements ArenaAdapter {
     this.refresh(c);
     if (c.status !== 'open') throw new Error('card is not open');
     c.status = 'closed';
-    c.deadline = Date.now();
+    s.challenges = s.challenges.filter((x) => x.id !== id); // sealed cards leave the square
     lsSave(s);
     return c;
+  }
+
+  // ---------- HISTORY / LEGACY (mock) ----------
+  async listHistory(): Promise<HistoryEntry[]> {
+    const s = this.store();
+    return [...s.history!].sort((a, b) => b.resolvedAt - a.resolvedAt);
+  }
+
+  async legacyStats(address: string): Promise<LegacyStats> {
+    const s = this.store();
+    let wins = 0;
+    let losses = 0;
+    let won = 0;
+    let lost = 0;
+    let bestWin = 0;
+    for (const h of s.history!) {
+      if (!h.players.some((p) => p.address === address)) continue;
+      if (h.winner === address) {
+        wins++;
+        won += h.pot;
+        if (h.pot > bestWin) bestWin = h.pot;
+      } else {
+        losses++;
+        lost += h.stake;
+      }
+    }
+    const played = wins + losses;
+    return {
+      played,
+      wins,
+      losses,
+      winRate: played > 0 ? Math.round((wins / played) * 100) : 0,
+      won,
+      lost,
+      net: won - lost,
+      bestWin,
+    };
   }
 
   async listOpenChallenges(): Promise<Challenge[]> {
@@ -534,6 +693,14 @@ export class TestnetArenaAdapter implements ArenaAdapter {
   }
   async myChallenges(_address: string): Promise<Challenge[]> {
     return [];
+  }
+  // TODO(deploy): history + legacy read from settled challenge boxes (or an
+  // indexer query) once the app id is live; empty until then.
+  async listHistory(): Promise<HistoryEntry[]> {
+    return [];
+  }
+  async legacyStats(_address: string): Promise<LegacyStats> {
+    return { played: 0, wins: 0, losses: 0, winRate: 0, won: 0, lost: 0, net: 0, bestWin: 0 };
   }
 }
 

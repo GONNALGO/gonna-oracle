@@ -13,13 +13,14 @@
 import { drawText, drawTextSh, textWidth } from '../font';
 import { mosaicBorder, drawCrown } from '../screens';
 import { VH, VW, clamp } from '../types';
+import type { ViewFit } from '../fit';
 import type { Input } from '../input';
 import type { Art } from '../sprites';
 import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait } from '../skins';
 import type { SkinId } from '../skins';
-import { getArenaAdapter, fmtCountdown, fmtFee, fmtStake } from './chainAdapter';
-import type { Challenge, ChallengeConfig, FighterPick, Visibility } from './chainAdapter';
+import { getArenaAdapter, fmtAgo, fmtCountdown, fmtFee, fmtGonna, fmtStake } from './chainAdapter';
+import type { Challenge, ChallengeConfig, FighterPick, HistoryEntry, LegacyStats, Visibility } from './chainAdapter';
 import { arenaAddress, arenaPlayer, arenaSession } from './arenaWallet';
 
 const GOLD = '#f5c542';
@@ -43,7 +44,7 @@ interface Hot {
   id: string;
 }
 
-type Screen = 'board' | 'create' | 'versus';
+type Screen = 'board' | 'create' | 'versus' | 'history' | 'legacy';
 type WizardStep = 'visibility' | 'format' | 'battle' | 'stake' | 'fighter' | 'confirm';
 
 const STAGE_NAMES = ['GHETTO GONNA', 'PUMP HARBOR', 'WALL STREET', 'CONSENSUS', 'THE HOUSE', 'LAUNCHPAD', 'THRONE ROOM'];
@@ -86,9 +87,13 @@ export class ArenaUI {
   private errT = 0;
   // board
   private cards: Challenge[] = [];
-  private listFirst = 0;
+  private page = 0; // v10.3: paginated board (3 cards/page)
   private feedLines: string[] = [];
   private feedT = 0;
+  // history + legacy
+  private hist: HistoryEntry[] = [];
+  private histPage = 0;
+  private legacy: LegacyStats | null = null;
   // create wizard
   private step: WizardStep = 'visibility';
   private cfg: ChallengeConfig = this.defaultCfg();
@@ -98,6 +103,11 @@ export class ArenaUI {
   // versus
   private current: Challenge | null = null;
   private myScore = 0;
+  // CUSTOM stake native input (mobile keyboard), managed in stepStake
+  private stakeInput: HTMLInputElement | null = null;
+  private stakeInputPrev = 0;
+  private fitRef: ViewFit | null = null;
+  private touchRef = false;
   private verdict = false; // verdict overlay up (coin rain)
   private coinRain: CoinFx[] = [];
   private rematchOf: number | null = null;
@@ -141,6 +151,7 @@ export class ArenaUI {
   }
 
   open(): void {
+    this.closeStakeInput(false);
     this.screen = 'board';
     this.step = 'visibility';
     this.cfg = this.defaultCfg();
@@ -149,9 +160,11 @@ export class ArenaUI {
     this.coinRain = [];
     this.err = '';
     this.focus = 0;
-    this.listFirst = 0;
+    this.page = 0;
+    this.histPage = 0;
     this.fighterOpts = this.fighterShelf();
     void this.refreshBoard();
+    void this.refreshHistory();
     this.buildFeed();
   }
 
@@ -164,15 +177,27 @@ export class ArenaUI {
       const mine = me ? await a.myChallenges(me) : [];
       const seen = new Set(open.map((c) => c.id));
       const all = [...open, ...mine.filter((c) => !seen.has(c.id))];
-      // MY CARDS pin to the top (CLAIM never hides below the fold), the rest
-      // sort by soonest deadline — the piazza's hottest action floats up
-      const hasMe = (c: Challenge) => c.players.some((p) => p.address === me);
-      all.sort((x, y) => Number(hasMe(y)) - Number(hasMe(x)) || x.deadline - y.deadline);
-      this.cards = all;
+      // v10.3: BOARD = live action only (resolved/claimed auto-archive to
+      // HISTORY). Soonest deadline first — CLOSING SOON floats to the top;
+      // my expired claimables pin above everything (action needed)
+      const claimable = (c: Challenge) => c.status === 'expired' && c.players.some((p) => p.address === me);
+      this.cards = all
+        .filter((c) => c.status === 'open' || c.status === 'full' || c.status === 'expired')
+        .sort((x, y) => Number(claimable(y)) - Number(claimable(x)) || x.deadline - y.deadline);
     } catch {
       this.cards = [];
     }
     this.buildFeed();
+  }
+
+  private async refreshHistory(): Promise<void> {
+    try {
+      this.hist = await this.adapter().listHistory();
+      this.legacy = await this.adapter().legacyStats(arenaAddress());
+    } catch {
+      this.hist = [];
+      this.legacy = null;
+    }
   }
 
   private buildFeed(): void {
@@ -228,6 +253,7 @@ export class ArenaUI {
   }
 
   private back(): ArenaAction {
+    this.closeStakeInput(true); // ESC/back commits a pending custom stake
     if (this.screen === 'create') {
       // step back through the wizard
       const order: WizardStep[] = ['visibility', 'format', 'battle', 'stake', 'fighter', 'confirm'];
@@ -250,6 +276,12 @@ export class ArenaUI {
       this.screen = 'board';
       this.current = null;
       void this.refreshBoard();
+      void this.refreshHistory();
+      return { act: 'move' };
+    }
+    if (this.screen === 'history' || this.screen === 'legacy') {
+      this.screen = 'board';
+      this.focus = 0;
       return { act: 'move' };
     }
     return { act: 'title' }; // board -> title (ESC / tilt back)
@@ -261,11 +293,114 @@ export class ArenaUI {
     return { act: 'none' };
   }
 
+  // ---------- CUSTOM stake: native keyboard (v10.2, Prince's request) ------
+  // An overlaid HTML input with inputmode="numeric" gets the PHONE keyboard
+  // on mobile and normal typing on desktop; the canvas value syncs live.
+  private openStakeInput(): void {
+    if (this.stakeInput) return;
+    const el = document.createElement('input');
+    el.id = 'arena-stake-input';
+    el.type = 'text';
+    el.inputMode = 'numeric';
+    el.pattern = '[0-9]*';
+    el.autocomplete = 'off';
+    el.value = String(Number.isFinite(this.cfg.stake) && this.cfg.stake > 0 ? this.cfg.stake : 10_000_000);
+    el.style.position = 'fixed';
+    el.style.zIndex = '9999';
+    el.style.background = '#0d1118';
+    el.style.color = '#f5c542';
+    el.style.border = '1px solid #b8860b';
+    el.style.textAlign = 'center';
+    el.style.fontFamily = 'monospace';
+    el.style.padding = '0';
+    el.style.outline = 'none';
+    el.style.caretColor = '#39FF14';
+    this.stakeInputPrev = this.cfg.stake;
+    el.addEventListener('input', () => {
+      // digits only, live sync into the wizard config
+      const digits = el.value.replace(/\D/g, '').slice(0, 12); // max 1T
+      if (el.value !== digits) el.value = digits;
+      this.cfg.stake = digits === '' ? 0 : Math.min(1_000_000_000_000, Number(digits));
+    });
+    el.addEventListener('keydown', (ev) => {
+      ev.stopPropagation(); // keep the game Input handler out while typing
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        this.closeStakeInput(true);
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        this.closeStakeInput(false);
+      }
+    });
+    // the mousedown default action that FOLLOWS our tap handler steals focus
+    // right after we grab it — treat early blurs as focus-steals and reclaim
+    const openedAt = performance.now();
+    el.addEventListener('blur', () => {
+      if (performance.now() - openedAt < 350) {
+        setTimeout(() => {
+          if (this.stakeInput === el) el.focus();
+        }, 0);
+        return;
+      }
+      this.closeStakeInput(true); // real blur (tap outside / keyboard dismissed)
+    });
+    document.body.appendChild(el);
+    this.stakeInput = el;
+    el.focus(); // sync: inside the tap gesture, so mobile keyboards open
+    el.select();
+    setTimeout(() => {
+      if (this.stakeInput === el && document.activeElement !== el) el.focus();
+    }, 50);
+  }
+
+  private closeStakeInput(commit: boolean): void {
+    const el = this.stakeInput;
+    if (!el) return;
+    this.stakeInput = null;
+    if (commit) {
+      // validate on close: min 1 $GONNA; empty/rekt -> sensible 10M default
+      if (!Number.isFinite(this.cfg.stake) || this.cfg.stake < 1) this.cfg.stake = 10_000_000;
+      this.cfg.stake = Math.min(1_000_000_000_000, Math.floor(this.cfg.stake));
+    } else {
+      this.cfg.stake = this.stakeInputPrev;
+    }
+    el.remove();
+  }
+
+  // overlay position tracks the canvas letterbox (same pattern as the engine's
+  // SAVE RECORD msg input — fit offsets are CSS px, see engine.placeMsgInput)
+  private placeStakeInput(): void {
+    const el = this.stakeInput;
+    const f = this.fitRef;
+    if (!el || !f) return;
+    el.style.left = Math.round(f.fitOffX + 126 * f.fitScale) + 'px';
+    el.style.top = Math.round(f.fitOffY + 114 * f.fitScale) + 'px';
+    el.style.width = Math.round(132 * f.fitScale) + 'px';
+    el.style.height = Math.round(24 * f.fitScale) + 'px';
+    // iOS Safari auto-zooms on focused inputs < 16px — go 16px on touch
+    el.style.fontSize = Math.max(this.touchRef ? 16 : 10, Math.round(10 * f.fitScale)) + 'px';
+  }
+
   // ---------- actions ----------
   private activate(id: string): ArenaAction {
     if (this.busy) return { act: 'none' };
+    // any other tap commits + dismisses the native stake keyboard
+    if (id !== 'stake:custom') this.closeStakeInput(true);
     // navigation
     if (id === 'back') return this.back();
+    if (id === 'history') {
+      this.screen = 'history';
+      this.histPage = 0;
+      this.focus = 0;
+      void this.refreshHistory();
+      return { act: 'move' };
+    }
+    if (id === 'legacy') {
+      this.screen = 'legacy';
+      this.focus = 0;
+      void this.refreshHistory();
+      return { act: 'move' };
+    }
     if (id === 'create') {
       this.screen = 'create';
       this.step = 'visibility';
@@ -286,12 +421,20 @@ export class ArenaUI {
       }
       return { act: 'none' };
     }
-    if (id === 'list:up') {
-      this.listFirst = Math.max(0, this.listFirst - 1);
+    if (id === 'page:prev') {
+      this.page = Math.max(0, this.page - 1);
       return { act: 'move' };
     }
-    if (id === 'list:down') {
-      this.listFirst = Math.min(Math.max(0, this.cards.length - 3), this.listFirst + 1);
+    if (id === 'page:next') {
+      this.page = Math.min(Math.max(0, Math.ceil(this.cards.length / 3) - 1), this.page + 1);
+      return { act: 'move' };
+    }
+    if (id === 'hpage:prev') {
+      this.histPage = Math.max(0, this.histPage - 1);
+      return { act: 'move' };
+    }
+    if (id === 'hpage:next') {
+      this.histPage = Math.min(Math.max(0, Math.ceil(this.hist.length / 5) - 1), this.histPage + 1);
       return { act: 'move' };
     }
     if (id.startsWith('claim:')) return this.doClaim(Number(id.slice(6)));
@@ -357,22 +500,32 @@ export class ArenaUI {
       this.shuffleT = 0;
       return { act: 'move' };
     }
-    if (id.startsWith('stake:') && id !== 'stake:next') {
-      this.cfg.stake = Number(id.slice(6));
-      this.step = 'fighter'; // preset stake taps straight through
-      this.focus = 0;
-      return { act: 'move' };
-    }
+    // v10.2: EXACT stake ids FIRST — 'stake:minus'/'stake:plus' used to fall
+    // into the startsWith('stake:') preset branch (Number('minus') = NaN and
+    // a bogus jump to the fighter step). Presets are matched last + guarded.
     if (id === 'stake:minus') {
-      this.cfg.stake = Math.max(CUSTOM_STEP, this.cfg.stake - CUSTOM_STEP);
+      this.cfg.stake = Math.max(CUSTOM_STEP, (Number.isFinite(this.cfg.stake) ? this.cfg.stake : 10_000_000) - CUSTOM_STEP);
       return { act: 'move' };
     }
     if (id === 'stake:plus') {
-      this.cfg.stake = Math.min(CUSTOM_MAX, this.cfg.stake + CUSTOM_STEP);
+      this.cfg.stake = Math.min(CUSTOM_MAX, (Number.isFinite(this.cfg.stake) ? this.cfg.stake : 0) + CUSTOM_STEP);
+      return { act: 'move' };
+    }
+    if (id === 'stake:custom') {
+      // Prince's request: the amount field summons the native phone keyboard
+      this.openStakeInput();
       return { act: 'move' };
     }
     if (id === 'stake:next') {
       this.step = 'fighter';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (id.startsWith('stake:')) {
+      const v = Number(id.slice(6));
+      if (!Number.isFinite(v) || v < 1) return this.fail('BAD STAKE DEGEN');
+      this.cfg.stake = v;
+      this.step = 'fighter'; // preset stake taps straight through
       this.focus = 0;
       return { act: 'move' };
     }
@@ -474,14 +627,10 @@ export class ArenaUI {
       () => {
         this.buildFeed();
         void this.refreshBoard();
+        void this.refreshHistory(); // claimed matches count in MY LEGACY
+        // v10.3: the match is archived now — update the versus copy in place
         if (this.current && this.current.id === id) {
-          void this.adapter()
-            .myChallenges(me)
-            .then((list) => {
-              const hit = list.find((x) => x.id === id);
-              if (hit) this.current = hit;
-            })
-            .catch(() => { /* cosmetic */ });
+          this.current.status = this.current.status === 'resolved' ? 'claimed' : 'closed';
         }
       },
     );
@@ -564,8 +713,12 @@ export class ArenaUI {
   }
 
   // ---------- draw ----------
-  draw(c: CanvasRenderingContext2D, frame: number, art: Art, touch: boolean): void {
+  draw(c: CanvasRenderingContext2D, frame: number, art: Art, touch: boolean, fit?: ViewFit): void {
     this.hots = [];
+    this.fitRef = fit ?? this.fitRef;
+    this.touchRef = touch;
+    // native stake keyboard only lives on the STAKE step
+    if (this.stakeInput && (this.screen !== 'create' || this.step !== 'stake')) this.closeStakeInput(true);
     c.fillStyle = INK;
     c.fillRect(0, 0, VW, VH);
     // drifting void stars (same family as SAVE RECORD)
@@ -578,6 +731,8 @@ export class ArenaUI {
     mosaicBorder(c);
     if (this.screen === 'board') this.drawBoard(c, frame);
     else if (this.screen === 'create') this.drawCreate(c, frame, art);
+    else if (this.screen === 'history') this.drawHistory(c, frame);
+    else if (this.screen === 'legacy') this.drawLegacy(c, frame);
     else this.drawVersus(c, frame, art);
     // gold coin rain rides over the versus verdict
     if (this.coinRain.length > 0) {
@@ -682,8 +837,11 @@ export class ArenaUI {
     if (rows.length === 0) {
       drawTextSh(c, 'NO LIVE CARDS - POST THE FIRST ONE', VW / 2, 100, 1, GRAY, 'center');
     }
+    // v10.3: paginated — 3 cards per page
+    const pages = Math.max(1, Math.ceil(rows.length / 3));
+    this.page = clamp(this.page, 0, pages - 1);
     for (let i = 0; i < 3; i++) {
-      const ri = this.listFirst + i;
+      const ri = this.page * 3 + i;
       const card = rows[ri];
       if (!card) break;
       const y = TOP + i * ROW_H;
@@ -691,6 +849,7 @@ export class ArenaUI {
       const live = card.status === 'open' || card.status === 'full';
       const freeSeats = card.seatsTotal - card.players.length;
       const msLeft = card.deadline - Date.now();
+      const claimable = mine && card.status === 'expired';
       // row panel
       c.fillStyle = mine ? '#101a10' : PANEL;
       c.fillRect(8, y, VW - 16 - 22, ROW_H - 4);
@@ -704,10 +863,16 @@ export class ArenaUI {
       drawText(c, fmtStake(card.stake) + ' ' + fmt + (card.visibility === 'private' ? ' (PRIVATE)' : ''), tx, y + 4, 1, GOLD);
       const seatLine = card.players.length + '/' + card.seatsTotal + ' SEATS - ' + fmtCountdown(card.deadline) + ' LEFT';
       drawText(c, seatLine, tx, y + 14, 1, live ? GREEN : GRAY);
+      // v10.3: status gets a DEDICATED right slot; the BY line truncates
+      // before it (no more BY YOU_DEGEN / EXPIRED pileups)
+      const statusTxt = live ? '' : card.status.toUpperCase();
+      const statusX = claimable ? VW - 102 : VW - 40;
+      const maxChars = Math.max(8, Math.floor(((statusTxt ? statusX - textWidth(statusTxt, 1) - 10 : VW - 40) - tx) / 6));
       const stage = card.stageMode === 'full' ? 'FULL RUN' : 'STAGE ' + (card.stageIdx !== null ? card.stageIdx + 1 : '?') + ' ' + STAGE_NAMES[card.stageIdx ?? 0];
-      drawText(c, stage + ' - BY ' + card.creatorName, tx, y + 24, 1, DIM);
-      if (!live) {
-        drawText(c, card.status.toUpperCase(), tx + 150, y + 24, 1, card.status === 'claimed' ? GOLD : RED);
+      const byLine = stage + ' - BY ' + card.creatorName;
+      drawText(c, byLine.length > maxChars ? byLine.slice(0, maxChars) : byLine, tx, y + 24, 1, DIM);
+      if (statusTxt) {
+        drawText(c, statusTxt, statusX, y + 24, 1, statusTxt === 'CLAIMED' ? GOLD : RED, 'right');
       }
       // badges (top-right of the row)
       let bx = VW - 32;
@@ -717,7 +882,7 @@ export class ArenaUI {
       }
       if (live && freeSeats <= 2 && freeSeats > 0) {
         if ((frame & 16) !== 0) drawText(c, 'FILLING FAST', bx - textWidth('FILLING FAST', 1), y + 6, 1, RED);
-        bx -= textWidth('FILLING FAST', 1) + 6;
+        bx -= textWidth('FILLING FAST', 1) + 8;
       }
       if (live && msLeft < 3600_000) {
         drawText(c, 'CLOSING SOON', bx - textWidth('CLOSING SOON', 1), y + 6, 1, '#ff8a3c');
@@ -725,16 +890,18 @@ export class ArenaUI {
       // whole row opens the VERSUS detail; CLAIM is pushed AFTER it so the
       // smaller gold button wins the tap (tap() matches in reverse order)
       this.hots.push({ id: 'card:' + card.id, x: 8, y, w: VW - 16 - 22, h: ROW_H - 4 });
-      const claimable = mine && (card.status === 'expired' || (card.status === 'resolved' && card.winner === me));
       if (claimable) {
         this.btn(c, frame, { id: 'claim:' + card.id, x: VW - 96, y: y + 22, w: 60, h: 14 }, 'CLAIM', { gold: true });
       }
     }
-    // scroll arrows
-    if (this.listFirst > 0) this.btn(c, frame, { id: 'list:up', x: VW - 26, y: TOP, w: 18, h: 14 }, '<', { small: true });
-    if (this.listFirst + 3 < rows.length) this.btn(c, frame, { id: 'list:down', x: VW - 26, y: TOP + 3 * ROW_H - 14, w: 18, h: 14 }, '>', { small: true });
-    // footer
-    this.btn(c, frame, { id: 'create', x: 8, y: 198, w: 180, h: 14 }, 'CREATE CARD', { gold: true });
+    // v10.3: page keys on the right rail + PAGE indicator
+    if (this.page > 0) this.btn(c, frame, { id: 'page:prev', x: VW - 26, y: TOP, w: 18, h: 14 }, '<', { small: true });
+    if (this.page < pages - 1) this.btn(c, frame, { id: 'page:next', x: VW - 26, y: TOP + 3 * ROW_H - 14, w: 18, h: 14 }, '>', { small: true });
+    if (pages > 1) drawText(c, 'PAGE ' + (this.page + 1) + '/' + pages, VW - 104, 190, 1, DIM, 'right');
+    // footer: CREATE CARD / HISTORY / MY LEGACY / BACK
+    this.btn(c, frame, { id: 'create', x: 8, y: 198, w: 100, h: 14 }, 'CREATE CARD', { gold: true });
+    this.btn(c, frame, { id: 'history', x: 116, y: 198, w: 80, h: 14 }, 'HISTORY');
+    this.btn(c, frame, { id: 'legacy', x: 204, y: 198, w: 80, h: 14 }, 'MY LEGACY');
     this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
   }
 
@@ -841,13 +1008,23 @@ export class ArenaUI {
       const s = STAKE_OPTS[i];
       this.btn(c, frame, { id: 'stake:' + s, x: 22 + i * 120, y: 62, w: 100, h: 24 }, fmtStake(s), { gold: this.cfg.stake === s });
     }
-    drawText(c, 'CUSTOM', VW / 2, 102, 1, GRAY, 'center');
+    drawText(c, 'CUSTOM - TAP THE FIELD TO TYPE', VW / 2, 102, 1, GRAY, 'center');
     this.btn(c, frame, { id: 'stake:minus', x: 72, y: 114, w: 44, h: 24 }, '-');
+    // the amount field is a LIVE hotspot: tapping it raises the native keyboard
+    const fieldLit = this.hots.length === this.focus;
+    this.hots.push({ id: 'stake:custom', x: 126, y: 114, w: 132, h: 24 });
     c.fillStyle = PANEL;
     c.fillRect(126, 114, 132, 24);
-    c.strokeStyle = GOLD_DK;
+    c.strokeStyle = this.stakeInput ? ((frame & 8) !== 0 ? FLUO : GOLD) : fieldLit ? '#ffffff' : GOLD_DK;
+    c.lineWidth = 1;
     c.strokeRect(126.5, 114.5, 131, 23);
-    drawTextSh(c, fmtStake(this.cfg.stake) + ' $GONNA', VW / 2, 122, 1, GOLD, 'center');
+    drawTextSh(c, fmtGonna(this.cfg.stake), VW / 2, 122, 1, GOLD, 'center'); // thousands separators
+    if (this.stakeInput) {
+      if ((frame & 16) !== 0) drawText(c, '_', VW / 2 + textWidth(fmtGonna(this.cfg.stake), 1) / 2 + 2, 122, 1, FLUO);
+    } else {
+      drawText(c, 'TAP', 252, 122, 1, DIM, 'right');
+    }
+    this.placeStakeInput();
     this.btn(c, frame, { id: 'stake:plus', x: 268, y: 114, w: 44, h: 24 }, '+');
     this.coinPile(c, VW / 2 - 12, 156, this.cfg.stake, frame);
     this.btn(c, frame, { id: 'stake:next', x: 122, y: 170, w: 140, h: 18 }, 'NEXT', { green: true });
@@ -1057,13 +1234,80 @@ export class ArenaUI {
     drawTextSh(c, 'REMATCH', r.x + r.w / 2, r.y + 7, 1, flash ? '#fff3c4' : GOLD, 'center');
   }
 
+  // ---------- HISTORY (v10.3) ----------
+  private stageLabel(stageMode: string, stageIdx: number | null): string {
+    return stageMode === 'full' ? 'FULL RUN' : 'STAGE ' + ((stageIdx ?? 0) + 1) + ' ' + STAGE_NAMES[stageIdx ?? 0];
+  }
+
+  private drawHistory(c: CanvasRenderingContext2D, frame: number): void {
+    this.drawHeader(c, 'HISTORY', 'EVERY BATTLE LEAVES A SCAR');
+    const ROW_H = 30;
+    const TOP = 40;
+    const pages = Math.max(1, Math.ceil(this.hist.length / 5));
+    this.histPage = clamp(this.histPage, 0, pages - 1);
+    if (this.hist.length === 0) {
+      drawTextSh(c, 'NO BATTLES SETTLED YET', VW / 2, 100, 1, GRAY, 'center');
+    }
+    for (let i = 0; i < 5; i++) {
+      const h = this.hist[this.histPage * 5 + i];
+      if (!h) break;
+      const y = TOP + i * ROW_H;
+      c.fillStyle = PANEL;
+      c.fillRect(8, y, VW - 16, ROW_H - 4);
+      c.strokeStyle = '#232838';
+      c.lineWidth = 1;
+      c.strokeRect(8.5, y + 0.5, VW - 17, ROW_H - 5);
+      this.coinPile(c, 14, y + 16, h.stake, frame + i * 5);
+      const head = (h.winnerName + ' TOOK ' + fmtStake(h.pot)).slice(0, 34);
+      drawText(c, head, 40, y + 4, 1, GOLD);
+      if (!h.claimed && (frame & 16) !== 0) drawText(c, 'UNCLAIMED', VW - 14, y + 4, 1, '#ff8a3c', 'right');
+      const sub = (h.format === 'duel' ? 'DUEL' : 'OPEN ' + h.seats) + ' - ' + this.stageLabel(h.stageMode, h.stageIdx) + ' - ' + fmtAgo(h.resolvedAt);
+      drawText(c, sub.slice(0, 40), 40, y + 15, 1, DIM);
+    }
+    // paging keys (same pattern as the BOARD)
+    if (this.histPage > 0) this.btn(c, frame, { id: 'hpage:prev', x: 8, y: 198, w: 34, h: 14 }, '<', { small: true });
+    if (this.histPage < pages - 1) this.btn(c, frame, { id: 'hpage:next', x: 50, y: 198, w: 34, h: 14 }, '>', { small: true });
+    if (pages > 1) drawText(c, 'PAGE ' + (this.histPage + 1) + '/' + pages, 96, 202, 1, DIM);
+    this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
+  }
+
+  // ---------- MY LEGACY (v10.3) ----------
+  private drawLegacy(c: CanvasRenderingContext2D, frame: number): void {
+    this.drawHeader(c, 'MY LEGACY', arenaSession().connected ? arenaSession().label : 'ANON DEGEN - MOCK IDENTITY');
+    const s = this.legacy;
+    const rows: [string, string, string][] = [
+      ['MATCHES PLAYED', s ? String(s.played) : '-', '#c8ccd4'],
+      ['WINS', s ? String(s.wins) : '-', GREEN],
+      ['LOSSES', s ? String(s.losses) : '-', RED],
+      ['WIN RATE', s ? s.winRate + '%' : '-', '#c8ccd4'],
+      ['$GONNA WON', s ? fmtGonna(s.won) : '-', GOLD],
+      ['$GONNA LOST', s ? fmtGonna(s.lost) : '-', RED],
+      ['NET', s ? (s.net >= 0 ? '+' : '-') + fmtGonna(Math.abs(s.net)) : '-', s && s.net < 0 ? RED : GREEN],
+      ['BEST WIN', s ? fmtGonna(s.bestWin) : '-', GOLD],
+    ];
+    for (let i = 0; i < rows.length; i++) {
+      const y = 46 + i * 15;
+      drawText(c, rows[i][0], 70, y, 1, DIM);
+      drawText(c, rows[i][1], 314, y, 1, rows[i][2], 'right');
+    }
+    if (s && s.played === 0) drawText(c, 'NO SCARS YET - POST A CARD', VW / 2, 176, 1, GRAY, 'center');
+    drawText(c, 'EVERY WALLET WRITES ITS LEGEND ON-CHAIN', VW / 2, 184, 1, DIM, 'center');
+    if (this.legacy && this.legacy.wins > 0 && (frame & 16) !== 0) drawCrown(c, VW / 2 + 62, 8);
+    this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
+  }
+
   // ---------- CI / QA info ----------
   get info(): {
     screen: Screen;
     step: WizardStep;
     busy: boolean;
     err: string;
+    page: number;
+    pages: number;
+    histPage: number;
     cards: { id: number; stake: number; seats: string; status: string; falcon: boolean; visibility: Visibility }[];
+    history: { id: number; winner: string; pot: number; claimed: boolean; ago: string }[];
+    legacy: LegacyStats | null;
     cfg: ChallengeConfig;
     shuffle: { active: boolean; t: number; target: number };
     current: { id: number; status: string; players: number; winner: string | null; pot: number } | null;
@@ -1077,6 +1321,9 @@ export class ArenaUI {
       step: this.step,
       busy: this.busy,
       err: this.errT > 0 ? this.err : '',
+      page: this.page,
+      pages: Math.max(1, Math.ceil(this.cards.length / 3)),
+      histPage: this.histPage,
       cards: this.cards.map((c) => ({
         id: c.id,
         stake: c.stake,
@@ -1085,6 +1332,8 @@ export class ArenaUI {
         falcon: c.creatorType === 'falcon',
         visibility: c.visibility,
       })),
+      history: this.hist.map((h) => ({ id: h.id, winner: h.winnerName, pot: h.pot, claimed: h.claimed, ago: fmtAgo(h.resolvedAt) })),
+      legacy: this.legacy ? { ...this.legacy } : null,
       cfg: { ...this.cfg },
       shuffle: { active: this.shuffleT >= 0, t: this.shuffleT, target: this.shuffleTarget },
       current: this.current
