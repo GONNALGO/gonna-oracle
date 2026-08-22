@@ -5,7 +5,7 @@
 // the pixel QUANTUM badge for Falcon creators. Never any white flash.
 import { drawText, drawTextSh } from '../font';
 import type { Challenge } from './chainAdapter';
-import { fmtStake } from './chainAdapter';
+import { arenaMode, fmtStake } from './chainAdapter';
 
 export const SHARE_W = 1200;
 export const SHARE_H = 630;
@@ -38,7 +38,10 @@ export function shareText(ch: Challenge): string {
 }
 
 export function shareUrl(id: number): string {
-  return window.location.origin + window.location.pathname + '?duel=' + id;
+  // the link ALWAYS carries the mode — a ?duel= id means nothing without it
+  // (preview origins wipe localStorage; mock ids and chain ids collide)
+  const base = window.location.origin + window.location.pathname;
+  return arenaMode() === 'testnet' ? base + '?arena=testnet&duel=' + id : base + '?duel=' + id;
 }
 
 // pixel coin at any integer scale (decoration)

@@ -405,6 +405,21 @@ export class MockArenaAdapter implements ArenaAdapter {
     const p = c.players.find((x) => x.address === address);
     if (!p) throw new Error('not seated at this table');
     p.score = Math.max(0, Math.floor(score));
+    // honest mock: a SOLO card never resolves — seat a mock rival who plays
+    // back instantly (same pattern as the seeded piazza cards), and that
+    // rival CAN beat you. No more YOU WON with an OPEN SEAT.
+    if (c.players.length < 2) {
+      const rivalScore = Math.max(0, Math.floor(score + (Math.random() < 0.45 ? 1 : -1) * (300 + Math.random() * 700)));
+      c.players.push({
+        address: 'RIVAL_' + Math.random().toString(36).slice(2, 8).toUpperCase(),
+        name: 'RIVAL_' + Math.random().toString(36).slice(2, 6).toUpperCase(),
+        score: rivalScore,
+        fighter: { skin: 'snek', assetId: null, name: 'SNEK' },
+        accountType: 'ed25519',
+      });
+      c.pot += c.stake;
+      if (c.players.length >= c.seatsTotal) c.status = 'full';
+    }
     // mock opponents play back instantly so the flow resolves end-to-end
     for (const o of c.players) {
       if (o.address !== address && o.score === 0) {
@@ -419,6 +434,10 @@ export class MockArenaAdapter implements ArenaAdapter {
     const s = this.store();
     const c = this.find(s, id);
     if (c.players.length === 0) throw new Error('no players');
+    // honest mock: mirror the contract — never resolve without an opponent
+    if (c.players.length < 2 || c.players.some((p) => p.score <= 0)) {
+      throw new Error('WAITING FOR A CHALLENGER');
+    }
     let best = c.players[0];
     for (const p of c.players) if (p.score > best.score) best = p;
     c.winner = best.address;
@@ -800,16 +819,24 @@ const LS_ADAPTER = 'gonna.arena.adapter';
 let current: ArenaAdapter | null = null;
 export function arenaMode(): 'mock' | 'testnet' {
   try {
+    // explicit query ALWAYS wins (and persists)
     const q = new URLSearchParams(window.location.search).get('arena');
     if (q === 'testnet') {
       window.localStorage.setItem(LS_ADAPTER, 'testnet');
       return 'testnet';
     }
     if (q === 'mock') {
-      window.localStorage.removeItem(LS_ADAPTER);
+      window.localStorage.setItem(LS_ADAPTER, 'mock');
       return 'mock';
     }
-    return window.localStorage.getItem(LS_ADAPTER) === 'testnet' ? 'testnet' : 'mock';
+    const stored = window.localStorage.getItem(LS_ADAPTER);
+    if (stored === 'testnet' || stored === 'mock') return stored;
+    // STAGING FLAG: gonna.bond/arena-testnet/ lands straight on-chain —
+    // public previews (any other origin/path) stay MOCK by default
+    if (window.location.hostname.includes('gonna.bond') && window.location.pathname.includes('arena-testnet')) {
+      return 'testnet';
+    }
+    return 'mock';
   } catch {
     return 'mock';
   }

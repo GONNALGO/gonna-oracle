@@ -43,6 +43,7 @@ import { captureInstallPrompt, FsGuide } from './fsguide';
 // ---- v10: THE ARENA (staking piazza) ----
 import { ArenaUI } from './arena/arenaUI';
 import type { ArenaAction } from './arena/arenaUI';
+import { arenaMode } from './arena/chainAdapter';
 // v10.4: ?duel=<id> parsed once per page load (StrictMode double-boot safe)
 let bootDuelParam: number | null | undefined;
 
@@ -488,10 +489,13 @@ export class Game implements GameCtx {
     if (bootDuelParam === undefined) {
       bootDuelParam = null;
       try {
-        const raw = new URLSearchParams(window.location.search).get('duel');
+        const sp = new URLSearchParams(window.location.search);
+        arenaMode(); // ?arena=testnet is read + persisted BEFORE we strip params
+        const raw = sp.get('duel');
         if (raw && /^\d+$/.test(raw)) {
           bootDuelParam = Number(raw);
-          window.history.replaceState(null, '', window.location.pathname); // consume it
+          sp.delete('duel'); // consume ONLY the duel param, keep arena=
+          window.history.replaceState(null, '', window.location.pathname + (sp.toString() ? '?' + sp.toString() : ''));
         }
       } catch { /* no window/history: ignore */ }
     }

@@ -108,6 +108,8 @@ export class ArenaUI {
   // v10.5: SHOW CARD — DOM overlay with a REAL <img> (native context menu)
   private showOverlay: HTMLDivElement | null = null;
   private showOverlayUrl = '';
+  // v11.2: manual copy fallback (clipboard blocked)
+  private copyOverlay: HTMLDivElement | null = null;
   // create wizard
   private step: WizardStep = 'visibility';
   private cfg: ChallengeConfig = this.defaultCfg();
@@ -167,6 +169,7 @@ export class ArenaUI {
   open(deepDuel?: number | null): void {
     this.closeStakeInput(false);
     this.closeShowCard();
+    this.closeCopyOverlay();
     this.screen = 'board';
     this.step = 'visibility';
     this.cfg = this.defaultCfg();
@@ -255,8 +258,9 @@ export class ArenaUI {
   key(inp: Input): ArenaAction {
     if (inp.pressed.pause) {
       inp.pressed.pause = false;
-      if (this.showOverlay) {
-        this.closeShowCard(); // ESC dismisses the SHOW CARD overlay first
+      if (this.showOverlay || this.copyOverlay) {
+        this.closeShowCard(); // ESC dismisses DOM overlays first
+        this.closeCopyOverlay();
         return { act: 'move' };
       }
       return this.back();
@@ -293,7 +297,8 @@ export class ArenaUI {
 
   private back(): ArenaAction {
     this.closeStakeInput(true); // ESC/back commits a pending custom stake
-    this.closeShowCard(); // and drops a lingering SHOW CARD overlay
+    this.closeShowCard(); // and drops lingering DOM overlays
+    this.closeCopyOverlay();
     if (this.screen === 'create') {
       // step back through the wizard
       const order: WizardStep[] = ['visibility', 'format', 'battle', 'stake', 'fighter', 'confirm'];
@@ -524,6 +529,53 @@ export class ArenaUI {
     o.remove();
   }
 
+  // ---------- v11.2: manual-copy overlay (clipboard-blocked fallback) ------
+  private openCopyOverlay(link: string): void {
+    if (this.copyOverlay) return;
+    const back = document.createElement('div');
+    back.id = 'arena-copylink';
+    back.style.cssText =
+      'position:fixed;inset:0;z-index:10000;background:rgba(5,6,10,0.92);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;';
+    const inp = document.createElement('input');
+    inp.id = 'arena-copylink-input';
+    inp.readOnly = true;
+    inp.value = link;
+    inp.style.cssText =
+      'width:92vw;max-width:560px;background:#0d1118;color:#f5c542;border:2px solid #b8860b;' +
+      'font:14px monospace;padding:12px;text-align:center;';
+    inp.addEventListener('click', (ev) => ev.stopPropagation());
+    const cap = document.createElement('div');
+    cap.textContent = 'COPY IT MANUALLY';
+    cap.style.cssText = 'color:#39FF14;font:12px monospace;letter-spacing:1px;';
+    const close = document.createElement('button');
+    close.id = 'arena-copylink-close';
+    close.textContent = 'CLOSE';
+    close.style.cssText =
+      'background:#14100a;color:#f5c542;border:2px solid #b8860b;font:bold 14px monospace;' +
+      'padding:10px 28px;letter-spacing:2px;cursor:pointer;';
+    close.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      this.closeCopyOverlay();
+    });
+    back.appendChild(inp);
+    back.appendChild(cap);
+    back.appendChild(close);
+    back.addEventListener('click', () => this.closeCopyOverlay());
+    document.body.appendChild(back);
+    this.copyOverlay = back;
+    inp.focus();
+    inp.select();
+    inp.setSelectionRange(0, link.length); // mobile Safari wants the range API
+  }
+
+  private closeCopyOverlay(): void {
+    const o = this.copyOverlay;
+    if (!o) return;
+    this.copyOverlay = null;
+    o.remove();
+  }
+
   // ---------- actions ----------
   private activate(id: string): ArenaAction {
     if (this.busy) return { act: 'none' };
@@ -624,11 +676,17 @@ export class ArenaUI {
       const ch = this.current;
       if (!ch) return { act: 'none' };
       const link = shareUrl(ch.id);
-      try {
-        void navigator.clipboard?.writeText(link).catch(() => { /* clipboard denied */ });
-      } catch { /* no clipboard API */ }
-      this.shareMsg = 'LINK COPIED - GO PASTE IT';
-      this.shareMsgT = 240;
+      // HONEST clipboard: COPIED only on a real write; if the browser blocks
+      // it (iframes/previews), open the manual-copy overlay instead
+      void (async () => {
+        try {
+          await navigator.clipboard.writeText(link);
+          this.shareMsg = 'LINK COPIED - GO PASTE IT';
+          this.shareMsgT = 240;
+        } catch {
+          this.openCopyOverlay(link);
+        }
+      })();
       return { act: 'move' };
     }
     if (id === 'share:save') {
@@ -1423,6 +1481,9 @@ export class ArenaUI {
       // (deadline passed && at least one JOINER signed). Never before.
       const joinerSigned = joiners.some((p) => p.score > 0);
       const resolvable = (live && tableFull && allSigned) || (card.status === 'expired' && joinerSigned);
+      // mock mirrors it honestly: at least one opponent seated, all played
+      const mockResolvable = card.players.length >= 2 && allSigned;
+      const canResolve = testnet ? resolvable : mockResolvable;
       // on testnet the creator_score is COMMITTED AT CREATE (seat 0, oracle
       // signed) — the owner never owes a score; only a joiner who has not
       // played yet does.
@@ -1438,7 +1499,7 @@ export class ArenaUI {
         ay += 12;
         this.btn(c, frame, { id: 'submit', x: 92, y: ay, w: 200, h: 20 }, 'SUBMIT SCORE', { green: true });
         ay += 24;
-      } else if ((live && seated && (testnet ? resolvable : true)) || (card.status === 'expired' && seated && joinerSigned)) {
+      } else if ((live && seated && canResolve) || (card.status === 'expired' && seated && joinerSigned)) {
         this.btn(c, frame, { id: 'resolve', x: 92, y: ay, w: 200, h: 20 }, 'RESOLVE THE BATTLE', { gold: true });
         ay += 24;
       } else if (live && seated) {
