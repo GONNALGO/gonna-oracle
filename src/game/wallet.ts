@@ -6,6 +6,8 @@ import { isGonnaName, loadSkinMap, skinForAsset } from './skins';
 import type { SkinId } from './skins';
 import { maybeSovereign } from './sovereign';
 import { b64ToBytes, bytesToB64 } from './b64';
+import { arenaMode } from './arena/chainAdapter';
+import { adoptTestnetAddress, clearTestnetAddress } from './arena/testnetWallet';
 
 // ---------- official on-chain data ----------
 export const GONNA_ASA = 2582294183;
@@ -80,7 +82,7 @@ const elig: Eligibility = {
 
 // v9.0.1: per-provider singletons (garage pattern) — a single shared instance
 // returned the wrong wallet when the user switched providers mid-session.
-const libs: Partial<Record<WalletProvider, WalletLib>> = {};
+const libs: Partial<Record<string, WalletLib>> = {}; // keyed provider:chainId
 let pendingProvider: WalletProvider | null = null; // connect in flight (mobile app-switch)
 let visHookInstalled = false;
 let sessionListener: (() => void) | null = null; // engine hook: session killed by the wallet app
@@ -342,17 +344,21 @@ function applyElig(p: Partial<Eligibility>): void {
 
 // ---------- wallet libraries (lazy, per-provider instances) ----------
 async function loadLib(provider: WalletProvider): Promise<WalletLib> {
-  const cached = libs[provider];
+  // ONE GATE, ONE NETWORK: on the arena-testnet staging path the gate speaks
+  // TESTNET (chainId 416002); production /gonnafight/ stays mainnet 416001.
+  const chainId = arenaMode() === 'testnet' ? 416002 : 416001;
+  const cacheKey = provider + ':' + chainId;
+  const cached = libs[cacheKey];
   if (cached) return cached;
   let w: WalletLib;
   if (provider === 'pera') {
     const mod = await import('@perawallet/connect');
-    w = new mod.PeraWalletConnect({ chainId: 416001, shouldShowSignTxnToast: false }) as unknown as WalletLib; // mainnet
+    w = new mod.PeraWalletConnect({ chainId, shouldShowSignTxnToast: false }) as unknown as WalletLib;
   } else {
     const mod = await import('@blockshake/defly-connect');
-    w = new mod.DeflyWalletConnect({ chainId: 416001, shouldShowSignTxnToast: false }) as unknown as WalletLib;
+    w = new mod.DeflyWalletConnect({ chainId, shouldShowSignTxnToast: false }) as unknown as WalletLib;
   }
-  libs[provider] = w;
+  libs[cacheKey] = w;
   return w;
 }
 
@@ -362,6 +368,7 @@ function sessionEnded(): void {
   state.address = null;
   lsDel(KEY_WALLET);
   lsDel(KEY_ELIG);
+  if (arenaMode() === 'testnet') clearTestnetAddress();
   applyElig({ checked: false, ok: false, algo: 0, gonna: 0, nfts: [], ts: 0, source: null });
   clearIdentity();
   if (sessionListener) sessionListener();
@@ -378,6 +385,9 @@ function applySession(provider: WalletProvider, w: WalletLib, accounts: string[]
   state.provider = provider;
   state.address = accounts[0];
   lsSet(KEY_WALLET, JSON.stringify({ provider, address: state.address }));
+  // identity bridge: a gate connect on the arena-testnet staging path is
+  // ALSO the ARENA identity (same origin, same WC session storage)
+  if (arenaMode() === 'testnet') adoptTestnetAddress(accounts[0]);
   watchDisconnect(w);
   resolveIdentity(state.address!);
   void refreshEligibility(true);

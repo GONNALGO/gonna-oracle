@@ -78,7 +78,9 @@ export async function connectArenaWallet(provider: ArenaWalletProvider): Promise
 }
 
 // TESTNET identity provider for the real adapter: QA signer (automation)
-// first, then the connected Pera testnet session.
+// first, then the arena-side Pera testnet session, and finally the MAIN
+// GATE session (ONE GATE, ONE NETWORK: on the staging path the gate itself
+// speaks testnet, so its WalletConnect session signs ARENA groups too).
 setTestnetIdentityProvider(async () => {
   if (qaActive()) {
     const address = await qaPlayerAddress();
@@ -86,6 +88,11 @@ setTestnetIdentityProvider(async () => {
   }
   const addr = testnetAddress() ?? (await reconnectTestnetPera());
   if (addr) return { address: addr, sign: await peraSignFn(addr) };
+  // final fallback: main-gate session (wallet.ts signs via Pera/Defly lib)
+  const w = wallet.getWallet();
+  if (w.address && wallet.isConnected()) {
+    return { address: w.address, sign: (groups) => wallet.signTransactions(groups) };
+  }
   return null;
 });
 

@@ -27,6 +27,20 @@ export function testnetAddress(): string | null {
   }
 }
 
+// identity bridge: the main GATE session (wallet.ts) adopts the ARENA
+// testnet identity on the staging path — one connect covers both.
+export function adoptTestnetAddress(addr: string): void {
+  try {
+    window.localStorage.setItem(LS_ACCT, addr);
+  } catch { /* no storage */ }
+}
+
+export function clearTestnetAddress(): void {
+  try {
+    window.localStorage.removeItem(LS_ACCT);
+  } catch { /* no storage */ }
+}
+
 export async function connectTestnetPera(): Promise<string> {
   const p = await peraInstance();
   const accounts = await p.connect();
