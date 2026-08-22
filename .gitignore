@@ -2,3 +2,8 @@ node_modules
 dist
 .DS_Store
 dist-t*/
+
+# testnet secrets (never commit)
+contracts/quantum-arena/deploy/testnet.secrets.json
+contracts/quantum-arena/deploy/.dispenser_token.json
+contracts/quantum-arena/deploy/.device_flow.json

@@ -17,7 +17,9 @@
 
 import * as wallet from '../wallet';
 import type { AccountType, ChallengePlayer } from './chainAdapter';
-import { mockAccountType } from './chainAdapter';
+import { arenaMode, mockAccountType, setTestnetIdentityProvider } from './chainAdapter';
+import { connectTestnetPera, peraSignFn, reconnectTestnetPera, testnetAddress } from './testnetWallet';
+import { qaActive, qaPlayerAddress, qaSignFn } from './qaSigner';
 
 export type ArenaWalletProvider = wallet.WalletProvider;
 
@@ -43,7 +45,17 @@ export function arenaSession(): ArenaSession {
 // wallet-less degens still get a STABLE pseudo-address (persisted) so a QA
 // session can create -> join -> submit -> claim without a wallet prompt
 const LS_ANON = 'gonna.arena.anon';
+const LS_QA_ADDR = 'gonna.qa.player.addr'; // injected by the QA harness
 export function arenaAddress(): string {
+  if (arenaMode() === 'testnet') {
+    // TESTNET identity: QA signer first (automation), then Pera testnet
+    try {
+      const qa = window.localStorage.getItem(LS_QA_ADDR);
+      if (qaActive() && qa) return qa;
+    } catch { /* no storage */ }
+    const p = testnetAddress();
+    if (p) return p;
+  }
   const w = wallet.getWallet();
   if (w.address) return w.address;
   try {
@@ -58,13 +70,24 @@ export function arenaAddress(): string {
   }
 }
 
-// the ARENA signs with the SAME Pera/Defly session as THE GATE — connecting
-// here just forwards to the existing battle-tested flow.
+// the ARENA signs with the SAME Pera/Defly session as THE GATE in mock/mainnet
+// mode; on testnet it uses the dedicated chainId-416002 Pera instance.
 export async function connectArenaWallet(provider: ArenaWalletProvider): Promise<string> {
-  // TODO(testnet): after connect, hand wallet.signTransactions to the
-  // TestnetArenaAdapter so SIGN & STAKE issues a real group.
+  if (arenaMode() === 'testnet') return connectTestnetPera();
   return wallet.connect(provider);
 }
+
+// TESTNET identity provider for the real adapter: QA signer (automation)
+// first, then the connected Pera testnet session.
+setTestnetIdentityProvider(async () => {
+  if (qaActive()) {
+    const address = await qaPlayerAddress();
+    if (address) return { address, sign: await qaSignFn() };
+  }
+  const addr = testnetAddress() ?? (await reconnectTestnetPera());
+  if (addr) return { address: addr, sign: await peraSignFn(addr) };
+  return null;
+});
 
 export async function disconnectArenaWallet(): Promise<void> {
   return wallet.disconnect();

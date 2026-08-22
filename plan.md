@@ -101,3 +101,6 @@ Design: /mnt/agents/output/GDD-THE-MINTING-THRONE-ROOM.md (approvato 6/6, 2026-0
 
 ## LOG QUANTUM FIGHT
 - 2026-08-22 — BLOCCO 1 contratto ✅: /contracts/quantum-arena/ (Puya, AVM v11, extra_program_pages=1), 33/33 test verdi (verificati di persona), artifact TEAL+ARC56. falcon_verify NON in puyapy 5.10 → oracle v1 ed25519verify_bare con swap point `_verify_oracle_sig` + ORACLE_SIG_SCHEME; v2 = redeploy immutabile con chiave Falcon 1793B. Box MBR 0.35 ALGO/challenge. Treasury deve fare opt-in $GONNA; bootstrap ≥0.2 ALGO post-deploy.
+
+- 2026-08-22 — ARENA UI v4 ✅ (preview 2f96314): SHARE sheet 5 tasti, share card 1200×630, deep-link ?duel=, 404 lore, @GONNALGO, SHOW CARD overlay, paginazione, HISTORY, MY LEGACY. Commit 798c9ce.
+- 2026-08-22 — VAI del Prince → FASE TESTNET: (1) chiavi deployer/treasury/oracle + dispenser funding; (2) $GONNA testnet ASA; (3) deploy QuantumArena da artifact ARC-56 (extra pages=1) + bootstrap; (4) wiring TestnetAdapter (APP ID reale, box read, oracle signer TESTNET-ONLY, Pera connect); (5) QA E2E su testnet reale. Oracle v1 = ed25519 (falcon_verify v2 al redeploy). Niente chiavi mainnet mai in repo; mnemonic testnet in file gitignored.

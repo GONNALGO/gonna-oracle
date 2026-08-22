@@ -19,7 +19,10 @@ import type { Art } from '../sprites';
 import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait } from '../skins';
 import type { SkinId } from '../skins';
-import { getArenaAdapter, fmtAgo, fmtCountdown, fmtFee, fmtGonna, fmtStake } from './chainAdapter';
+import { getArenaAdapter, arenaMode, feeLine, fmtAgo, fmtCountdown, fmtGonna, fmtStake } from './chainAdapter';
+import { explorerTxUrl, getTxid } from './testnetKit';
+import { connectArenaWallet } from './arenaWallet';
+import { qaActive, qaScore } from './qaSigner';
 import type { Challenge, ChallengeConfig, FighterPick, HistoryEntry, LegacyStats, Visibility } from './chainAdapter';
 import { arenaAddress, arenaPlayer, arenaSession } from './arenaWallet';
 import { renderShareCard, shareCardBlob, shareText, shareUrl } from './shareCard';
@@ -98,6 +101,9 @@ export class ArenaUI {
   // share sheet (v10.4)
   private shareMsg = '';
   private shareMsgT = 0;
+  // v11: wallet connect feedback (board header)
+  private walletMsg = '';
+  private walletMsgT = 0;
   private framesRef: Map<string, HTMLImageElement> | null = null;
   // v10.5: SHOW CARD — DOM overlay with a REAL <img> (native context menu)
   private showOverlay: HTMLDivElement | null = null;
@@ -577,6 +583,24 @@ export class ArenaUI {
     if (id.startsWith('claim:')) return this.doClaim(Number(id.slice(6)));
 
     // ---- v10.4: SHARE (private cards, owner only, while live) ----
+    if (id === 'viewchain') {
+      const ch = this.current;
+      const txid = ch ? getTxid(ch.id) : null;
+      if (txid) window.open(explorerTxUrl(txid), '_blank', 'noopener');
+      return { act: 'move' };
+    }
+    if (id === 'wallet') {
+      // testnet: real Pera connect (chainId 416002); mock: mainnet gate wallet
+      this.walletMsgT = 0;
+      void this.run(
+        () => connectArenaWallet('pera'),
+        (addr) => {
+          this.walletMsg = 'CONNECTED ' + addr.slice(0, 6) + '..' + addr.slice(-4);
+          this.walletMsgT = 240;
+        },
+      );
+      return { act: 'move' };
+    }
     if (id === 'share') return this.openShareSheet();
     if (id === 'share:show') {
       this.openShowCard(); // v10.5: DOM overlay, real <img>, native save UX
@@ -786,7 +810,8 @@ export class ArenaUI {
     const c = this.current;
     if (!c) return { act: 'none' };
     const me = arenaAddress();
-    const score = this.myScore > 0 ? this.myScore : 4200 + Math.floor(Math.random() * 900);
+    // QA mode plays a DETERMINISTIC score so E2E verdicts are assertable
+    const score = qaActive() ? qaScore() : this.myScore > 0 ? this.myScore : 4200 + Math.floor(Math.random() * 900);
     void this.run(
       () => this.adapter().submitScore(c.id, me, score),
       (nc) => {
@@ -883,6 +908,7 @@ export class ArenaUI {
   tick(): void {
     if (this.errT > 0) this.errT--;
     if (this.shareMsgT > 0) this.shareMsgT--;
+    if (this.walletMsgT > 0) this.walletMsgT--;
     this.feedT++;
     if (this.feedT > 220) {
       this.feedT = 0;
@@ -1018,6 +1044,19 @@ export class ArenaUI {
     // LIVE feed on its OWN dedicated strip (44..55), cards start at y=60
     drawTextSh(c, 'THE BOARD', VW / 2, 10, 2, GOLD, 'center', GOLD_DK);
     drawText(c, 'THE STAKING PIAZZA', VW / 2, 30, 1, DIM, 'center');
+    // v11: testnet mode tag + wallet connect (real Pera, chainId 416002)
+    if (arenaMode() === 'testnet') {
+      drawTextSh(c, 'TESTNET', 10, 4, 1, FLUO, 'left', '#0a3d00');
+      const addr = arenaAddress();
+      const isAnon = addr.startsWith('ANON') || addr.startsWith('DEGEN');
+      if (this.walletMsgT > 0 && this.walletMsg) {
+        drawText(c, this.walletMsg, VW - 10, 4, 1, FLUO, 'right');
+      } else if (isAnon) {
+        this.btn(c, frame, { id: 'wallet', x: VW - 96, y: 2, w: 88, h: 12 }, 'CONNECT', { green: true });
+      } else {
+        drawText(c, addr.slice(0, 6) + '..' + addr.slice(-4), VW - 10, 4, 1, GOLD, 'right');
+      }
+    }
     c.fillStyle = '#04140a';
     c.fillRect(4, 44, VW - 8, 11);
     const line = this.feedLines.length > 0 ? this.feedLines[0] : 'THE BOARD IS LISTENING';
@@ -1277,7 +1316,7 @@ export class ArenaUI {
     }
     // FEE ENGINE: Falcon (PQ) accounts pay the resource-based fee
     const acct = arenaSession().accountType;
-    drawTextSh(c, 'NETWORK FEE: ' + fmtFee(acct), VW / 2, 120, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
+    drawTextSh(c, 'NETWORK FEE: ' + feeLine('create', acct, this.adapter().mode === 'testnet'), VW / 2, 120, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
     if (acct === 'falcon') {
       drawText(c, 'FALCON ACCOUNT - PQ SIGNATURE PRICING', VW / 2, 132, 1, DIM, 'center');
       this.quantumSeal(c, x + 10, 120, frame);
@@ -1377,12 +1416,12 @@ export class ArenaUI {
       const acct = arenaSession().accountType;
       let ay = 148;
       if (live && !seated) {
-        drawText(c, 'NETWORK FEE: ' + fmtFee(acct), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
+        drawText(c, 'NETWORK FEE: ' + feeLine('join', acct, this.adapter().mode === 'testnet'), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
         ay += 12;
         this.btn(c, frame, { id: 'accept', x: 92, y: ay, w: 200, h: 20 }, 'ACCEPT & STAKE ' + fmtStake(card.stake), { gold: true });
         ay += 24;
       } else if (live && seated && card.players.some((p) => p.score === 0)) {
-        drawText(c, 'NETWORK FEE: ' + fmtFee(acct), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
+        drawText(c, 'NETWORK FEE: ' + feeLine('submit', acct, this.adapter().mode === 'testnet'), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
         ay += 12;
         this.btn(c, frame, { id: 'submit', x: 92, y: ay, w: 200, h: 20 }, 'SUBMIT SCORE', { green: true });
         ay += 24;
@@ -1469,6 +1508,10 @@ export class ArenaUI {
     c.lineWidth = flash ? 2 : 1;
     c.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
     drawTextSh(c, 'REMATCH', r.x + r.w / 2, r.y + 7, 1, flash ? '#fff3c4' : GOLD, 'center');
+    // v11: VIEW ON CHAIN — testnet explorer link for the resolve tx
+    if (getTxid(card.id)) {
+      this.btn(c, frame, { id: 'viewchain', x: VW / 2 - 60, y: 190, w: 120, h: 10 }, 'VIEW ON CHAIN', { green: true });
+    }
   }
 
   // ---------- HISTORY (v10.3) ----------

@@ -528,212 +528,299 @@ export class MockArenaAdapter implements ArenaAdapter {
 }
 
 // ======================================================================
-// TESTNET ADAPTER — algosdk skeleton on the QuantumArena ARC-56.
-// TODO(deploy): set ARENA_APP_ID + GONNA_ASA_TESTNET after the testnet
-// deploy, then flip getArenaAdapter() (or ?arena=testnet) to go live.
+// TESTNET ADAPTER — QuantumArena is LIVE on testnet (app 769688298).
+// Exact atomic groups + OpUp donor calls live in ./testnetKit.ts.
+// Identity (Pera testnet via ./testnetWallet.ts, or the QA signer) is
+// INJECTED through setTestnetIdentityProvider by arenaWallet.ts (no
+// circular imports). Oracle sigs come from ./devOracle.ts (TESTNET ONLY).
 // ======================================================================
-export const ARENA_APP_ID = 0; // TODO(deploy): testnet app id — PLACEHOLDER
-export const GONNA_ASA_TESTNET = 0; // TODO(deploy): testnet $GONNA ASA id
-const TESTNET_ALGOD = 'https://testnet-api.algonode.cloud';
+import * as kit from './testnetKit';
+import { devOracleSign, hasDevOracle } from './devOracle';
+import { qaScore } from './qaSigner';
+export { ARENA_APP_ID, GONNA_ASA_TESTNET } from './testnetKit';
 
-// ARC-56 method names (QuantumArena.arc56.json):
-//   create_challenge(pay mbr, axfer stake, uint64 stake, uint64 seats_total,
-//     uint64 duration_secs, uint64 stage_mode, byte[] seed_commitment,
-//     uint64 creator_score, byte[] creator_score_sig) -> uint64
-//   join_challenge(axfer stake, uint64 challenge_id) -> uint64
-//   submit_score(uint64 challenge_id, uint64 score, byte[] sig) -> void
-//   resolve(uint64 challenge_id, uint64 stage_idx, byte[] seed_reveal,
-//     byte[] verdict_sig) -> byte[]
-//   claim(uint64 challenge_id) / early_close(pay fee, uint64 challenge_id)
-// Boxes: "m" prefix + uint64 id -> ChallengeMeta struct (see arc56 structs).
+export interface TestnetIdentity {
+  address: string;
+  sign: kit.TxSignFn;
+}
+// stored on window: vite may instantiate this module twice during HMR/debug
+// evaluates — the registry must survive module duplication.
+type Win = { __arenaIdProvider?: () => Promise<TestnetIdentity | null> };
+function providerRef(): (() => Promise<TestnetIdentity | null>) | null {
+  return (window as unknown as Win).__arenaIdProvider ?? null;
+}
+export function setTestnetIdentityProvider(p: () => Promise<TestnetIdentity | null>): void {
+  (window as unknown as Win).__arenaIdProvider = p;
+}
 
-type SignFn = (txGroups: unknown[][]) => Promise<Uint8Array[]>;
+function sameAddr(a: Uint8Array, addr: Uint8Array): boolean {
+  return a.length === addr.length && a.every((v, i) => v === addr[i]);
+}
+// ABI decode may hand back plain number[] — normalize before encodeAddress
+function asBytes(v: Uint8Array | number[]): Uint8Array {
+  return v instanceof Uint8Array ? v : Uint8Array.from(v);
+}
+function shortAddr(addr: string): string {
+  return addr.slice(0, 6) + '..' + addr.slice(-4);
+}
 
 export class TestnetArenaAdapter implements ArenaAdapter {
   readonly mode = 'testnet' as const;
-  private address: string;
-  private accountType: AccountType;
-  private sign: SignFn;
-  constructor(address: string, accountType: AccountType, sign: SignFn) {
-    this.address = address;
-    this.accountType = accountType;
-    this.sign = sign;
+
+  private async id(): Promise<TestnetIdentity> {
+    const me = providerRef() ? await providerRef()!() : null;
+    if (!me) throw new Error('CONNECT WALLET FIRST (TESTNET)');
+    return me;
   }
 
-  private async sdk() {
-    // algosdk is heavy: dynamic import so it never rides the entry chunk
-    const algosdk = await import('algosdk');
-    if (ARENA_APP_ID === 0) {
-      // TODO(deploy): deploy QuantumArena to testnet, write the app id into
-      // ARENA_APP_ID above, then this guard goes away.
-      throw new Error('ARENA not deployed yet - set ARENA_APP_ID');
-    }
-    return { algosdk, algod: new algosdk.Algodv2('', TESTNET_ALGOD, '') };
+  private async toChallenge(cid: number, meta: kit.MetaTuple, players: kit.PlayerTuple[]): Promise<Challenge> {
+    const a = await kit.sdk();
+    // tie/refund and claimed cards can carry EMPTY byte[] fields — never
+    // feed those to encodeAddress (it throws on non-32-byte keys)
+    const enc = (pk: Uint8Array | number[]) => a.encodeAddress(asBytes(pk));
+    const encOpt = (pk: Uint8Array | number[]) => (pk.length === 32 ? enc(pk) : 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ');
+    const nowSec = Math.floor(Date.now() / 1000);
+    const seatsTaken = Number(meta.seatsTaken);
+    const seatsTotal = Number(meta.seatsTotal) + 1; // + creator seat (UI convention)
+    // contract: 0 OPEN · 1 CLOSED (table full) · 2 RESOLVED · 3 REFUNDED
+    const statusCode = Number(meta.status);
+    const expired = (statusCode === 0 || statusCode === 1) && Number(meta.deadline) <= nowSec;
+    const status: ChallengeStatus =
+      statusCode === 3 ? 'claimed' : statusCode === 2 ? 'resolved' : expired ? 'expired' : statusCode === 1 || seatsTaken >= seatsTotal ? 'full' : 'open';
+    const creator = encOpt(meta.creator);
+    return {
+      id: cid,
+      creator,
+      creatorName: shortAddr(creator),
+      creatorType: 'ed25519', // Falcon lands on mainnet — testnet accounts are classic
+      visibility: 'public', // v5 contract has no private flag on-chain
+      format: Number(meta.seatsTotal) <= 1 ? 'duel' : 'open',
+      seatsTotal,
+      durationSecs: 0, // not stored on-chain; deadline is the truth
+      stageMode: Number(meta.stageMode) === 0 ? 'full' : Number(meta.stageMode) === 1 ? 'single' : 'random',
+      stageIdx: null,
+      stake: Number(meta.stake) / 1e6, // base units -> $GONNA display units
+      createdAt: Number(meta.deadline) * 1000 - 12 * 3600_000,
+      deadline: Number(meta.deadline) * 1000,
+      status,
+      players: players.map((p) => ({
+        address: encOpt(p.addr),
+        name: shortAddr(encOpt(p.addr)),
+        score: Number(p.score),
+        fighter: { skin: 'gonna', assetId: null, name: 'GONNA' },
+        accountType: 'ed25519' as AccountType,
+      })),
+      winner: statusCode === 2 && meta.winner.length === 32 ? enc(meta.winner) : null,
+      pot: (Number(meta.stake) * seatsTaken) / 1e6,
+    };
   }
 
-  // shared composer: one ABI call + its payment/axfer companions, signed as
-  // a single group. feeOverride bumps the app-call fee for Falcon accounts
-  // (resource-based PQ pricing — see estimateNetworkFee).
-  private async callMethod(
-    methodName: string,
-    appArgs: (Uint8Array | number | bigint)[],
-    extra: { pay?: number; axfer?: { assetId: number; amount: number } } = {},
-  ): Promise<string> {
-    const { algosdk, algod } = await this.sdk();
-    const params = await algod.getTransactionParams().do();
-    const feeMicro = Math.round(estimateNetworkFee(this.accountType) * 1e6);
-    const txns: InstanceType<typeof algosdk.Transaction>[] = [];
-    if (extra.pay !== undefined) {
-      txns.push(
-        algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-          sender: this.address,
-          receiver: algosdk.getApplicationAddress(ARENA_APP_ID),
-          amount: extra.pay,
-          suggestedParams: params,
-        }),
-      );
-    }
-    if (extra.axfer) {
-      txns.push(
-        algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
-          sender: this.address,
-          receiver: algosdk.getApplicationAddress(ARENA_APP_ID),
-          assetIndex: extra.axfer.assetId,
-          amount: extra.axfer.amount,
-          suggestedParams: params,
-        }),
-      );
-    }
-    const method = algosdk.ABIMethod.fromSignature(this.methodSig(methodName));
-    const appCall = algosdk.makeApplicationCallTxnFromObject({
-      sender: this.address,
-      appIndex: ARENA_APP_ID,
-      onComplete: algosdk.OnApplicationComplete.NoOpOC,
-      appArgs: [method.getSelector(), ...appArgs.map((a) => (a instanceof Uint8Array ? a : algosdk.encodeUint64(a)))],
-      suggestedParams: { ...params, fee: feeMicro, flatFee: true },
-    });
-    txns.push(appCall);
-    algosdk.assignGroupID(txns);
-    const signed = await this.sign([txns.map((txn) => ({ txn, signers: [this.address] }))]);
-    const res = (await algod.sendRawTransaction(signed).do()) as { txid?: string };
-    return res.txid ?? appCall.txID();
-  }
-
-  // exact ARC-56 signatures (from QuantumArena.arc56.json)
-  private methodSig(name: string): string {
-    switch (name) {
-      case 'create_challenge':
-        return 'create_challenge(pay,axfer,uint64,uint64,uint64,uint64,byte[],uint64,byte[])uint64';
-      case 'join_challenge':
-        return 'join_challenge(axfer,uint64)uint64';
-      case 'submit_score':
-        return 'submit_score(uint64,uint64,byte[])void';
-      case 'resolve':
-        return 'resolve(uint64,uint64,byte[],byte[])byte[]';
-      case 'claim':
-        return 'claim(uint64)void';
-      case 'early_close':
-        return 'early_close(pay,uint64)void';
-      default:
-        throw new Error('unknown arena method ' + name);
-    }
+  private async requireOracle(): Promise<void> {
+    if (!hasDevOracle()) throw new Error('ORACLE OFFLINE - testnet dev oracle key not injected');
   }
 
   async createChallenge(cfg: ChallengeConfig, _creator: ChallengePlayer): Promise<Challenge> {
-    // TODO(deploy): MBR payment amount comes from the box size the contract
-    // reserves for ChallengeMeta (+ players map). Read it from the app spec
-    // after the deploy; 0.1 ALGO is a placeholder.
-    const MBR = 100_000;
-    // TODO(oracle): creator_score + sig come from the score oracle — until it
-    // is live the mock flow stays the default path.
-    await this.callMethod(
-      'create_challenge',
-      [
-        cfg.stake,
-        cfg.format === 'duel' ? 2 : cfg.seatsTotal,
-        cfg.durationSecs,
-        cfg.stageMode === 'full' ? 0 : cfg.stageMode === 'single' ? 1 : 2,
-        new Uint8Array(32), // seed_commitment: TODO(randomness) commit-reveal
-        0, // creator_score: TODO(oracle)
-        new Uint8Array(0), // creator_score_sig: TODO(oracle)
-      ],
-      { pay: MBR, axfer: { assetId: GONNA_ASA_TESTNET, amount: cfg.stake } },
-    );
-    throw new Error('testnet create not wired end-to-end yet - use the mock arena');
+    const me = await this.id();
+    await this.requireOracle();
+    const a = await kit.sdk();
+    if (cfg.stageMode === 'random') throw new Error('RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY');
+    const cid = await kit.nextChallengeId(); // oracle score sig is cid-bound
+    const score = qaScore();
+    const sig = await devOracleSign(kit.scoreMsg(cid, 0, a.decodeAddress(me.address).publicKey, score));
+    const txns = await kit.buildCreateGroup({
+      creator: me.address,
+      cid,
+      stakeBase: Math.round(cfg.stake * 1e6),
+      seats: cfg.format === 'duel' ? 1 : cfg.seatsTotal,
+      // contract rule: duels are ALWAYS 24h; tables pick 4h/12h/24h
+      durationSecs: cfg.format === 'duel' ? 86400 : cfg.durationSecs,
+      stageMode: cfg.stageMode === 'full' ? 0 : 1,
+      creatorScore: score,
+      creatorScoreSig: sig,
+    });
+    kit.recordTxid(cid, await kit.signSend(me.sign, txns));
+    const ch = await this.getChallenge(cid);
+    if (!ch) throw new Error('created on-chain but box unreadable');
+    return ch;
   }
 
   async join(id: number, _player: ChallengePlayer): Promise<Challenge> {
-    const c = await this.readChallenge(id);
-    await this.callMethod('join_challenge', [id], { axfer: { assetId: GONNA_ASA_TESTNET, amount: c.stake } });
-    throw new Error('testnet join not wired end-to-end yet - use the mock arena');
+    const me = await this.id();
+    const meta = await kit.readMeta(id);
+    if (!meta) throw new Error('card not found on chain');
+    const txns = await kit.buildJoinGroup({ joiner: me.address, cid: id, stakeBase: Number(meta.stake) });
+    kit.recordTxid(id, await kit.signSend(me.sign, txns));
+    const ch = await this.getChallenge(id);
+    if (!ch) throw new Error('joined but box unreadable');
+    return ch;
   }
 
-  async submitScore(id: number, _address: string, score: number): Promise<Challenge> {
-    // TODO(oracle): the sig must come from the score oracle, not the client.
-    await this.callMethod('submit_score', [id, score, new Uint8Array(0)]);
-    throw new Error('testnet submit not wired end-to-end yet - use the mock arena');
+  async submitScore(id: number, address: string, score: number): Promise<Challenge> {
+    const me = await this.id();
+    await this.requireOracle();
+    const a = await kit.sdk();
+    const players = await kit.readPlayers(id);
+    const myPk = a.decodeAddress(address).publicKey;
+    const seat = players.findIndex((p) => sameAddr(p.addr, myPk));
+    if (seat < 0) throw new Error('not seated at this table');
+    const sig = await devOracleSign(kit.scoreMsg(id, seat, myPk, score));
+    const txns = await kit.buildSubmitGroup({ player: me.address, cid: id, score, sig });
+    kit.recordTxid(id, await kit.signSend(me.sign, txns));
+    const ch = await this.getChallenge(id);
+    if (!ch) throw new Error('submitted but box unreadable');
+    return ch;
   }
 
   async resolve(id: number): Promise<Challenge> {
-    // TODO(oracle): seed_reveal + verdict_sig are oracle duties on testnet.
-    await this.callMethod('resolve', [id, 0, new Uint8Array(32), new Uint8Array(0)]);
-    throw new Error('testnet resolve not wired end-to-end yet - use the mock arena');
+    const me = await this.id();
+    await this.requireOracle();
+    const a = await kit.sdk();
+    const meta = await kit.readMeta(id);
+    if (!meta) throw new Error('card not found on chain');
+    const players = await kit.readPlayers(id);
+    const entries = players
+      .map((p, i) => ({ seat: i, addr: asBytes(p.addr), score: Number(p.score), signed: p.signed }))
+      .filter((p) => p.signed);
+    if (entries.length === 0) throw new Error('no signed scores yet');
+    // verdict payload: FULL -> 32 zero bytes; STAGE_IDX -> 24 zeros + stage idx
+    let extra = new Uint8Array(32);
+    if (Number(meta.stageMode) === 1) {
+      extra = new Uint8Array(32);
+      new DataView(extra.buffer).setBigUint64(24, BigInt(0), false); // TODO(mainnet): real chosen stage
+    }
+    const vsig = await devOracleSign(await kit.verdictMsg(id, Number(meta.stageMode), extra, entries));
+    let best = entries[0];
+    for (const e of entries) if (e.score > best.score) best = e;
+    const txns = await kit.buildResolveGroup({
+      caller: me.address,
+      cid: id,
+      stageIdx: 0, // TODO(mainnet): chosen stage for MODE_STAGE_IDX
+      seedReveal: new Uint8Array(0), // MODE_FULL: empty reveal
+      verdictSig: vsig,
+      winner: a.encodeAddress(best.addr),
+    });
+    kit.recordTxid(id, await kit.signSend(me.sign, txns));
+    const ch = await this.getChallenge(id);
+    if (!ch) {
+      // box may be gone after payout — synthesize the verdict view
+      const stale = await this.toChallenge(id, meta, players);
+      stale.status = 'resolved';
+      stale.winner = a.encodeAddress(best.addr);
+      return stale;
+    }
+    return ch;
   }
 
   async claim(id: number, _address: string): Promise<ClaimResult> {
-    const txid = await this.callMethod('claim', [id]);
-    return { payout: 0, txid }; // payout is read from the box after confirm
+    const me = await this.id();
+    const txns = await kit.buildClaimGroup({ caller: me.address, cid: id });
+    const txid = await kit.signSend(me.sign, txns);
+    kit.recordTxid(id, txid);
+    return { payout: 0, txid }; // exact payout lives in the inner txns
   }
 
   async earlyClose(id: number, _address: string): Promise<Challenge> {
-    // early_close takes a fee payment covering the refund inner txns
-    const feeMicro = Math.round(estimateNetworkFee(this.accountType) * 1e6);
-    await this.callMethod('early_close', [id], { pay: feeMicro * 2 });
-    throw new Error('testnet early-close not wired end-to-end yet - use the mock arena');
+    const me = await this.id();
+    const txns = await kit.buildEarlyCloseGroup({ caller: me.address, cid: id });
+    kit.recordTxid(id, await kit.signSend(me.sign, txns));
+    const ch = await this.getChallenge(id);
+    if (!ch) throw new Error('closed on-chain');
+    return ch;
   }
 
-  // box read: "m" prefix + big-endian uint64 id -> ChallengeMeta struct.
-  // TODO(deploy): decode with the ARC-56 struct codec (algosdk ABIType) once
-  // the app id is live; until then list* return empty so the UI falls back
-  // to "no live cards" instead of crashing.
-  private async readChallenge(_id: number): Promise<{ stake: number }> {
-    await this.sdk(); // throws while ARENA_APP_ID === 0
-    return { stake: 0 };
+  async getChallenge(id: number): Promise<Challenge | null> {
+    const [meta, players] = await Promise.all([kit.readMeta(id), kit.readPlayers(id)]);
+    if (!meta) return null;
+    return this.toChallenge(id, meta, players);
   }
+
+  private async scan(): Promise<Challenge[]> {
+    const ids = await kit.scanChallengeIds();
+    // parallel box reads — sequential is 2 round-trips PER card, way too slow
+    const all = await Promise.all(ids.map((cid) => this.getChallenge(cid).catch(() => null)));
+    return all.filter((c): c is Challenge => c !== null);
+  }
+
   async listOpenChallenges(): Promise<Challenge[]> {
-    return [];
+    return (await this.scan()).filter((c) => c.status === 'open' || c.status === 'full' || c.status === 'expired');
   }
-  async myChallenges(_address: string): Promise<Challenge[]> {
-    return [];
+
+  async myChallenges(address: string): Promise<Challenge[]> {
+    return (await this.scan()).filter((c) => c.creator === address || c.players.some((p) => p.address === address));
   }
-  // TODO(deploy): history + legacy read from settled challenge boxes (or an
-  // indexer query) once the app id is live; empty until then.
+
   async listHistory(): Promise<HistoryEntry[]> {
-    return [];
+    const settled = (await this.scan()).filter((c) => c.status === 'resolved' || c.status === 'claimed');
+    return settled.map((c) => ({
+      id: c.id,
+      stake: c.stake,
+      pot: c.pot,
+      format: c.format,
+      stageMode: c.stageMode,
+      stageIdx: c.stageIdx,
+      seats: c.seatsTotal,
+      winner: c.winner ?? '',
+      winnerName: c.winner ? shortAddr(c.winner) : '???',
+      players: c.players.map((p) => ({ address: p.address, name: p.name, score: p.score })),
+      resolvedAt: c.deadline, // no on-chain timestamp; deadline is the closest
+      claimed: c.status === 'claimed',
+    }));
   }
-  async legacyStats(_address: string): Promise<LegacyStats> {
-    return { played: 0, wins: 0, losses: 0, winRate: 0, won: 0, lost: 0, net: 0, bestWin: 0 };
-  }
-  // TODO(deploy): box read "m"+uint64 id -> ChallengeMeta once app id is live
-  async getChallenge(_id: number): Promise<Challenge | null> {
-    return null;
+
+  async legacyStats(address: string): Promise<LegacyStats> {
+    const hist = await this.listHistory();
+    let wins = 0;
+    let losses = 0;
+    let won = 0;
+    let lost = 0;
+    let bestWin = 0;
+    for (const h of hist) {
+      if (!h.players.some((p) => p.address === address)) continue;
+      if (h.winner === address) {
+        wins++;
+        won += h.pot;
+        if (h.pot > bestWin) bestWin = h.pot;
+      } else {
+        losses++;
+        lost += h.stake;
+      }
+    }
+    const played = wins + losses;
+    return { played, wins, losses, winRate: played > 0 ? Math.round((wins / played) * 100) : 0, won, lost, net: won - lost, bestWin };
   }
 }
 
+// real network fee per op (testnet flat-fee sums; Falcon keeps the 7x
+// multiplier for the mainnet PQ future)
+export function feeLine(op: kit.ArenaOp, accountType: AccountType, testnet: boolean): string {
+  if (testnet) return (kit.TESTNET_FEES[op] / 1e6).toFixed(3) + ' ALGO (TESTNET)';
+  return fmtFee(accountType);
+}
+
 // ---------- selector ----------
-// MOCK is the default until the testnet deploy lands. ?arena=testnet (or a
-// persisted flag) previews the testnet skeleton once ARENA_APP_ID is set.
+// MOCK is the PUBLIC default (the Prince flips the preview explicitly).
+// ?arena=testnet enables the live testnet adapter and PERSISTS the choice.
+const LS_ADAPTER = 'gonna.arena.adapter';
 let current: ArenaAdapter | null = null;
+export function arenaMode(): 'mock' | 'testnet' {
+  try {
+    const q = new URLSearchParams(window.location.search).get('arena');
+    if (q === 'testnet') {
+      window.localStorage.setItem(LS_ADAPTER, 'testnet');
+      return 'testnet';
+    }
+    if (q === 'mock') {
+      window.localStorage.removeItem(LS_ADAPTER);
+      return 'mock';
+    }
+    return window.localStorage.getItem(LS_ADAPTER) === 'testnet' ? 'testnet' : 'mock';
+  } catch {
+    return 'mock';
+  }
+}
 export function getArenaAdapter(): ArenaAdapter {
   if (current) return current;
-  let wantTestnet = false;
-  try {
-    wantTestnet =
-      ARENA_APP_ID > 0 &&
-      (window.localStorage.getItem('gonna.arena.adapter') === 'testnet' ||
-        new URLSearchParams(window.location.search).get('arena') === 'testnet');
-  } catch { /* no window: mock */ }
-  current = wantTestnet ? new TestnetArenaAdapter('', 'ed25519', async () => { throw new Error('wallet signing not wired'); }) : new MockArenaAdapter();
+  current = arenaMode() === 'testnet' ? new TestnetArenaAdapter() : new MockArenaAdapter();
   return current;
 }
 // CI/QA hook: force a fresh adapter pick
