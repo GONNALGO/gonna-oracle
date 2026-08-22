@@ -294,6 +294,75 @@ export async function buildResolveGroup(o: { caller: string; cid: number; stageI
   return [call, ...(await opupTxns(o.caller, o.cid))];
 }
 
+// ---------- v12: CONTINUE — 5 ALGO flat to the treasury, 1/match ----------
+// Prince's rule: same seed on the retry ("stesso campo, stessa palla") — a
+// new seed would change the score ceiling. Best-of-2: the sealed score is
+// ALWAYS the better of the two runs, you can never worsen yourself.
+export const CONTINUE_FEE_MICRO = 5_000_000; // 5 ALGO flat
+export function continueNote(refId: string, addr: string): string {
+  return 'QA-CONTINUE|' + refId + '|' + addr;
+}
+
+// standalone payment, signed by Pera BEFORE run 2 starts
+export async function buildContinuePayment(o: { sender: string; refId: string }): Promise<Txn[]> {
+  const a = await sdk();
+  const sp = await (await algodClient()).getTransactionParams().do();
+  const pay = a.makePaymentTxnWithSuggestedParamsFromObject({
+    sender: o.sender,
+    receiver: TREASURY_ADDR,
+    amount: CONTINUE_FEE_MICRO,
+    note: new TextEncoder().encode(continueNote(o.refId, o.sender)),
+    suggestedParams: { ...sp, fee: 1000, flatFee: true },
+  });
+  return [pay];
+}
+
+// on-chain proof check: exact amount, treasury receiver, exact note.
+// algod pending-txn first (just-confirmed), indexer as fallback (it lags).
+export async function verifyContinuePayment(txid: string, refId: string, addr: string): Promise<boolean> {
+  const a = await sdk();
+  const want = continueNote(refId, addr);
+  type TxView = { type?: string; amount?: number | bigint; receiver?: string; note?: string };
+  const check = (t: TxView | null): boolean => {
+    if (!t || t.type !== 'pay') return false;
+    if (Number(t.amount) !== CONTINUE_FEE_MICRO) return false;
+    if (t.receiver !== TREASURY_ADDR) return false;
+    return t.note === want;
+  };
+  try {
+    const r = (await (await algodClient()).pendingTransactionInformation(txid).do()) as {
+      txn?: { txn?: { type?: string; amt?: number | bigint; rcv?: Uint8Array; note?: Uint8Array } };
+    };
+    const inner = r?.txn?.txn;
+    if (inner) {
+      const view: TxView = {
+        type: inner.type,
+        amount: inner.amt,
+        receiver: inner.rcv ? a.encodeAddress(Uint8Array.from(inner.rcv)) : undefined,
+        note: inner.note ? new TextDecoder().decode(Uint8Array.from(inner.note)) : undefined,
+      };
+      if (check(view)) return true;
+    }
+  } catch { /* fall back to indexer */ }
+  try {
+    const r = await fetch(`https://testnet-idx.algonode.cloud/v2/transactions/${txid}`);
+    if (r.ok) {
+      const j = (await r.json()) as { transaction?: { 'payment-transaction'?: { amount: number; receiver: string }; note?: string; 'tx-type'?: string } };
+      const t = j.transaction;
+      if (t && t['tx-type'] === 'pay' && t['payment-transaction']) {
+        const view: TxView = {
+          type: 'pay',
+          amount: t['payment-transaction'].amount,
+          receiver: t['payment-transaction'].receiver,
+          note: t.note ? new TextDecoder().decode(Uint8Array.from(atob(t.note), (ch) => ch.charCodeAt(0))) : undefined,
+        };
+        return check(view);
+      }
+    }
+  } catch { /* indexer down/lagging */ }
+  return false;
+}
+
 export async function buildClaimGroup(o: { caller: string; cid: number }): Promise<Txn[]> {
   const a = await sdk();
   const call = a.makeApplicationNoOpTxnFromObject({

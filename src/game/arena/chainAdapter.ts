@@ -29,6 +29,7 @@ export interface ChallengeConfig {
   stake: number; // $GONNA display units per seat
   fighter: FighterPick;
   sealedScore?: number; // v11: the run score sealed BEFORE signing (testnet)
+  continueRefId?: string; // v12: draft id when the sealed score is a 2nd run
 }
 
 export interface ChallengePlayer {
@@ -97,7 +98,7 @@ export interface ArenaAdapter {
   readonly mode: 'mock' | 'testnet';
   createChallenge(cfg: ChallengeConfig, creator: ChallengePlayer): Promise<Challenge>;
   join(id: number, player: ChallengePlayer): Promise<Challenge>;
-  submitScore(id: number, address: string, score: number): Promise<Challenge>;
+  submitScore(id: number, address: string, score: number, opts?: { continueRefId?: string }): Promise<Challenge>;
   resolve(id: number): Promise<Challenge>;
   claim(id: number, address: string): Promise<ClaimResult>;
   earlyClose(id: number, address: string): Promise<Challenge>;
@@ -377,10 +378,25 @@ export class MockArenaAdapter implements ArenaAdapter {
       createdAt: now,
       deadline: now + cfg.durationSecs * 1000,
       status: cfg.format === 'duel' ? 'open' : 'open',
-      players: [{ ...creator, score: 0 }],
+      // v12: the creator plays BEFORE signing everywhere — a sealed score
+      // (testnet or mock) rides inside the create, same as the contract
+      players: [{ ...creator, score: cfg.sealedScore ?? 0 }],
       winner: null,
       pot: cfg.stake,
     };
+    // a mock card with a pre-sealed creator gets its rival instantly (same
+    // honest rule as submitScore: the rival CAN beat you)
+    if ((cfg.sealedScore ?? 0) > 0 && c.players.length < 2) {
+      c.players.push({
+        address: 'RIVAL_' + Math.random().toString(36).slice(2, 8).toUpperCase(),
+        name: 'RIVAL_' + Math.random().toString(36).slice(2, 6).toUpperCase(),
+        score: Math.max(0, Math.floor((cfg.sealedScore ?? 0) + (Math.random() < 0.45 ? 1 : -1) * (300 + Math.random() * 700))),
+        fighter: { skin: 'snek', assetId: null, name: 'SNEK' },
+        accountType: 'ed25519',
+      });
+      c.pot += c.stake;
+      if (c.players.length >= c.seatsTotal) c.status = 'full';
+    }
     s.challenges.unshift(c);
     lsSave(s);
     return c;
@@ -555,7 +571,7 @@ export class MockArenaAdapter implements ArenaAdapter {
 // circular imports). Oracle sigs come from ./devOracle.ts (TESTNET ONLY).
 // ======================================================================
 import * as kit from './testnetKit';
-import { devOracleSign, hasDevOracle } from './devOracle';
+import { devOracleSign, devOracleSignScore, hasDevOracle } from './devOracle';
 import { qaScore } from './qaSigner';
 export { ARENA_APP_ID, GONNA_ASA_TESTNET } from './testnetKit';
 
@@ -648,7 +664,12 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     // v11: the creator's score is the SEALED RUN score (PLAY -> SEAL -> SIGN);
     // qaScore() remains the deterministic fallback for the QA harness
     const score = cfg.sealedScore ?? qaScore();
-    const sig = await devOracleSign(kit.scoreMsg(cid, 0, a.decodeAddress(me.address).publicKey, score));
+    // v12: creator CONTINUE — the 2nd-run score needs the receipt (draft id,
+    // the challenge does not exist yet)
+    const sig = await devOracleSignScore(
+      kit.scoreMsg(cid, 0, a.decodeAddress(me.address).publicKey, score),
+      cfg.continueRefId ? { refId: cfg.continueRefId, addr: me.address } : undefined,
+    );
     const txns = await kit.buildCreateGroup({
       creator: me.address,
       cid,
@@ -677,7 +698,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     return ch;
   }
 
-  async submitScore(id: number, address: string, score: number): Promise<Challenge> {
+  async submitScore(id: number, address: string, score: number, opts?: { continueRefId?: string }): Promise<Challenge> {
     const me = await this.id();
     await this.requireOracle();
     const a = await kit.sdk();
@@ -685,7 +706,11 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const myPk = a.decodeAddress(address).publicKey;
     const seat = players.findIndex((p) => sameAddr(p.addr, myPk));
     if (seat < 0) throw new Error('not seated at this table');
-    const sig = await devOracleSign(kit.scoreMsg(id, seat, myPk, score));
+    // v12: a post-CONTINUE score needs the on-chain 5-ALGO receipt
+    const sig = await devOracleSignScore(
+      kit.scoreMsg(id, seat, myPk, score),
+      opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : undefined,
+    );
     const txns = await kit.buildSubmitGroup({ player: me.address, cid: id, score, sig });
     kit.recordTxid(id, await kit.signSend(me.sign, txns));
     const ch = await this.getChallenge(id);

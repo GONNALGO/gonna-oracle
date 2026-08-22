@@ -1852,6 +1852,10 @@ export class Game implements GameCtx {
       case 'arena': {
         this.sceneT++;
         this.arena.tick();
+        // v12: a paid CONTINUE resumes the run as soon as the payment
+        // confirms (the async tap handler cannot return the action itself)
+        const pending = this.arena.pollPendingRun();
+        if (pending) this.handleArenaAction(pending);
         this.handleArenaAction(this.arena.key(inp));
         break;
       }

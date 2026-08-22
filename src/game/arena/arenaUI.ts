@@ -88,6 +88,14 @@ export class ArenaUI {
   // v11: PLAY -> SEAL -> SIGN. The contract needs the creator score INSIDE
   // the create group, so the run happens BEFORE the atomic group is signed.
   private sealedScore: number | null = null;
+  // v12: CONTINUE — 5 ALGO flat, MAX 1 per player per match, SAME SEED on
+  // the retry, best-of-2 (the sealed score never gets worse).
+  private sealRole: 'creator' | 'joiner' = 'creator';
+  private sealBest = 0;
+  private sealRuns = 0;
+  private sealDraftId = ''; // creator pre-create payment ref
+  private pendingRun = false; // set after a paid continue; engine polls it
+  private continuePaying = false;
   private hots: Hot[] = [];
   private focus = 0;
   private busy = false;
@@ -613,6 +621,9 @@ export class ArenaUI {
       this.step = 'visibility';
       this.focus = 0;
       this.err = '';
+      this.resetSeal(); // fresh card, fresh runs
+      this.sealDraftId = 'D' + Date.now().toString(36);
+      this.sealRole = 'creator';
       return { act: 'move' };
     }
     if (id.startsWith('card:')) {
@@ -624,6 +635,7 @@ export class ArenaUI {
         this.coinRain = [];
         this.focus = 0;
         this.myScore = this.bestScore();
+        this.resetSeal();
         return { act: 'move' };
       }
       return { act: 'none' };
@@ -825,6 +837,8 @@ export class ArenaUI {
     if (id === 'playrun') {
       // QA shortcut (?qa=1): the deterministic score is sealed instantly so
       // E2E stays assertable without a live beat-em-up run
+      this.sealRole = 'creator';
+      if (!this.sealDraftId) this.sealDraftId = 'D' + Date.now().toString(36);
       if (qaActive()) {
         this.onRunFinished(qaScore());
         return { act: 'move' };
@@ -835,12 +849,59 @@ export class ArenaUI {
         stageIdx: this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0),
       };
     }
+    // v12: CONTINUE — pay 5 ALGO to the treasury, replay the SAME run, seal
+    // the best of the two. One per player per match.
+    if (id === 'continue') {
+      if (this.sealRuns !== 1) return this.fail('CONTINUE ALREADY USED');
+      if (this.continuePaying) return { act: 'none' };
+      const refId = this.sealRole === 'creator' ? this.sealDraftId : String(this.current?.id ?? 0);
+      if (this.adapter().mode === 'testnet') {
+        this.continuePaying = true;
+        void this.run(
+          async () => {
+            const kit = await import('./testnetKit');
+            const idp = (window as unknown as { __arenaIdProvider?: () => Promise<{ address: string; sign: import('./testnetKit').TxSignFn } | null> }).__arenaIdProvider;
+            const me = idp ? await idp() : null;
+            if (!me) throw new Error('WALLET NOT CONNECTED - TAP CONNECT');
+            const txns = await kit.buildContinuePayment({ sender: me.address, refId });
+            const txid = await kit.signSend(me.sign, txns);
+            try {
+              window.localStorage.setItem('gonna.continue|' + refId + '|' + me.address, txid);
+            } catch { /* no storage */ }
+            return txid;
+          },
+          () => {
+            this.continuePaying = false;
+            this.pendingRun = true; // engine picks it up next frame
+          },
+        );
+        return { act: 'move' };
+      }
+      // mock: no payment — straight into run 2
+      this.pendingRun = true;
+      return { act: 'move' };
+    }
     if (id === 'seal:discard') return this.back();
-    if (id === 'sign') return this.doSign();
+    if (id === 'sign') return this.sealRole === 'joiner' ? this.doSubmit() : this.doSign();
 
     // ---- versus ----
     if (id === 'accept') return this.doAccept();
-    if (id === 'submit') return this.doSubmit();
+    if (id === 'submit') {
+      // v12: the joiner plays too — PLAY YOUR RUN -> SEAL -> SIGN SCORE
+      const c = this.current;
+      if (!c) return { act: 'none' };
+      this.resetSeal();
+      this.sealRole = 'joiner';
+      if (qaActive()) {
+        this.onRunFinished(qaScore());
+        return { act: 'move' };
+      }
+      return {
+        act: 'run',
+        stageMode: c.stageMode === 'full' ? 'full' : 'stage',
+        stageIdx: c.stageMode === 'full' ? 0 : (c.stageIdx ?? 0),
+      };
+    }
     if (id === 'resolve') return this.doResolve();
     if (id === 'vclaim') return this.doClaim(this.current ? this.current.id : -1);
     if (id === 'close') return this.doEarlyClose();
@@ -860,8 +921,13 @@ export class ArenaUI {
   }
 
   // v11: the engine calls this when the ARENA run ends — the score is SEALED
+  // v12: best-of-2 — a CONTINUE retry can only RAISE the sealed score
   onRunFinished(score: number): void {
-    this.sealedScore = Math.max(0, Math.floor(score));
+    const s = Math.max(0, Math.floor(score));
+    this.sealedScore = s;
+    this.sealRuns++;
+    if (s > this.sealBest) this.sealBest = s;
+    this.pendingRun = false;
     this.screen = 'seal';
     this.err = '';
     this.focus = 0;
@@ -869,7 +935,31 @@ export class ArenaUI {
 
   onRunAborted(): void {
     this.sealedScore = null;
-    if (this.screen === 'seal') this.screen = 'board';
+    this.pendingRun = false;
+    if (this.screen === 'seal') this.screen = this.sealRole === 'joiner' ? 'versus' : 'board';
+  }
+
+  // engine polls this every frame in the arena scene: after a paid CONTINUE
+  // the retry starts as soon as the payment confirms (async tap handlers
+  // cannot return an action)
+  pollPendingRun(): ArenaAction | null {
+    if (!this.pendingRun) return null;
+    this.pendingRun = false;
+    const stageMode = this.sealRole === 'creator'
+      ? (this.cfg.stageMode === 'full' ? 'full' : 'stage')
+      : (this.current?.stageMode === 'full' ? 'full' : 'stage');
+    const stageIdx = this.sealRole === 'creator'
+      ? (this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0))
+      : (this.current?.stageMode === 'full' ? 0 : (this.current?.stageIdx ?? 0));
+    return { act: 'run', stageMode, stageIdx };
+  }
+
+  private resetSeal(): void {
+    this.sealedScore = null;
+    this.sealBest = 0;
+    this.sealRuns = 0;
+    this.pendingRun = false;
+    this.continuePaying = false;
   }
 
   private doSign(): ArenaAction {
@@ -879,7 +969,10 @@ export class ArenaUI {
     if (this.adapter().mode === 'testnet' && !qaActive() && this.sealedScore === null) {
       return this.fail('PLAY YOUR RUN FIRST');
     }
-    if (this.sealedScore !== null) cfg.sealedScore = this.sealedScore;
+    // v12: sign the BEST of the runs; a 2nd run carries the payment ref
+    const best = this.sealBest > 0 ? this.sealBest : this.sealedScore;
+    if (best !== null) cfg.sealedScore = best;
+    if (this.sealRuns >= 2) cfg.continueRefId = this.sealDraftId;
     const player = arenaPlayer(cfg.fighter);
     void this.run(
       () => this.adapter().createChallenge(cfg, player),
@@ -888,7 +981,7 @@ export class ArenaUI {
         this.screen = 'versus';
         this.verdict = false;
         this.rematchOf = null; // the rematch became its own card
-        this.sealedScore = null; // consumed — the score lives on-chain now
+        this.resetSeal(); // consumed — the score lives on-chain now
         this.focus = 0;
         this.buildFeed();
       },
@@ -913,12 +1006,17 @@ export class ArenaUI {
     const c = this.current;
     if (!c) return { act: 'none' };
     const me = arenaAddress();
-    // QA mode plays a DETERMINISTIC score so E2E verdicts are assertable
-    const score = qaActive() ? qaScore() : this.myScore > 0 ? this.myScore : 4200 + Math.floor(Math.random() * 900);
+    // v12: sign the BEST sealed run; a post-CONTINUE score carries the
+    // on-chain payment ref (the oracle verifies the receipt before signing).
+    // QA mode plays a DETERMINISTIC score so E2E verdicts are assertable.
+    const score = this.sealBest > 0 ? this.sealBest : (qaActive() ? qaScore() : this.myScore > 0 ? this.myScore : 4200 + Math.floor(Math.random() * 900));
+    const opts = this.sealRuns >= 2 ? { continueRefId: String(c.id) } : undefined;
     void this.run(
-      () => this.adapter().submitScore(c.id, me, score),
+      () => this.adapter().submitScore(c.id, me, score, opts),
       (nc) => {
         this.current = nc;
+        this.resetSeal();
+        this.screen = 'versus';
       },
     );
     return { act: 'move' };
@@ -1437,26 +1535,37 @@ export class ArenaUI {
     drawText(c, 'YOUR SCORE GETS SEALED - YOU SIGN AFTER', VW / 2, 190, 1, GRAY, 'center');
   }
 
-  // ---------- v11: SEAL screen (post-run, pre-sign) --------------------------
+  // ---------- v11/v12: SEAL screen (post-run, pre-sign) ----------------------
   private drawSeal(c: CanvasRenderingContext2D, frame: number): void {
-    this.drawHeader(c, 'SCORE SEALED', this.cfg.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN TABLE');
-    const score = this.sealedScore ?? 0;
-    drawTextSh(c, String(score).padStart(7, '0'), VW / 2, 66, 2, GOLD, 'center', '#4a3005');
-    if ((frame & 16) !== 0) drawTextSh(c, 'SCORE SEALED BY ORACLE ⚛', VW / 2, 96, 1, FLUO, 'center', '#0a3d00');
+    const joiner = this.sealRole === 'joiner';
+    const ch = this.current;
+    const title = joiner ? 'SCORE SEALED' : 'SCORE SEALED';
+    this.drawHeader(c, title, joiner && ch ? 'CARD #' + ch.id : this.cfg.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN TABLE');
+    const score = this.sealBest > 0 ? this.sealBest : (this.sealedScore ?? 0);
+    drawTextSh(c, String(score).padStart(7, '0'), VW / 2, 62, 2, GOLD, 'center', '#4a3005');
+    if (this.sealRuns >= 2) {
+      drawTextSh(c, 'BEST OF 2 - CONTINUE USED', VW / 2, 90, 1, '#ff8a3c', 'center', '#2a1503');
+    } else if ((frame & 16) !== 0) {
+      drawTextSh(c, 'SCORE SEALED BY ORACLE ⚛', VW / 2, 90, 1, FLUO, 'center', '#0a3d00');
+    }
     const x = 22, w = VW - 44;
-    const pot = this.cfg.format === 'duel' ? this.cfg.stake * 2 : this.cfg.stake * this.cfg.seatsTotal;
+    const stake = joiner && ch ? ch.stake : this.cfg.stake;
+    const pot = joiner && ch ? ch.stake * ch.seatsTotal : (this.cfg.format === 'duel' ? this.cfg.stake * 2 : this.cfg.stake * this.cfg.seatsTotal);
     const lines: [string, string][] = [
-      ['STAKE', fmtStake(this.cfg.stake) + ' $GONNA A SEAT'],
+      ['STAKE', fmtStake(stake) + ' $GONNA A SEAT'],
       ['POT', fmtStake(pot) + ' $GONNA'],
-      ['FEE', feeLine('create', arenaSession().accountType, this.adapter().mode === 'testnet')],
+      ['FEE', feeLine(joiner ? 'submit' : 'create', arenaSession().accountType, this.adapter().mode === 'testnet')],
       ['FIGHTER', this.cfg.fighter.name],
     ];
     for (let i = 0; i < lines.length; i++) {
-      drawText(c, lines[i][0], x + 10, 112 + i * 12, 1, DIM);
-      drawText(c, lines[i][1], x + w - 10, 112 + i * 12, 1, i <= 1 ? GOLD : '#c8ccd4', 'right');
+      drawText(c, lines[i][0], x + 10, 104 + i * 12, 1, DIM);
+      drawText(c, lines[i][1], x + w - 10, 104 + i * 12, 1, i <= 1 ? GOLD : '#c8ccd4', 'right');
     }
-    this.btn(c, frame, { id: 'sign', x: 92, y: 166, w: 200, h: 22 }, this.busy ? 'SIGNING...' : 'SIGN & STAKE', { gold: true });
-    this.btn(c, frame, { id: 'seal:discard', x: 122, y: 196, w: 140, h: 12 }, 'DISCARD - NO TX SENT', { dim: true });
+    this.btn(c, frame, { id: 'sign', x: 92, y: 156, w: 200, h: 20 }, this.busy ? 'SIGNING...' : joiner ? 'SIGN SCORE' : 'SIGN & STAKE', { gold: true });
+    if (this.sealRuns < 2) {
+      this.btn(c, frame, { id: 'continue', x: 92, y: 180, w: 200, h: 14 }, this.continuePaying ? 'PAYING 5 ALGO...' : 'CONTINUE - 5 ALGO - BEST OF 2', { green: true });
+    }
+    this.btn(c, frame, { id: 'seal:discard', x: 122, y: 200, w: 140, h: 12 }, 'DISCARD - NO TX SENT', { dim: true });
   }
 
   // v10.4: aspect-preserving blit — a sprite inside a seal is FIT, never squashed

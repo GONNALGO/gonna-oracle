@@ -6,7 +6,7 @@
 // deploy/testnet.secrets.json). On mainnet this role is a server-side oracle
 // service; this module must be compiled OUT of any mainnet build.
 // ============================================================================
-import { ARENA_APP_ID } from './testnetKit';
+import { ARENA_APP_ID, verifyContinuePayment } from './testnetKit';
 
 const LS_ORACLE = 'gonna.qa.oracle.mn'; // injected by QA harness or the #oracle= master link (oracleLink.ts)
 
@@ -38,6 +38,36 @@ export async function devOracleSign(msg: Uint8Array): Promise<Uint8Array> {
   const nacl = (await import('tweetnacl')).default;
   const kp = nacl.sign.keyPair.fromSeed(seed);
   return nacl.sign.detached(msg, kp.secretKey);
+}
+
+// v12 CONTINUE enforcement: a SECOND score signature for the same
+// wallet+challenge requires on-chain proof of the 5-ALGO treasury payment.
+// Receipt txids are single-use (localStorage set — testnet-weak on purpose;
+// MAINNET = server-side oracle with a real DB of consumed receipts).
+const LS_CONTINUE_USED = 'gonna.continue.used';
+export async function devOracleSignScore(
+  msg: Uint8Array,
+  proof?: { refId: string; addr: string },
+): Promise<Uint8Array> {
+  if (proof) {
+    let txid: string | null = null;
+    try {
+      txid = window.localStorage.getItem('gonna.continue|' + proof.refId + '|' + proof.addr);
+    } catch { /* no storage */ }
+    if (!txid) throw new Error('CONTINUE NOT PAID - PAY 5 ALGO FIRST');
+    let used: string[] = [];
+    try {
+      used = JSON.parse(window.localStorage.getItem(LS_CONTINUE_USED) ?? '[]') as string[];
+    } catch { /* fresh */ }
+    if (used.includes(txid)) throw new Error('CONTINUE RECEIPT ALREADY SPENT');
+    const ok = await verifyContinuePayment(txid, proof.refId, proof.addr);
+    if (!ok) throw new Error('CONTINUE PAYMENT NOT VERIFIED ON-CHAIN');
+    used.push(txid);
+    try {
+      window.localStorage.setItem(LS_CONTINUE_USED, JSON.stringify(used.slice(-64)));
+    } catch { /* no storage */ }
+  }
+  return devOracleSign(msg);
 }
 
 export async function devOracleAddress(): Promise<string | null> {
