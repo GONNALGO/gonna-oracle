@@ -99,6 +99,9 @@ export class ArenaUI {
   private shareMsg = '';
   private shareMsgT = 0;
   private framesRef: Map<string, HTMLImageElement> | null = null;
+  // v10.5: SHOW CARD — DOM overlay with a REAL <img> (native context menu)
+  private showOverlay: HTMLDivElement | null = null;
+  private showOverlayUrl = '';
   // create wizard
   private step: WizardStep = 'visibility';
   private cfg: ChallengeConfig = this.defaultCfg();
@@ -157,6 +160,7 @@ export class ArenaUI {
 
   open(deepDuel?: number | null): void {
     this.closeStakeInput(false);
+    this.closeShowCard();
     this.screen = 'board';
     this.step = 'visibility';
     this.cfg = this.defaultCfg();
@@ -245,6 +249,10 @@ export class ArenaUI {
   key(inp: Input): ArenaAction {
     if (inp.pressed.pause) {
       inp.pressed.pause = false;
+      if (this.showOverlay) {
+        this.closeShowCard(); // ESC dismisses the SHOW CARD overlay first
+        return { act: 'move' };
+      }
       return this.back();
     }
     if (this.hots.length > 0) {
@@ -279,6 +287,7 @@ export class ArenaUI {
 
   private back(): ArenaAction {
     this.closeStakeInput(true); // ESC/back commits a pending custom stake
+    this.closeShowCard(); // and drops a lingering SHOW CARD overlay
     if (this.screen === 'create') {
       // step back through the wizard
       const order: WizardStep[] = ['visibility', 'format', 'battle', 'stake', 'fighter', 'confirm'];
@@ -448,6 +457,67 @@ export class ArenaUI {
     return { act: 'move' };
   }
 
+  // ---------- v10.5: SHOW CARD overlay (real <img>, native save UX) --------
+  // Desktop: right-click -> Save image as. Mobile: long-press -> Save to
+  // Photos. A blob URL keeps the native context menu working everywhere.
+  private openShowCard(): void {
+    const ch = this.current;
+    if (!ch || this.showOverlay) return;
+    void (async () => {
+      try {
+        const blob = await shareCardBlob(renderShareCard(ch, this.fighterImage(ch)));
+        const url = URL.createObjectURL(blob);
+        const isTouch = 'ontouchstart' in window || (window.matchMedia?.('(pointer: coarse)').matches ?? false);
+        const back = document.createElement('div');
+        back.id = 'arena-showcard';
+        back.style.cssText =
+          'position:fixed;inset:0;z-index:10000;background:rgba(5,6,10,0.92);' +
+          'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;';
+        const img = document.createElement('img');
+        img.id = 'arena-showcard-img';
+        img.src = url;
+        img.alt = 'GONNA FIGHT - ARENA challenge card';
+        img.style.cssText =
+          'max-width:92vw;max-height:70vh;object-fit:contain;image-rendering:pixelated;' +
+          'border:2px solid #b8860b;box-shadow:0 0 24px rgba(245,197,66,0.25);';
+        img.addEventListener('click', (ev) => ev.stopPropagation()); // never close ON the card
+        const cap = document.createElement('div');
+        cap.textContent = isTouch ? 'LONG-PRESS — SAVE TO PHOTOS' : 'RIGHT-CLICK — SAVE IMAGE AS';
+        cap.style.cssText = 'color:#f5c542;font:12px monospace;letter-spacing:1px;text-align:center;';
+        const close = document.createElement('button');
+        close.id = 'arena-showcard-close';
+        close.textContent = 'CLOSE';
+        close.style.cssText =
+          'background:#14100a;color:#f5c542;border:2px solid #b8860b;font:bold 14px monospace;' +
+          'padding:10px 28px;letter-spacing:2px;cursor:pointer;';
+        close.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          this.closeShowCard();
+        });
+        back.appendChild(img);
+        back.appendChild(cap);
+        back.appendChild(close);
+        back.addEventListener('click', () => this.closeShowCard()); // tap-outside closes
+        document.body.appendChild(back);
+        this.showOverlay = back;
+        this.showOverlayUrl = url;
+      } catch {
+        this.fail('RENDER REKT - TRY AGAIN');
+      }
+    })();
+  }
+
+  private closeShowCard(): void {
+    const o = this.showOverlay;
+    if (!o) return;
+    this.showOverlay = null;
+    if (this.showOverlayUrl) {
+      URL.revokeObjectURL(this.showOverlayUrl);
+      this.showOverlayUrl = '';
+    }
+    o.remove();
+  }
+
   // ---------- actions ----------
   private activate(id: string): ArenaAction {
     if (this.busy) return { act: 'none' };
@@ -508,6 +578,10 @@ export class ArenaUI {
 
     // ---- v10.4: SHARE (private cards, owner only, while live) ----
     if (id === 'share') return this.openShareSheet();
+    if (id === 'share:show') {
+      this.openShowCard(); // v10.5: DOM overlay, real <img>, native save UX
+      return { act: 'move' };
+    }
     if (id === 'share:x' || id === 'share:tg') {
       const ch = this.current;
       if (!ch) return { act: 'none' };
@@ -1342,14 +1416,15 @@ export class ArenaUI {
     const btns: [string, string][] = [
       ['share:x', 'SHARE ON X'],
       ['share:tg', 'SHARE ON TELEGRAM'],
+      ['share:show', 'SHOW CARD'],
       ['share:copy', 'COPY LINK'],
       ['share:save', 'SAVE CARD'],
     ];
     for (let i = 0; i < btns.length; i++) {
-      this.btn(c, frame, { id: btns[i][0], x: 52, y: 62 + i * 28, w: 280, h: 22 }, btns[i][1], { gold: i >= 2 });
+      this.btn(c, frame, { id: btns[i][0], x: 52, y: 56 + i * 24, w: 280, h: 20 }, btns[i][1], { gold: i >= 2 });
     }
-    if (this.shareMsgT > 0 && this.shareMsg) drawTextSh(c, this.shareMsg, VW / 2, 178, 1, FLUO, 'center');
-    else drawText(c, 'PNG 1200X630 - OG COVER QUALITY', VW / 2, 178, 1, DIM, 'center');
+    if (this.shareMsgT > 0 && this.shareMsg) drawTextSh(c, this.shareMsg, VW / 2, 184, 1, FLUO, 'center');
+    else drawText(c, 'PNG 1200X630 - OG COVER QUALITY', VW / 2, 184, 1, DIM, 'center');
     this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
   }
 

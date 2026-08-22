@@ -33,7 +33,7 @@ export function shareText(ch: Challenge): string {
   const stage = ch.stageMode === 'full' ? 'FULL RUN. ALL 7 STAGES.' : 'STAGE ' + ((ch.stageIdx ?? 0) + 1) + '.';
   return (
     'I JUST STAKED ' + fmtStake(ch.stake) + ' $GONNA ON MY OWN FIGHT. ' + stage +
-    ' THINK YOU CAN TAKE IT? 🦎⚛️ $GONNA #GONNAFIGHT #ALGORAND #QUANTUMFIGHT'
+    ' THINK YOU CAN TAKE IT? 🦎⚛️ $GONNA #GONNAFIGHT #ALGORAND #QUANTUMFIGHT @GONNALGO'
   );
 }
 
