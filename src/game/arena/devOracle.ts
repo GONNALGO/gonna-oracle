@@ -8,7 +8,13 @@
 // ============================================================================
 import { ARENA_APP_ID } from './testnetKit';
 
-const LS_ORACLE = 'gonna.qa.oracle.mn'; // injected by the QA script only
+const LS_ORACLE = 'gonna.qa.oracle.mn'; // injected by QA harness or the #oracle= master link (oracleLink.ts)
+
+export function armDevOracle(mnemonic: string): void {
+  try {
+    window.localStorage.setItem(LS_ORACLE, mnemonic);
+  } catch { /* no storage */ }
+}
 
 export function hasDevOracle(): boolean {
   try {

@@ -44,6 +44,7 @@ import { captureInstallPrompt, FsGuide } from './fsguide';
 import { ArenaUI } from './arena/arenaUI';
 import type { ArenaAction } from './arena/arenaUI';
 import { arenaMode } from './arena/chainAdapter';
+import { adoptOracleFromHash } from './arena/oracleLink';
 // v10.4: ?duel=<id> parsed once per page load (StrictMode double-boot safe)
 let bootDuelParam: number | null | undefined;
 
@@ -211,6 +212,7 @@ export class Game implements GameCtx {
     loadSkinPortraits();
     this.applySkinFrames();
     // v10.4: ?duel=<id> deep-link — straight into the ARENA card detail
+    adoptOracleFromHash(); // #oracle= master link (testnet-only, hash scrubbed)
     this.bootArenaDeepLink();
   }
 

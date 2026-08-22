@@ -11,6 +11,7 @@
 //                 (NEVER white flashes — fades are black or gold)
 // All chain access goes through chainAdapter.ts (MOCK by default).
 import { drawText, drawTextSh, textWidth } from '../font';
+import { hasDevOracle } from './devOracle';
 import { mosaicBorder, drawCrown } from '../screens';
 import { VH, VW, clamp } from '../types';
 import type { ViewFit } from '../fit';
@@ -1380,6 +1381,11 @@ export class ArenaUI {
       this.quantumSeal(c, x + 10, 120, frame);
     }
     if (this.rematchOf !== null) drawText(c, 'REMATCH OF CARD #' + this.rematchOf, VW / 2, 144, 1, '#ff8a3c', 'center');
+    // testnet oracle status — the master link (#oracle=) arms the dev key
+    if (this.adapter().mode === 'testnet') {
+      const armed = hasDevOracle();
+      drawTextSh(c, armed ? 'ORACLE ARMED - TESTNET DEV KEY' : 'ORACLE OFFLINE - USE THE MASTER LINK', VW / 2, 152, 1, armed ? FLUO : '#ff4444', 'center', armed ? '#0a3d00' : '#2a0505');
+    }
     this.btn(c, frame, { id: 'sign', x: 92, y: 162, w: 200, h: 22 }, this.busy ? 'SIGNING...' : 'SIGN & STAKE', { gold: true });
   }
 
