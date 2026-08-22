@@ -1,0 +1,1099 @@
+// THE ARENA — the staking piazza of GONNA FIGHT. Three mobile-first screens
+// inside one canvas scene (see engine.ts), Capcom pixel-art, degen copy:
+//   CREATE CARD — tap-through wizard: VISIBILITY / FORMAT / BATTLE (with a
+//                 slot-machine SHUFFLE for RANDOM) / STAKE / FIGHTER -> the
+//                 card preview + SIGN & STAKE
+//   THE BOARD   — the single square: live feed, live cards with coin piles
+//                 sized by stake, live seat/timer lines, FILLING FAST /
+//                 CLOSING SOON / QUANTUM SEAL (Falcon) badges, gold CLAIM
+//   VERSUS      — card detail: two seals face to face, the pot pulses in the
+//                 middle, accept flow -> verdict under a rain of GOLD coins
+//                 (NEVER white flashes — fades are black or gold)
+// All chain access goes through chainAdapter.ts (MOCK by default).
+import { drawText, drawTextSh, textWidth } from '../font';
+import { mosaicBorder, drawCrown } from '../screens';
+import { VH, VW, clamp } from '../types';
+import type { Input } from '../input';
+import type { Art } from '../sprites';
+import * as wallet from '../wallet';
+import { SKIN_INFO, skinPortrait } from '../skins';
+import type { SkinId } from '../skins';
+import { getArenaAdapter, fmtCountdown, fmtFee, fmtStake } from './chainAdapter';
+import type { Challenge, ChallengeConfig, FighterPick, Visibility } from './chainAdapter';
+import { arenaAddress, arenaPlayer, arenaSession } from './arenaWallet';
+
+const GOLD = '#f5c542';
+const GOLD_DK = '#b8860b';
+const FLUO = '#39FF14';
+const GREEN = '#7fd858';
+const INK = '#070a14';
+const PANEL = '#0d1118';
+const GRAY = '#8a8f9c';
+const DIM = '#5a5f6c';
+const RED = '#e23b3b';
+const PQCYAN = '#57c8d8';
+
+export type ArenaAction = { act: 'none' } | { act: 'move' } | { act: 'title' };
+
+interface Hot {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  id: string;
+}
+
+type Screen = 'board' | 'create' | 'versus';
+type WizardStep = 'visibility' | 'format' | 'battle' | 'stake' | 'fighter' | 'confirm';
+
+const STAGE_NAMES = ['GHETTO GONNA', 'PUMP HARBOR', 'WALL STREET', 'CONSENSUS', 'THE HOUSE', 'LAUNCHPAD', 'THRONE ROOM'];
+const SEAT_OPTS = [4, 8, 12];
+const DUR_OPTS: { label: string; secs: number }[] = [
+  { label: '4H', secs: 4 * 3600 },
+  { label: '12H', secs: 12 * 3600 },
+  { label: '24H', secs: 24 * 3600 },
+];
+const STAKE_OPTS = [10_000_000, 100_000_000, 1_000_000_000];
+const CUSTOM_STEP = 10_000_000;
+const CUSTOM_MAX = 10_000_000_000;
+
+// mock fighter shelf: owned NFT skins (real holdings when a wallet is on)
+interface FighterOpt {
+  pick: FighterPick;
+  owned: boolean;
+}
+const MOCK_SHELF: FighterOpt[] = [
+  { pick: { skin: 'gonna', assetId: null, name: 'GONNA' }, owned: true },
+  { pick: { skin: 'fire', assetId: 7007, name: 'GONNA 7' }, owned: true },
+  { pick: { skin: 'rainbow', assetId: 7042, name: 'GONNA 42' }, owned: true },
+  { pick: { skin: 'alien', assetId: 7066, name: 'GONNA 66' }, owned: false },
+  { pick: { skin: 'acid', assetId: 7099, name: 'GONNA 99' }, owned: false },
+];
+
+interface CoinFx {
+  x: number;
+  y: number;
+  vy: number;
+  t: number;
+}
+
+export class ArenaUI {
+  private screen: Screen = 'board';
+  private hots: Hot[] = [];
+  private focus = 0;
+  private busy = false;
+  private err = '';
+  private errT = 0;
+  // board
+  private cards: Challenge[] = [];
+  private listFirst = 0;
+  private feedLines: string[] = [];
+  private feedT = 0;
+  // create wizard
+  private step: WizardStep = 'visibility';
+  private cfg: ChallengeConfig = this.defaultCfg();
+  private shuffleT = -1; // -1 = idle; >=0 frames into the SHUFFLE animation
+  private shuffleTarget = 0;
+  private fighterOpts: FighterOpt[] = MOCK_SHELF;
+  // versus
+  private current: Challenge | null = null;
+  private myScore = 0;
+  private verdict = false; // verdict overlay up (coin rain)
+  private coinRain: CoinFx[] = [];
+  private rematchOf: number | null = null;
+
+  // ---------- helpers ----------
+  private defaultCfg(): ChallengeConfig {
+    return {
+      visibility: 'public',
+      format: 'duel',
+      seatsTotal: 8,
+      durationSecs: 12 * 3600,
+      stageMode: 'full',
+      stageIdx: null,
+      stake: 100_000_000,
+      fighter: { skin: 'gonna', assetId: null, name: 'GONNA' },
+    };
+  }
+
+  private adapter() {
+    return getArenaAdapter();
+  }
+
+  private bestScore(): number {
+    try {
+      const raw = window.localStorage.getItem('gonna.best');
+      const j = raw ? (JSON.parse(raw) as { score?: number }) : null;
+      return typeof j?.score === 'number' ? j.score : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private fighterShelf(): FighterOpt[] {
+    const e = wallet.getEligibility();
+    if (wallet.isConnected() && e.nfts.length > 0) {
+      const opts: FighterOpt[] = [{ pick: { skin: 'gonna', assetId: null, name: 'GONNA' }, owned: true }];
+      for (const n of e.nfts) opts.push({ pick: { skin: n.skin, assetId: n.id, name: n.name }, owned: true });
+      return opts;
+    }
+    return MOCK_SHELF; // mock: owned flags drive the QA flow
+  }
+
+  open(): void {
+    this.screen = 'board';
+    this.step = 'visibility';
+    this.cfg = this.defaultCfg();
+    this.current = null;
+    this.verdict = false;
+    this.coinRain = [];
+    this.err = '';
+    this.focus = 0;
+    this.listFirst = 0;
+    this.fighterOpts = this.fighterShelf();
+    void this.refreshBoard();
+    this.buildFeed();
+  }
+
+  private async refreshBoard(): Promise<void> {
+    try {
+      const a = this.adapter();
+      const open = await a.listOpenChallenges();
+      // my PRIVATE cards ride the board too (only I can see them)
+      const me = arenaAddress();
+      const mine = me ? await a.myChallenges(me) : [];
+      const seen = new Set(open.map((c) => c.id));
+      const all = [...open, ...mine.filter((c) => !seen.has(c.id))];
+      // MY CARDS pin to the top (CLAIM never hides below the fold), the rest
+      // sort by soonest deadline — the piazza's hottest action floats up
+      const hasMe = (c: Challenge) => c.players.some((p) => p.address === me);
+      all.sort((x, y) => Number(hasMe(y)) - Number(hasMe(x)) || x.deadline - y.deadline);
+      this.cards = all;
+    } catch {
+      this.cards = [];
+    }
+    this.buildFeed();
+  }
+
+  private buildFeed(): void {
+    // live piazza chatter — fresh lines derive from real mock state
+    const lines: string[] = [
+      'WHALE_X JUST CLAIMED 2M FROM GEKKORIDER',
+      'A PRIVATE 100M DUEL HAS BEEN SEALED',
+      'LIL_LIZARD IS FARMING THE THRONE ROOM',
+      'ANON_404 APED INTO A 12 SEAT TABLE',
+    ];
+    for (const c of this.cards.slice(0, 4)) {
+      lines.push(c.creatorName + ' POSTED ' + fmtStake(c.stake) + ' - ' + c.seatsTotal + ' SEATS');
+    }
+    lines.push('SILVIO WATCHES. THE BOARD PROVIDES.');
+    this.feedLines = lines;
+    this.feedT = 0;
+  }
+
+  // ---------- input ----------
+  key(inp: Input): ArenaAction {
+    if (inp.pressed.pause) {
+      inp.pressed.pause = false;
+      return this.back();
+    }
+    if (this.hots.length > 0) {
+      if (inp.pressed.up || inp.pressed.left) {
+        this.focus = (this.focus + this.hots.length - 1) % this.hots.length;
+        return { act: 'move' };
+      }
+      if (inp.pressed.down || inp.pressed.right) {
+        this.focus = (this.focus + 1) % this.hots.length;
+        return { act: 'move' };
+      }
+      if (inp.pressed.start) {
+        const h = this.hots[clamp(this.focus, 0, this.hots.length - 1)];
+        if (h) return this.activate(h.id);
+      }
+    }
+    return { act: 'none' };
+  }
+
+  tap(gx: number, gy: number): ArenaAction {
+    // LAST matching hot wins: small overlay buttons (CLAIM) sit on top of the
+    // full-row card hotspot they are drawn inside
+    for (let i = this.hots.length - 1; i >= 0; i--) {
+      const h = this.hots[i];
+      if (gx >= h.x && gx <= h.x + h.w && gy >= h.y && gy <= h.y + h.h) {
+        this.focus = i;
+        return this.activate(h.id);
+      }
+    }
+    return { act: 'none' };
+  }
+
+  private back(): ArenaAction {
+    if (this.screen === 'create') {
+      // step back through the wizard
+      const order: WizardStep[] = ['visibility', 'format', 'battle', 'stake', 'fighter', 'confirm'];
+      const i = order.indexOf(this.step);
+      if (i > 0) {
+        this.step = order[i - 1];
+        this.focus = 0;
+        return { act: 'move' };
+      }
+      this.screen = 'board';
+      void this.refreshBoard();
+      return { act: 'move' };
+    }
+    if (this.screen === 'versus') {
+      if (this.verdict) {
+        this.verdict = false;
+        this.coinRain = [];
+        return { act: 'move' };
+      }
+      this.screen = 'board';
+      this.current = null;
+      void this.refreshBoard();
+      return { act: 'move' };
+    }
+    return { act: 'title' }; // board -> title (ESC / tilt back)
+  }
+
+  private fail(msg: string): ArenaAction {
+    this.err = msg.toUpperCase().slice(0, 40);
+    this.errT = 180;
+    return { act: 'none' };
+  }
+
+  // ---------- actions ----------
+  private activate(id: string): ArenaAction {
+    if (this.busy) return { act: 'none' };
+    // navigation
+    if (id === 'back') return this.back();
+    if (id === 'create') {
+      this.screen = 'create';
+      this.step = 'visibility';
+      this.focus = 0;
+      this.err = '';
+      return { act: 'move' };
+    }
+    if (id.startsWith('card:')) {
+      const c = this.cards.find((x) => x.id === Number(id.slice(5)));
+      if (c) {
+        this.current = c;
+        this.screen = 'versus';
+        this.verdict = false;
+        this.coinRain = [];
+        this.focus = 0;
+        this.myScore = this.bestScore();
+        return { act: 'move' };
+      }
+      return { act: 'none' };
+    }
+    if (id === 'list:up') {
+      this.listFirst = Math.max(0, this.listFirst - 1);
+      return { act: 'move' };
+    }
+    if (id === 'list:down') {
+      this.listFirst = Math.min(Math.max(0, this.cards.length - 3), this.listFirst + 1);
+      return { act: 'move' };
+    }
+    if (id.startsWith('claim:')) return this.doClaim(Number(id.slice(6)));
+
+    // ---- wizard ----
+    if (id === 'vis:public' || id === 'vis:private') {
+      this.cfg.visibility = id === 'vis:public' ? 'public' : 'private';
+      this.step = 'format';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (id === 'fmt:duel') {
+      this.cfg.format = 'duel';
+      this.step = 'battle';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (id === 'fmt:open') {
+      this.cfg.format = 'open'; // reveals seats/duration + NEXT
+      return { act: 'move' };
+    }
+    if (id === 'fmt:next') {
+      this.step = 'battle';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (id.startsWith('seats:')) {
+      this.cfg.seatsTotal = Number(id.slice(6));
+      return { act: 'move' };
+    }
+    if (id.startsWith('dur:')) {
+      this.cfg.durationSecs = Number(id.slice(4));
+      return { act: 'move' };
+    }
+    if (id === 'bat:full') {
+      this.cfg.stageMode = 'full';
+      this.cfg.stageIdx = null;
+      this.step = 'stake';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (id === 'bat:single') {
+      this.cfg.stageMode = 'single'; // reveals the stage picker
+      return { act: 'move' };
+    }
+    if (id === 'bat:next') {
+      this.step = 'stake';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (id.startsWith('bat:stage:')) {
+      this.cfg.stageMode = 'single';
+      this.cfg.stageIdx = Number(id.slice(10));
+      this.step = 'stake';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (id === 'bat:random') {
+      // SHUFFLE: slot-machine reels, the target is drawn NOW and the reels
+      // brake onto it (staggered stops, no white flash — gold spark burst)
+      this.cfg.stageMode = 'random';
+      this.shuffleTarget = Math.floor(Math.random() * 7);
+      this.shuffleT = 0;
+      return { act: 'move' };
+    }
+    if (id.startsWith('stake:') && id !== 'stake:next') {
+      this.cfg.stake = Number(id.slice(6));
+      this.step = 'fighter'; // preset stake taps straight through
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (id === 'stake:minus') {
+      this.cfg.stake = Math.max(CUSTOM_STEP, this.cfg.stake - CUSTOM_STEP);
+      return { act: 'move' };
+    }
+    if (id === 'stake:plus') {
+      this.cfg.stake = Math.min(CUSTOM_MAX, this.cfg.stake + CUSTOM_STEP);
+      return { act: 'move' };
+    }
+    if (id === 'stake:next') {
+      this.step = 'fighter';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (id.startsWith('fighter:')) {
+      const i = Number(id.slice(8));
+      const o = this.fighterOpts[i];
+      if (!o) return { act: 'none' };
+      if (!o.owned) return this.fail('NOT YOURS YET DEGEN');
+      this.cfg.fighter = { ...o.pick };
+      this.step = 'confirm';
+      this.focus = 0;
+      return { act: 'move' };
+    }
+    if (id === 'sign') return this.doSign();
+
+    // ---- versus ----
+    if (id === 'accept') return this.doAccept();
+    if (id === 'submit') return this.doSubmit();
+    if (id === 'resolve') return this.doResolve();
+    if (id === 'vclaim') return this.doClaim(this.current ? this.current.id : -1);
+    if (id === 'close') return this.doEarlyClose();
+    if (id === 'rematch') return this.doRematch();
+    return { act: 'none' };
+  }
+
+  private async run<T>(job: () => Promise<T>, ok: (r: T) => void): Promise<void> {
+    this.busy = true;
+    try {
+      ok(await job());
+    } catch (e) {
+      this.fail(e instanceof Error ? e.message : 'REKT - TRY AGAIN');
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private doSign(): ArenaAction {
+    const cfg: ChallengeConfig = { ...this.cfg };
+    if (cfg.stageMode === 'random' && this.shuffleT >= 0) cfg.stageIdx = this.shuffleTarget;
+    const player = arenaPlayer(cfg.fighter);
+    void this.run(
+      () => this.adapter().createChallenge(cfg, player),
+      (c) => {
+        this.current = c;
+        this.screen = 'versus';
+        this.verdict = false;
+        this.rematchOf = null; // the rematch became its own card
+        this.focus = 0;
+        this.buildFeed();
+      },
+    );
+    return { act: 'move' };
+  }
+
+  private doAccept(): ArenaAction {
+    const c = this.current;
+    if (!c) return { act: 'none' };
+    const player = arenaPlayer({ skin: 'gonna', assetId: null, name: 'GONNA' });
+    void this.run(
+      () => this.adapter().join(c.id, player),
+      (nc) => {
+        this.current = nc;
+      },
+    );
+    return { act: 'move' };
+  }
+
+  private doSubmit(): ArenaAction {
+    const c = this.current;
+    if (!c) return { act: 'none' };
+    const me = arenaAddress();
+    const score = this.myScore > 0 ? this.myScore : 4200 + Math.floor(Math.random() * 900);
+    void this.run(
+      () => this.adapter().submitScore(c.id, me, score),
+      (nc) => {
+        this.current = nc;
+      },
+    );
+    return { act: 'move' };
+  }
+
+  private doResolve(): ArenaAction {
+    const c = this.current;
+    if (!c) return { act: 'none' };
+    void this.run(
+      () => this.adapter().resolve(c.id),
+      (nc) => {
+        this.current = nc;
+        this.startVerdict(nc);
+      },
+    );
+    return { act: 'move' };
+  }
+
+  private doClaim(id: number): ArenaAction {
+    const me = arenaAddress();
+    void this.run(
+      () => this.adapter().claim(id, me),
+      () => {
+        this.buildFeed();
+        void this.refreshBoard();
+        if (this.current && this.current.id === id) {
+          void this.adapter()
+            .myChallenges(me)
+            .then((list) => {
+              const hit = list.find((x) => x.id === id);
+              if (hit) this.current = hit;
+            })
+            .catch(() => { /* cosmetic */ });
+        }
+      },
+    );
+    return { act: 'move' };
+  }
+
+  private doEarlyClose(): ArenaAction {
+    const c = this.current;
+    if (!c) return { act: 'none' };
+    const me = arenaAddress();
+    void this.run(
+      () => this.adapter().earlyClose(c.id, me),
+      (nc) => {
+        this.current = nc;
+      },
+    );
+    return { act: 'move' };
+  }
+
+  private doRematch(): ArenaAction {
+    const c = this.current;
+    if (!c) return { act: 'none' };
+    this.rematchOf = c.id;
+    // same rules, fresh card — the wizard pre-fills from the last battle
+    this.cfg = {
+      visibility: c.visibility,
+      format: c.format,
+      seatsTotal: c.seatsTotal,
+      durationSecs: c.durationSecs,
+      stageMode: c.stageMode,
+      stageIdx: c.stageIdx,
+      stake: c.stake,
+      fighter: { ...this.cfg.fighter },
+    };
+    this.verdict = false;
+    this.coinRain = [];
+    this.screen = 'create';
+    this.step = 'confirm';
+    this.focus = 0;
+    return { act: 'move' };
+  }
+
+  // verdict overlay + GOLD coin rain over the winner (never white)
+  private startVerdict(c: Challenge): void {
+    this.verdict = true;
+    this.coinRain = [];
+    const meAddr = arenaAddress();
+    const won = c.winner !== null && c.winner === meAddr;
+    const n = won ? 90 : 36; // the winner drowns in gold
+    for (let i = 0; i < n; i++) {
+      this.coinRain.push({
+        x: Math.random() * VW,
+        y: -Math.random() * 160,
+        vy: 1 + Math.random() * 2.2,
+        t: 200 + Math.random() * 120,
+      });
+    }
+  }
+
+  // ---------- per-frame ----------
+  tick(): void {
+    if (this.errT > 0) this.errT--;
+    this.feedT++;
+    if (this.feedT > 220) {
+      this.feedT = 0;
+      if (this.feedLines.length > 1) this.feedLines.push(this.feedLines.shift()!);
+    }
+    if (this.shuffleT >= 0 && this.shuffleT < 200) this.shuffleT++;
+    for (const c of this.coinRain) {
+      c.y += c.vy;
+      c.vy += 0.03;
+      if (c.y > VH + 8) {
+        c.y = -8;
+        c.x = Math.random() * VW;
+        c.vy = 1 + Math.random() * 2;
+      }
+      c.t--;
+    }
+    if (this.coinRain.length > 0) this.coinRain = this.coinRain.filter((c) => c.t > 0);
+  }
+
+  // ---------- draw ----------
+  draw(c: CanvasRenderingContext2D, frame: number, art: Art, touch: boolean): void {
+    this.hots = [];
+    c.fillStyle = INK;
+    c.fillRect(0, 0, VW, VH);
+    // drifting void stars (same family as SAVE RECORD)
+    for (let i = 0; i < 28; i++) {
+      const sx = (i * 137 + ((frame >> 3) * (1 + (i & 3)))) % VW;
+      const sy = (i * 71) % VH;
+      c.fillStyle = (i & 1) ? '#101a30' : '#14202a';
+      c.fillRect(sx, sy, 1, 1);
+    }
+    mosaicBorder(c);
+    if (this.screen === 'board') this.drawBoard(c, frame);
+    else if (this.screen === 'create') this.drawCreate(c, frame, art);
+    else this.drawVersus(c, frame, art);
+    // gold coin rain rides over the versus verdict
+    if (this.coinRain.length > 0) {
+      for (const p of this.coinRain) {
+        this.pixelCoin(c, Math.round(p.x), Math.round(p.y), frame);
+      }
+    }
+    // error toast (black strip, red text — never a flash)
+    if (this.errT > 0 && this.err) {
+      c.fillStyle = 'rgba(7,10,20,0.92)';
+      c.fillRect(40, VH - 44, VW - 80, 12);
+      drawTextSh(c, this.err, VW / 2, VH - 41, 1, RED, 'center');
+    }
+    if (!touch) drawText(c, 'ESC BACK', VW - 8, VH - 11, 1, DIM, 'right');
+    if (this.focus >= this.hots.length) this.focus = 0;
+  }
+
+  private btn(c: CanvasRenderingContext2D, frame: number, h: Omit<Hot, 'id'> & { id: string }, label: string, opts: { gold?: boolean; green?: boolean; dim?: boolean; small?: boolean } = {}): void {
+    const lit = this.hots.length === this.focus;
+    this.hots.push(h);
+    c.fillStyle = opts.gold ? '#14100a' : opts.green ? '#0f2408' : PANEL;
+    c.fillRect(h.x, h.y, h.w, h.h);
+    c.strokeStyle = lit ? '#ffffff' : opts.gold ? ((frame & 16) !== 0 ? GOLD : GOLD_DK) : opts.green ? ((frame & 16) !== 0 ? GREEN : '#3fae4a') : '#3a3f4c';
+    c.lineWidth = 1;
+    c.strokeRect(h.x + 0.5, h.y + 0.5, h.w - 1, h.h - 1);
+    const color = opts.dim ? DIM : opts.gold ? GOLD : opts.green ? GREEN : '#c8ccd4';
+    drawTextSh(c, label, h.x + h.w / 2, h.y + Math.floor((h.h - 7) / 2), 1, lit ? '#ffffff' : color, 'center');
+    if (lit && (frame & 16) !== 0) drawText(c, '>', h.x + 3, h.y + Math.floor((h.h - 7) / 2), 1, GREEN);
+  }
+
+  // 6x6 gold pixel coin (arena money, never white)
+  private pixelCoin(c: CanvasRenderingContext2D, x: number, y: number, frame: number): void {
+    const spin = (frame >> 2) & 3;
+    const w = spin === 1 || spin === 3 ? 4 : 6; // cheap spin shimmer
+    c.fillStyle = GOLD_DK;
+    c.fillRect(x + (6 - w) / 2, y, w, 6);
+    c.fillStyle = GOLD;
+    c.fillRect(x + (6 - w) / 2, y + 1, w, 4);
+    if (w > 4) {
+      c.fillStyle = '#fff3c4';
+      c.fillRect(x + 2, y + 1, 1, 2);
+    }
+  }
+
+  // coin pile sized by stake tier: 10M=3, 100M=5, 1B=8 coins
+  private coinPile(c: CanvasRenderingContext2D, x: number, y: number, stake: number, frame: number): void {
+    const n = stake >= 1_000_000_000 ? 8 : stake >= 100_000_000 ? 5 : 3;
+    for (let i = 0; i < n; i++) {
+      const cx = x + (i % 3) * 7 + ((i / 3) | 0) * 2;
+      const cy = y - ((i / 3) | 0) * 5;
+      this.pixelCoin(c, cx, cy, frame + i * 3);
+    }
+  }
+
+  // ⚛ QUANTUM SEAL — pixel atom badge for Falcon (PQ) accounts
+  private quantumSeal(c: CanvasRenderingContext2D, x: number, y: number, frame: number): void {
+    const glow = (frame & 16) !== 0;
+    c.strokeStyle = glow ? PQCYAN : '#2e7a86';
+    c.lineWidth = 1;
+    c.strokeRect(x + 0.5, y + 0.5, 11, 11);
+    c.fillStyle = PQCYAN;
+    c.fillRect(x + 5, y + 2, 2, 8); // vertical orbit
+    c.fillRect(x + 2, y + 5, 8, 2); // horizontal orbit
+    c.fillStyle = glow ? '#ffffff' : PQCYAN;
+    c.fillRect(x + 5, y + 5, 2, 2); // nucleus
+  }
+
+  private stageIcon(c: CanvasRenderingContext2D, art: Art, idx: number, x: number, y: number, s: number): void {
+    const tiles: (HTMLCanvasElement | null)[] = [
+      art.gecko[0], art.snek[0], art.coinsnek[0], art.golem.idle, art.bull[0], art.fud.idle, art.boss.idle,
+    ];
+    const t = tiles[clamp(idx, 0, 6)];
+    c.fillStyle = '#0d1a12';
+    c.fillRect(x, y, s, s);
+    c.strokeStyle = GOLD_DK;
+    c.lineWidth = 1;
+    c.strokeRect(x + 0.5, y + 0.5, s - 1, s - 1);
+    if (t) c.drawImage(t, x + 2, y + 2, s - 4, s - 4);
+    drawText(c, String(idx + 1), x + 2, y + s - 8, 1, '#ffffff');
+  }
+
+  private drawHeader(c: CanvasRenderingContext2D, title: string, sub: string): void {
+    drawTextSh(c, title, VW / 2, 8, 2, GOLD, 'center', GOLD_DK);
+    if (sub) drawText(c, sub, VW / 2, 26, 1, GRAY, 'center');
+  }
+
+  // ---------- THE BOARD ----------
+  private drawBoard(c: CanvasRenderingContext2D, frame: number): void {
+    // v10.1: no-overlap vertical rhythm — title block (10..24), subtitle (30),
+    // LIVE feed on its OWN dedicated strip (44..55), cards start at y=60
+    drawTextSh(c, 'THE BOARD', VW / 2, 10, 2, GOLD, 'center', GOLD_DK);
+    drawText(c, 'THE STAKING PIAZZA', VW / 2, 30, 1, DIM, 'center');
+    c.fillStyle = '#04140a';
+    c.fillRect(4, 44, VW - 8, 11);
+    const line = this.feedLines.length > 0 ? this.feedLines[0] : 'THE BOARD IS LISTENING';
+    drawText(c, 'LIVE> ' + line, 10, 46, 1, FLUO);
+
+    const ROW_H = 44;
+    const TOP = 60;
+    const me = arenaAddress();
+    const rows = this.cards;
+    if (rows.length === 0) {
+      drawTextSh(c, 'NO LIVE CARDS - POST THE FIRST ONE', VW / 2, 100, 1, GRAY, 'center');
+    }
+    for (let i = 0; i < 3; i++) {
+      const ri = this.listFirst + i;
+      const card = rows[ri];
+      if (!card) break;
+      const y = TOP + i * ROW_H;
+      const mine = me !== null && card.players.some((p) => p.address === me);
+      const live = card.status === 'open' || card.status === 'full';
+      const freeSeats = card.seatsTotal - card.players.length;
+      const msLeft = card.deadline - Date.now();
+      // row panel
+      c.fillStyle = mine ? '#101a10' : PANEL;
+      c.fillRect(8, y, VW - 16 - 22, ROW_H - 4);
+      c.strokeStyle = mine ? '#2e5a26' : '#232838';
+      c.lineWidth = 1;
+      c.strokeRect(8.5, y + 0.5, VW - 16 - 23, ROW_H - 5);
+      // coin pile proportional to the stake
+      this.coinPile(c, 14, y + 30, card.stake, frame + i * 7);
+      const tx = 44;
+      const fmt = card.format === 'duel' ? 'DUEL' : 'OPEN TABLE';
+      drawText(c, fmtStake(card.stake) + ' ' + fmt + (card.visibility === 'private' ? ' (PRIVATE)' : ''), tx, y + 4, 1, GOLD);
+      const seatLine = card.players.length + '/' + card.seatsTotal + ' SEATS - ' + fmtCountdown(card.deadline) + ' LEFT';
+      drawText(c, seatLine, tx, y + 14, 1, live ? GREEN : GRAY);
+      const stage = card.stageMode === 'full' ? 'FULL RUN' : 'STAGE ' + (card.stageIdx !== null ? card.stageIdx + 1 : '?') + ' ' + STAGE_NAMES[card.stageIdx ?? 0];
+      drawText(c, stage + ' - BY ' + card.creatorName, tx, y + 24, 1, DIM);
+      if (!live) {
+        drawText(c, card.status.toUpperCase(), tx + 150, y + 24, 1, card.status === 'claimed' ? GOLD : RED);
+      }
+      // badges (top-right of the row)
+      let bx = VW - 32;
+      if (card.creatorType === 'falcon') {
+        this.quantumSeal(c, bx - 12, y + 3, frame);
+        bx -= 16;
+      }
+      if (live && freeSeats <= 2 && freeSeats > 0) {
+        if ((frame & 16) !== 0) drawText(c, 'FILLING FAST', bx - textWidth('FILLING FAST', 1), y + 6, 1, RED);
+        bx -= textWidth('FILLING FAST', 1) + 6;
+      }
+      if (live && msLeft < 3600_000) {
+        drawText(c, 'CLOSING SOON', bx - textWidth('CLOSING SOON', 1), y + 6, 1, '#ff8a3c');
+      }
+      // whole row opens the VERSUS detail; CLAIM is pushed AFTER it so the
+      // smaller gold button wins the tap (tap() matches in reverse order)
+      this.hots.push({ id: 'card:' + card.id, x: 8, y, w: VW - 16 - 22, h: ROW_H - 4 });
+      const claimable = mine && (card.status === 'expired' || (card.status === 'resolved' && card.winner === me));
+      if (claimable) {
+        this.btn(c, frame, { id: 'claim:' + card.id, x: VW - 96, y: y + 22, w: 60, h: 14 }, 'CLAIM', { gold: true });
+      }
+    }
+    // scroll arrows
+    if (this.listFirst > 0) this.btn(c, frame, { id: 'list:up', x: VW - 26, y: TOP, w: 18, h: 14 }, '<', { small: true });
+    if (this.listFirst + 3 < rows.length) this.btn(c, frame, { id: 'list:down', x: VW - 26, y: TOP + 3 * ROW_H - 14, w: 18, h: 14 }, '>', { small: true });
+    // footer
+    this.btn(c, frame, { id: 'create', x: 8, y: 198, w: 180, h: 14 }, 'CREATE CARD', { gold: true });
+    this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
+  }
+
+  // ---------- CREATE CARD ----------
+  private drawCreate(c: CanvasRenderingContext2D, frame: number, art: Art): void {
+    this.drawHeader(c, 'CREATE CARD', 'STEP: ' + this.stepLabel());
+    if (this.step === 'visibility') this.stepVisibility(c, frame);
+    else if (this.step === 'format') this.stepFormat(c, frame);
+    else if (this.step === 'battle') this.stepBattle(c, frame, art);
+    else if (this.step === 'stake') this.stepStake(c, frame);
+    else if (this.step === 'fighter') this.stepFighter(c);
+    else this.stepConfirm(c, frame);
+    this.btn(c, frame, { id: 'back', x: 8, y: 198, w: 70, h: 14 }, 'BACK');
+  }
+
+  private stepLabel(): string {
+    switch (this.step) {
+      case 'visibility': return 'WHO SEES IT';
+      case 'format': return 'THE RULES';
+      case 'battle': return 'THE BATTLE';
+      case 'stake': return 'THE STAKE';
+      case 'fighter': return 'YOUR FIGHTER';
+      case 'confirm': return 'SIGN IT';
+    }
+  }
+
+  private stepVisibility(c: CanvasRenderingContext2D, frame: number): void {
+    drawText(c, 'VISIBILITY', VW / 2, 48, 1, GRAY, 'center');
+    this.btn(c, frame, { id: 'vis:public', x: 52, y: 66, w: 280, h: 28 }, 'PUBLIC - THE BOARD', { green: true });
+    drawText(c, 'EVERY DEGEN SEES IT ON THE SQUARE', VW / 2, 98, 1, DIM, 'center');
+    this.btn(c, frame, { id: 'vis:private', x: 52, y: 116, w: 280, h: 28 }, 'PRIVATE - LINK ONLY', { gold: true });
+    drawText(c, 'SEALED. ONLY WHO HOLDS THE LINK', VW / 2, 148, 1, DIM, 'center');
+  }
+
+  private stepFormat(c: CanvasRenderingContext2D, frame: number): void {
+    drawText(c, 'FORMAT', VW / 2, 42, 1, GRAY, 'center');
+    this.btn(c, frame, { id: 'fmt:duel', x: 42, y: 54, w: 300, h: 22 }, 'DUEL - FIRST WALLET TAKES ALL', { gold: this.cfg.format === 'duel' });
+    this.btn(c, frame, { id: 'fmt:open', x: 42, y: 80, w: 300, h: 22 }, 'OPEN TABLE - UP TO 12 DEGENS', { gold: this.cfg.format === 'open' });
+    if (this.cfg.format === 'open') {
+      drawText(c, 'SEATS', 42, 112, 1, GRAY);
+      for (let i = 0; i < SEAT_OPTS.length; i++) {
+        const s = SEAT_OPTS[i];
+        this.btn(c, frame, { id: 'seats:' + s, x: 100 + i * 76, y: 108, w: 64, h: 18 }, String(s), { gold: this.cfg.seatsTotal === s, dim: this.cfg.seatsTotal !== s });
+      }
+      drawText(c, 'DURATION', 42, 138, 1, GRAY);
+      for (let i = 0; i < DUR_OPTS.length; i++) {
+        const d = DUR_OPTS[i];
+        this.btn(c, frame, { id: 'dur:' + d.secs, x: 100 + i * 76, y: 134, w: 64, h: 18 }, d.label, { gold: this.cfg.durationSecs === d.secs, dim: this.cfg.durationSecs !== d.secs });
+      }
+      this.btn(c, frame, { id: 'fmt:next', x: 122, y: 162, w: 140, h: 18 }, 'NEXT', { green: true });
+    }
+  }
+
+  private stepBattle(c: CanvasRenderingContext2D, frame: number, art: Art): void {
+    drawText(c, 'BATTLE', VW / 2, 40, 1, GRAY, 'center');
+    this.btn(c, frame, { id: 'bat:full', x: 42, y: 50, w: 300, h: 20 }, 'FULL RUN - ALL 7 STAGES', { gold: this.cfg.stageMode === 'full' });
+    this.btn(c, frame, { id: 'bat:single', x: 42, y: 74, w: 300, h: 20 }, 'SINGLE STAGE - PICK YOUR GROUND', { gold: this.cfg.stageMode === 'single' });
+    this.btn(c, frame, { id: 'bat:random', x: 42, y: 98, w: 300, h: 20 }, 'RANDOM - TRUST THE SHUFFLE', { gold: this.cfg.stageMode === 'random' });
+    if (this.cfg.stageMode === 'single') {
+      for (let i = 0; i < 7; i++) {
+        const x = 66 + (i % 4) * 64;
+        const y = 126 + Math.floor(i / 4) * 40;
+        const r = { id: 'bat:stage:' + i, x, y, w: 32, h: 32 };
+        const lit = this.hots.length === this.focus;
+        this.hots.push(r);
+        this.stageIcon(c, art, i, x, y, 32);
+        if (lit) {
+          c.strokeStyle = '#ffffff';
+          c.strokeRect(x - 1.5, y - 1.5, 35, 35);
+        }
+      }
+      return;
+    }
+    if (this.cfg.stageMode === 'random' && this.shuffleT >= 0) this.drawShuffle(c, frame, art);
+  }
+
+  // slot-machine SHUFFLE: 3 reels brake onto the drawn stage (staggered stops)
+  private drawShuffle(c: CanvasRenderingContext2D, frame: number, art: Art): void {
+    const t = this.shuffleT;
+    const stops = [70, 100, 130];
+    for (let r = 0; r < 3; r++) {
+      const x = 122 + r * 50;
+      const y = 128;
+      const stopped = t >= stops[r];
+      const idx = stopped ? this.shuffleTarget : Math.floor(t / 3 + r * 2) % 7;
+      this.stageIcon(c, art, idx, x, y, 40);
+      c.strokeStyle = stopped ? ((frame & 8) !== 0 ? GOLD : '#fff3c4') : '#3a3f4c';
+      c.lineWidth = 1;
+      c.strokeRect(x - 1.5, y - 1.5, 43, 43);
+      if (stopped) this.pixelCoin(c, x + 17, y - 8, frame + r * 5); // gold sparkle on lock
+    }
+    if (t >= 140) {
+      this.cfg.stageIdx = this.shuffleTarget;
+      drawTextSh(c, 'LOCKED: ' + STAGE_NAMES[this.shuffleTarget], VW / 2, 176, 1, GOLD, 'center');
+      this.btn(c, frame, { id: 'bat:next', x: 122, y: 192, w: 140, h: 16 }, 'NEXT', { green: true });
+    } else if ((frame & 8) !== 0) {
+      drawText(c, 'SHUFFLING...', VW / 2, 176, 1, FLUO, 'center');
+    }
+  }
+
+  private stepStake(c: CanvasRenderingContext2D, frame: number): void {
+    drawText(c, 'STAKE - $GONNA PER SEAT', VW / 2, 46, 1, GRAY, 'center');
+    for (let i = 0; i < STAKE_OPTS.length; i++) {
+      const s = STAKE_OPTS[i];
+      this.btn(c, frame, { id: 'stake:' + s, x: 22 + i * 120, y: 62, w: 100, h: 24 }, fmtStake(s), { gold: this.cfg.stake === s });
+    }
+    drawText(c, 'CUSTOM', VW / 2, 102, 1, GRAY, 'center');
+    this.btn(c, frame, { id: 'stake:minus', x: 72, y: 114, w: 44, h: 24 }, '-');
+    c.fillStyle = PANEL;
+    c.fillRect(126, 114, 132, 24);
+    c.strokeStyle = GOLD_DK;
+    c.strokeRect(126.5, 114.5, 131, 23);
+    drawTextSh(c, fmtStake(this.cfg.stake) + ' $GONNA', VW / 2, 122, 1, GOLD, 'center');
+    this.btn(c, frame, { id: 'stake:plus', x: 268, y: 114, w: 44, h: 24 }, '+');
+    this.coinPile(c, VW / 2 - 12, 156, this.cfg.stake, frame);
+    this.btn(c, frame, { id: 'stake:next', x: 122, y: 170, w: 140, h: 18 }, 'NEXT', { green: true });
+  }
+
+  private stepFighter(c: CanvasRenderingContext2D): void {
+    drawText(c, 'FIGHTER - NFT SKIN IF YOU OWN IT', VW / 2, 44, 1, GRAY, 'center');
+    const opts = this.fighterOpts;
+    for (let i = 0; i < opts.length; i++) {
+      const o = opts[i];
+      const x = 22 + (i % 5) * 70;
+      const y = 58 + Math.floor(i / 5) * 74;
+      const r = { id: 'fighter:' + i, x, y, w: 60, h: 62 };
+      const lit = this.hots.length === this.focus;
+      this.hots.push(r);
+      c.fillStyle = o.owned ? '#101a10' : '#0a0c12';
+      c.fillRect(x, y, 60, 62);
+      c.strokeStyle = lit ? '#ffffff' : o.owned ? '#2e5a26' : '#232838';
+      c.lineWidth = 1;
+      c.strokeRect(x + 0.5, y + 0.5, 59, 61);
+      const skin = o.pick.skin as SkinId;
+      const info = SKIN_INFO[skin] ?? SKIN_INFO.gonna;
+      const port = skinPortrait(skin);
+      if (port && o.owned) c.drawImage(port, x + 18, y + 4, 24, 24);
+      else {
+        c.fillStyle = o.owned ? info.accent : '#1a1e28';
+        c.fillRect(x + 18, y + 4, 24, 24);
+      }
+      drawText(c, o.pick.name.slice(0, 9), x + 30, y + 32, 1, o.owned ? '#c8ccd4' : DIM, 'center');
+      drawText(c, o.owned ? 'OWNED' : 'LOCKED', x + 30, y + 44, 1, o.owned ? GREEN : DIM, 'center');
+      if (this.cfg.fighter.assetId === o.pick.assetId && this.cfg.fighter.skin === o.pick.skin) {
+        drawCrown(c, x + 24, y - 6);
+      }
+    }
+    if (!wallet.isConnected()) drawText(c, 'MOCK SHELF - CONNECT FOR REAL NFTS', VW / 2, 170, 1, DIM, 'center');
+  }
+
+  private stepConfirm(c: CanvasRenderingContext2D, frame: number): void {
+    const x = 52;
+    const w = 280;
+    c.fillStyle = PANEL;
+    c.fillRect(x, 42, w, 116);
+    c.strokeStyle = (frame & 16) !== 0 ? GOLD : GOLD_DK;
+    c.lineWidth = 1;
+    c.strokeRect(x + 0.5, 42.5, w - 1, 115);
+    // v10.1: no crown here — it crowded the STEP label (clean 8px header gap)
+    const lines: [string, string][] = [
+      ['CARD', this.cfg.visibility === 'public' ? 'PUBLIC - THE BOARD' : 'PRIVATE - LINK ONLY'],
+      ['FORMAT', this.cfg.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN ' + this.cfg.seatsTotal + ' SEATS - ' + Math.round(this.cfg.durationSecs / 3600) + 'H'],
+      ['BATTLE', this.cfg.stageMode === 'full' ? 'FULL RUN - 7 STAGES' : 'STAGE ' + ((this.cfg.stageIdx ?? 0) + 1) + ' ' + STAGE_NAMES[this.cfg.stageIdx ?? 0]],
+      ['STAKE', fmtStake(this.cfg.stake) + ' $GONNA A SEAT'],
+      ['FIGHTER', this.cfg.fighter.name],
+    ];
+    for (let i = 0; i < lines.length; i++) {
+      drawText(c, lines[i][0], x + 10, 50 + i * 13, 1, DIM);
+      drawText(c, lines[i][1], x + w - 10, 50 + i * 13, 1, i === 3 ? GOLD : '#c8ccd4', 'right');
+    }
+    // FEE ENGINE: Falcon (PQ) accounts pay the resource-based fee
+    const acct = arenaSession().accountType;
+    drawTextSh(c, 'NETWORK FEE: ' + fmtFee(acct), VW / 2, 120, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
+    if (acct === 'falcon') {
+      drawText(c, 'FALCON ACCOUNT - PQ SIGNATURE PRICING', VW / 2, 132, 1, DIM, 'center');
+      this.quantumSeal(c, x + 10, 120, frame);
+    }
+    if (this.rematchOf !== null) drawText(c, 'REMATCH OF CARD #' + this.rematchOf, VW / 2, 144, 1, '#ff8a3c', 'center');
+    this.btn(c, frame, { id: 'sign', x: 92, y: 162, w: 200, h: 22 }, this.busy ? 'SIGNING...' : 'SIGN & STAKE', { gold: true });
+  }
+
+  // ---------- VERSUS (card detail) ----------
+  private sealFace(c: CanvasRenderingContext2D, frame: number, x: number, y: number, name: string, skin: string, pq: boolean, lit: boolean): void {
+    // pixel seal: double ring, breathing gold for the leader / live card
+    const pulse = (frame & 16) !== 0;
+    c.strokeStyle = lit ? (pulse ? GOLD : GOLD_DK) : '#3a3f4c';
+    c.lineWidth = 2;
+    c.strokeRect(x - 21, y - 21, 42, 42);
+    c.strokeStyle = lit ? GOLD_DK : '#232838';
+    c.lineWidth = 1;
+    c.strokeRect(x - 17.5, y - 17.5, 35, 35);
+    const info = SKIN_INFO[skin as SkinId] ?? SKIN_INFO.gonna;
+    const port = skinPortrait(skin as SkinId);
+    if (port) c.drawImage(port, x - 14, y - 14, 28, 28);
+    else {
+      c.fillStyle = info.accent;
+      c.fillRect(x - 14, y - 14, 28, 28);
+    }
+    if (pq) this.quantumSeal(c, x + 12, y - 26, frame);
+    drawText(c, name.slice(0, 12), x, y + 26, 1, lit ? GOLD : GRAY, 'center');
+  }
+
+  private drawVersus(c: CanvasRenderingContext2D, frame: number, art: Art): void {
+    const card = this.current;
+    if (!card) {
+      this.screen = 'board';
+      return;
+    }
+    const me = arenaAddress();
+    const seated = me !== null && card.players.some((p) => p.address === me);
+    const live = card.status === 'open' || card.status === 'full';
+    const title = fmtStake(card.stake) + (card.format === 'duel' ? ' DUEL' : ' OPEN TABLE');
+    const stage = card.stageMode === 'full' ? 'FULL RUN - ALL 7 STAGES' : 'STAGE ' + ((card.stageIdx ?? 0) + 1) + ' ' + STAGE_NAMES[card.stageIdx ?? 0];
+    this.drawHeader(c, title, stage);
+    // v10.1: the PRIVATE tag lives bottom-left — never next to the card title
+    if (card.visibility === 'private') drawText(c, 'PRIVATE - LINK ONLY', 10, VH - 11, 1, '#b45aff');
+
+    // the two sigilli face to face (first two seats); extra seats queue below
+    // v10.1 vertical rhythm: seals 51..93, names 98, scores 110, pot 56..92
+    const p0 = card.players[0] ?? null;
+    const p1 = card.players[1] ?? null;
+    this.sealFace(c, frame, 92, 72, p0 ? p0.name : card.creatorName, p0 ? p0.fighter.skin : 'gonna', (p0?.accountType ?? card.creatorType) === 'falcon', card.winner !== null && card.winner === (p0?.address ?? card.creator));
+    if (p1) {
+      this.sealFace(c, frame, VW - 92, 72, p1.name, p1.fighter.skin, p1.accountType === 'falcon', card.winner !== null && card.winner === p1.address);
+    } else {
+      // empty seal: the open seat waits
+      c.strokeStyle = '#232838';
+      c.lineWidth = 2;
+      c.strokeRect(VW - 92 - 21, 72 - 21, 42, 42);
+      if ((frame & 32) !== 0) drawText(c, '???', VW - 92, 68, 1, DIM, 'center');
+      drawText(c, 'OPEN SEAT', VW - 92, 98, 1, DIM, 'center');
+    }
+    // scores under the seals once revealed
+    if (card.status === 'resolved' || card.status === 'claimed') {
+      if (p0) drawText(c, String(p0.score).padStart(6, '0'), 92, 110, 1, '#c8ccd4', 'center');
+      if (p1) drawText(c, String(p1.score).padStart(6, '0'), VW - 92, 110, 1, '#c8ccd4', 'center');
+    }
+    // the pot pulses at the center (gold heartbeat, never white)
+    const beat = Math.sin(frame / 9) * 0.5 + 0.5;
+    c.strokeStyle = beat > 0.5 ? GOLD : GOLD_DK;
+    c.lineWidth = 1;
+    const pr = 24 + Math.round(beat * 4);
+    c.strokeRect(VW / 2 - pr / 2 - 6 + 0.5, 56 + 0.5, pr + 12, 34);
+    this.coinPile(c, VW / 2 - 12, 72, card.stake, frame);
+    drawTextSh(c, fmtStake(card.pot), VW / 2, 92, 1, GOLD, 'center');
+
+    // status line (clear of the seals' name row)
+    const seatLine = card.players.length + '/' + card.seatsTotal + ' SEATS';
+    if (live) drawText(c, seatLine + ' - ' + fmtCountdown(card.deadline) + ' LEFT', VW / 2, 124, 1, GREEN, 'center');
+    else drawText(c, card.status.toUpperCase(), VW / 2, 124, 1, card.status === 'claimed' ? GOLD : RED, 'center');
+    if (card.players.length > 2) drawText(c, '+' + (card.players.length - 2) + ' MORE DEGENS SEATED', VW / 2, 134, 1, DIM, 'center');
+
+    // ---- action zone ----
+    if (this.busy) {
+      if ((frame & 8) !== 0) drawTextSh(c, 'SIGNING... CHECK YOUR WALLET', VW / 2, 148, 1, GOLD, 'center');
+    } else if (this.verdict && (card.status === 'resolved' || card.status === 'claimed')) {
+      this.drawVerdict(c, frame, card);
+    } else {
+      const acct = arenaSession().accountType;
+      let ay = 148;
+      if (live && !seated) {
+        drawText(c, 'NETWORK FEE: ' + fmtFee(acct), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
+        ay += 12;
+        this.btn(c, frame, { id: 'accept', x: 92, y: ay, w: 200, h: 20 }, 'ACCEPT & STAKE ' + fmtStake(card.stake), { gold: true });
+        ay += 24;
+      } else if (live && seated && card.players.some((p) => p.score === 0)) {
+        drawText(c, 'NETWORK FEE: ' + fmtFee(acct), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
+        ay += 12;
+        this.btn(c, frame, { id: 'submit', x: 92, y: ay, w: 200, h: 20 }, 'SUBMIT SCORE', { green: true });
+        ay += 24;
+      } else if (live && seated) {
+        this.btn(c, frame, { id: 'resolve', x: 92, y: ay, w: 200, h: 20 }, 'RESOLVE THE BATTLE', { gold: true });
+        ay += 24;
+      } else if (card.status === 'resolved' && card.winner === me) {
+        this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM THE POT', { gold: true });
+        ay += 24;
+      } else if (card.status === 'expired' && seated) {
+        this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM YOUR STAKE BACK', { gold: true });
+        ay += 24;
+      }
+      // creator emergency brake on an open card
+      if (live && card.creator === me) {
+        this.btn(c, frame, { id: 'close', x: 122, y: Math.min(ay, 190), w: 140, h: 12 }, 'EARLY CLOSE', { dim: true });
+      }
+    }
+    this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
+    void art;
+  }
+
+  // verdict: black veil + gold coin rain (the rain is drawn over everything
+  // in draw()) — loser gets the REMATCH siren in flashing gold
+  // v10.1: verdict blocks are stacked BELOW the seals with clean 8px+ gaps —
+  // veil 118..194, winner line 126, near-miss 148, REMATCH 164..186 (BACK 198)
+  private drawVerdict(c: CanvasRenderingContext2D, frame: number, card: Challenge): void {
+    c.fillStyle = 'rgba(5,6,10,0.78)';
+    c.fillRect(0, 118, VW, 76);
+    const me = arenaAddress();
+    const won = card.winner !== null && card.winner === me;
+    const wname = card.players.find((p) => p.address === card.winner)?.name ?? '???';
+    if (won) {
+      drawTextSh(c, 'YOU WON THE POT', VW / 2, 126, 2, GOLD, 'center', GOLD_DK);
+      drawTextSh(c, fmtStake(card.pot) + ' $GONNA INCOMING', VW / 2, 148, 1, FLUO, 'center', '#0a3d00');
+    } else {
+      const myScore = card.players.find((p) => p.address === me)?.score ?? 0;
+      const winScore = card.players.find((p) => p.address === card.winner)?.score ?? 0;
+      const diff = Math.max(0, winScore - myScore);
+      drawTextSh(c, wname + ' TAKES IT', VW / 2, 126, 2, GOLD, 'center', GOLD_DK);
+      drawTextSh(c, 'YOU LOST BY ' + diff + ' POINTS - REMATCH?', VW / 2, 148, 1, RED, 'center');
+    }
+    // REMATCH — flashing gold (frame-blink border, never white)
+    const flash = (frame & 8) !== 0;
+    const r = { id: 'rematch', x: 112, y: 164, w: 160, h: 22 };
+    const lit = this.hots.length === this.focus;
+    this.hots.push(r);
+    c.fillStyle = flash ? '#241c08' : '#14100a';
+    c.fillRect(r.x, r.y, r.w, r.h);
+    c.strokeStyle = flash || lit ? GOLD : GOLD_DK;
+    c.lineWidth = flash ? 2 : 1;
+    c.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    drawTextSh(c, 'REMATCH', r.x + r.w / 2, r.y + 7, 1, flash ? '#fff3c4' : GOLD, 'center');
+  }
+
+  // ---------- CI / QA info ----------
+  get info(): {
+    screen: Screen;
+    step: WizardStep;
+    busy: boolean;
+    err: string;
+    cards: { id: number; stake: number; seats: string; status: string; falcon: boolean; visibility: Visibility }[];
+    cfg: ChallengeConfig;
+    shuffle: { active: boolean; t: number; target: number };
+    current: { id: number; status: string; players: number; winner: string | null; pot: number } | null;
+    verdict: boolean;
+    coins: number;
+    feed: string[];
+    hots: { id: string; x: number; y: number; w: number; h: number }[];
+  } {
+    return {
+      screen: this.screen,
+      step: this.step,
+      busy: this.busy,
+      err: this.errT > 0 ? this.err : '',
+      cards: this.cards.map((c) => ({
+        id: c.id,
+        stake: c.stake,
+        seats: c.players.length + '/' + c.seatsTotal,
+        status: c.status,
+        falcon: c.creatorType === 'falcon',
+        visibility: c.visibility,
+      })),
+      cfg: { ...this.cfg },
+      shuffle: { active: this.shuffleT >= 0, t: this.shuffleT, target: this.shuffleTarget },
+      current: this.current
+        ? { id: this.current.id, status: this.current.status, players: this.current.players.length, winner: this.current.winner, pot: this.current.pot }
+        : null,
+      verdict: this.verdict,
+      coins: this.coinRain.length,
+      feed: [...this.feedLines],
+      hots: this.hots.map((h) => ({ ...h })),
+    };
+  }
+}

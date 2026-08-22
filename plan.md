@@ -51,3 +51,53 @@ Design: /mnt/agents/output/GDD-THE-MINTING-THRONE-ROOM.md (approvato 6/6, 2026-0
 - STALE_ENTRIES += index-DDi_h0ej.js (v952)
 - Gauntlet PASS: boot + mint + zombie 404 + legit 200
 - Self-heal: index.html ha max-age=0 → bootstrap v953 → nuovo URL SW → installazione forzata → il player si sblocca con UN reload normale
+
+## Hotfix — v9.5.4 OPTIMISTIC BOOT ✅ (commit 2ea429e, version f093a8a)
+- Riscrittura bootstrap: modulo iniettato SUBITO (zero attese), worker armato in parallelo con FILENAME versionato dist/sw-v954.js (immune a cache browser + edge LiteSpeed), rescue reload singolo solo su onerror reale
+- QA: prima visita 944ms (1 auto-reload invisibile), visita di ritorno 634ms 1 load istantaneo, zombie 404 OK
+
+
+---
+
+# PROJECT QUANTUM FIGHT — THE ARENA (approvato dal Prince 2026-08-22, decisioni Silvio definitive)
+
+## Contesto
+- Algorand v5.0.0 attiva native Falcon-1024 PQ accounts su mainnet ~22-23 ago 2026 (90% threshold 15 ago + cooldown 208k round)
+- Falcon-1024: indirizzo 58 char da SHA512_256(domain||scheme||salt||pk); mnemonic 25 parole; Pera/AlgoKit/SDK support; fee resource-based (firma ~1280B, pk ~1793B → fee > 0.001 ALGO base)
+- AVM v12+: opcode falcon_verify (contratti verificano firme Falcon on-chain); AVM v13: contratti 16KB, box cross-app, SHA-512, Poseidon2
+- Consenso NON ancora PQ (2027) → marketing dice "quantum-secure accounts", mai "chain quantum-proof"
+
+## DECISIONI SILVIO (definitive)
+1. TESORO = account Falcon-1024 PURO (99% riceve: 5% vincite + 1 ALGO early-close; uscite rare e manuali)
+2. ESCROW = smart contract senza chiavi (program-controlled; nemmeno noi possiamo toccare i fondi)
+3. VERDETTI oracle firmati Falcon-1024, verificati on-chain con falcon_verify → "quantum referee"
+4. Fee engine: UI mostra network fee corretta per tipo account (Ed25519 vs Falcon) prima di firmare
+5. QUANTUM SEAL: badge ⚛️ sulle card create da account Falcon
+6. Testnet obbligatoria → mainnet solo dopo test personale del Prince
+
+## REGOLE DI GIOCO (blocco 1: CARD + BACHECA)
+- CREATE CARD: visibility PUBLIC(board)/PRIVATE(link-only) × formato DUEL(1 seat, primo arrivato)/OPEN TABLE(4/8/12 seats) × stage pick/random(shuffle animation)/FULL RUN × stake 10M/100M/1B/custom × NFT fighter se posseduto
+- Durata: 24h duello; tavolo 4h/12/24h. Scaduta senza partecipanti → claim creatore (keeper spazza dopo 7gg, permissionless)
+- Early-close (solo se 0 partecipanti): 1 ALGO al tesoro
+- Join atomico: doppio tentativo sullo stesso seat → tx2 fallisce senza muovere fondi (+tap "open identical")
+- PAY = PLAY: chi paga e non firma score entro chiusura → posta nel piatto
+- Join cutoff: ultimi 10 min prima di chiusura vietati
+- 2+ firme → vincitore tra firmatari (piatto − 5% tesoro; forfeit inclusi); pareggio perfetto → rimborsi zero fee
+- CATASTROPHE RULE: scadenza + 7gg senza verdetto → rimborso totale a tutti, zero fee, permissionless
+- Quit live: 45s rejoin window; quit-rate pubblico
+- Bacheca = UNA piazza sola: countdown Rumble in cima (dopo), card vive con seats/timer live, badge FILLING FAST/CLOSING SOON, feed live
+- Private card NON cliccabile in bacheca; feed annuncia solo "A PRIVATE DUEL HAS BEEN SEALED"
+- Copy inglese degen; mai lampi bianchi; mobile-first; sprite/stile esistenti
+
+## ROADMAP
+- BLOCCO 1 (ora): contratto escrow Puya + test (testnet) — poi UI CREATE CARD/BOARD/CARD DETAIL + wallet connect + fee engine
+- BLOCCO 2 (dopo): keeper autoclaim, oracle Falcon signer, seal on-chain
+- BLOCCO 3: chat Sovereign (gate ≥2B $GONNA o ≥1 NFT), Royal Rumble 21:00 auto, staking $GONNA + revenue share (DOPO parere legale)
+- BLOCCO 4: marketing QUANTUM FIGHT — "the first quantum-secure fight club on Algorand"
+
+## Note legali
+- Skill-based (stesso seed per tutti) ≠ gambling; prima del mainnet: parere avvocato gaming + T&C 18+ + geo/KYC sopra soglie
+- Staking/revenue share = possibile security → solo dopo parere legale
+
+## LOG QUANTUM FIGHT
+- 2026-08-22 — BLOCCO 1 contratto ✅: /contracts/quantum-arena/ (Puya, AVM v11, extra_program_pages=1), 33/33 test verdi (verificati di persona), artifact TEAL+ARC56. falcon_verify NON in puyapy 5.10 → oracle v1 ed25519verify_bare con swap point `_verify_oracle_sig` + ORACLE_SIG_SCHEME; v2 = redeploy immutabile con chiave Falcon 1793B. Box MBR 0.35 ALGO/challenge. Treasury deve fare opt-in $GONNA; bootstrap ≥0.2 ALGO post-deploy.

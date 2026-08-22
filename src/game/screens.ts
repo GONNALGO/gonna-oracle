@@ -31,6 +31,9 @@ export function mosaicBorder(ctx: CanvasRenderingContext2D): void {
 export const TITLE_FIGHTER_BTN = { x: VW - 96, y: 150, w: 88, h: 18 };
 export const TITLE_CONNECT_BTN = { x: VW - 192, y: 150, w: 88, h: 18 };
 export const TITLE_BOARD_BTN = { x: 8, y: 150, w: 56, h: 18 };
+// v10: THE ARENA entry — staking piazza, centered under the button row
+// (clears the controls lines at 172/184 and the bottom credits at 210)
+export const TITLE_ARENA_BTN = { x: VW / 2 - 70, y: 192, w: 140, h: 14 };
 export const TITLE_FIGHTER_LABEL_X = 72;
 export const TITLE_MASCOTS = [
   { x: 56, y: 58, w: 24, h: 20 },
@@ -89,6 +92,8 @@ export function drawTitle(
   drawTitleBtn(ctx, TITLE_BOARD_BTN, 'ARENA', t, '#7fd858', true);
   drawTitleBtn(ctx, TITLE_CONNECT_BTN, connectLabel || (touch ? 'CONNECT' : 'C CONNECT'), t, connectColor);
   drawTitleBtn(ctx, TITLE_FIGHTER_BTN, touch ? 'FIGHTER' : 'T FIGHTER', t);
+  // v10: THE ARENA — gold piazza entry under the button row (same on touch + desktop)
+  drawTitleBtn(ctx, TITLE_ARENA_BTN, 'THE ARENA', t, '#f5c542', true);
   // controls
   drawText(ctx, 'ARROWS/WASD MOVE  SPACE JUMP  C SPECIAL', VW / 2, 172, 1, '#8a8f9c', 'center');
   drawText(ctx, touch ? 'Z PUNCH  X KICK  P PAUSE  M MUTE' : 'Z PUNCH  X KICK  P PAUSE  M MUTE  L ARENA', VW / 2, 184, 1, '#8a8f9c', 'center');

@@ -24,7 +24,7 @@ import { drawTextSh, textWidth } from './font';
 import { Haptics, TouchControls } from './touch';
 import { computeFit } from './fit';
 import type { ViewFit } from './fit';
-import { CONTINUE_FIGHT_BTN, CONTINUE_SEAL_BTN, drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawSaveRecord, drawTitle, drawVictory, SAVE_MSG_RECT, TITLE_BOARD_BTN, TITLE_CONNECT_BTN, TITLE_FIGHTER_BTN, TITLE_MASCOTS, titleFighterLabelRect } from './screens';
+import { CONTINUE_FIGHT_BTN, CONTINUE_SEAL_BTN, drawClear, drawContinue, drawGameOver, drawIntro, drawMarketCap, drawSaveRecord, drawTitle, drawVictory, SAVE_MSG_RECT, TITLE_ARENA_BTN, TITLE_BOARD_BTN, TITLE_CONNECT_BTN, TITLE_FIGHTER_BTN, TITLE_MASCOTS, titleFighterLabelRect } from './screens';
 import type { SaveButton, Tally } from './screens';
 import * as wallet from './wallet';
 import { GateUI, FIGHTER_DISCONNECT_BTN } from './gateui';
@@ -40,8 +40,11 @@ import { SealMoment } from './sealanim';
 import * as share from './share';
 import { shareCheckRect, shareIconRect } from './shareicons';
 import { captureInstallPrompt, FsGuide } from './fsguide';
+// ---- v10: THE ARENA (staking piazza) ----
+import { ArenaUI } from './arena/arenaUI';
+import type { ArenaAction } from './arena/arenaUI';
 
-type Scene = 'title' | 'intro' | 'play' | 'mint' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter' | 'save' | 'board' | 'sealanim';
+type Scene = 'title' | 'intro' | 'play' | 'mint' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter' | 'save' | 'board' | 'sealanim' | 'arena';
 
 // v9.1: the run record waiting on the SAVE RECORD screen
 interface SaveRec {
@@ -142,6 +145,8 @@ export class Game implements GameCtx {
   private deaths = 0; // v9.2 note v2: lives lost this run
   private maxCombo = 0; // v9.2 note v2: best combo chain this run
   private guide = new FsGuide();
+  // ---- v10: THE ARENA ----
+  private arena = new ArenaUI();
   private sealBurst: { x: number; y: number; vx: number; vy: number; t: number; gold: boolean }[] = []; // SEAL-during-countdown pixel burst
   // v6.1: internal letterbox — canvas is full-bleed, game view fitted by transform
   fit: ViewFit = computeFit(VW, VH, 1, false, false);
@@ -259,7 +264,7 @@ export class Game implements GameCtx {
       }
       return false;
     }
-    if (s !== 'connect' && s !== 'gate' && s !== 'fighter' && s !== 'title' && s !== 'save' && s !== 'board') return false;
+    if (s !== 'connect' && s !== 'gate' && s !== 'fighter' && s !== 'title' && s !== 'save' && s !== 'board' && s !== 'arena') return false;
     if (s === 'title') {
       const hit = (b: { x: number; y: number; w: number; h: number }) => gx >= b.x && gx <= b.x + b.w && gy >= b.y && gy <= b.y + b.h;
       if (hit(TITLE_FIGHTER_BTN)) {
@@ -274,6 +279,10 @@ export class Game implements GameCtx {
         this.openBoard();
         return true;
       }
+      if (hit(TITLE_ARENA_BTN)) {
+        this.openArena();
+        return true;
+      }
       return false; // any other title tap stays "press start"
     }
     if (s === 'save') {
@@ -284,6 +293,11 @@ export class Game implements GameCtx {
       // v9.2.3: no inline preview anymore — taps go straight to the board UI
       // (VIEW CARD opens the fullscreen viewer; its DOM backdrop swallows taps)
       this.handleBoardAction(this.board.tap(gx, gy));
+      return true;
+    }
+    if (s === 'arena') {
+      // v10: THE ARENA owns every tap (canvas hotspots, no fall-through start)
+      this.handleArenaAction(this.arena.tap(gx, gy));
       return true;
     }
     this.handleGateAction(this.gate.tap(gx, gy));
@@ -450,6 +464,25 @@ export class Game implements GameCtx {
     this.setScene('board');
     this.board.open();
     this.audio.uiSelect();
+  }
+
+  // ---------- v10: THE ARENA ----------
+  private openArena(): void {
+    this.setScene('arena');
+    this.arena.open();
+    this.audio.uiSelect();
+  }
+
+  private handleArenaAction(a: ArenaAction): void {
+    if (a.act === 'move') this.audio.uiMove();
+    else if (a.act === 'title') {
+      this.setScene('title');
+      this.audio.uiSelect();
+      if (!this.titleTrack) {
+        this.titleTrack = true;
+        this.audio.playTrack('title');
+      }
+    }
   }
 
   private handleBoardAction(a: BoardAction): void {
@@ -1408,6 +1441,13 @@ export class Game implements GameCtx {
   debugOpenBoard(): void {
     this.openBoard();
   }
+  // ---- v10: THE ARENA debug (window.__gonna) ----
+  debugOpenArena(): void {
+    this.openArena();
+  }
+  get arenaInfo(): ArenaUI['info'] {
+    return this.arena.info;
+  }
 
   // CI: fighter-select / gate screen internals
   get gateInfo(): { scene: string; mode: string; cursor: number; rowCount: number; teaser: boolean; flashing: boolean; uiFighter: { skin: string; assetId: number | null; name: string } } {
@@ -1741,6 +1781,12 @@ export class Game implements GameCtx {
       case 'board': {
         this.sceneT++;
         this.handleBoardAction(this.board.key(inp));
+        break;
+      }
+      case 'arena': {
+        this.sceneT++;
+        this.arena.tick();
+        this.handleArenaAction(this.arena.key(inp));
         break;
       }
     }
@@ -2168,7 +2214,8 @@ export class Game implements GameCtx {
       s !== 'title' && s !== 'intro' && s !== 'victory' &&
       s !== 'connect' && s !== 'gate' && s !== 'fighter' && // v9
       s !== 'save' && s !== 'board' && // v9.1
-      s !== 'sealanim'; // v9.2
+      s !== 'sealanim' && // v9.2
+      s !== 'arena'; // v10
     const zoomed = f.zoom && inStage;
     this.vScale = zoomed ? f.zoomScale : f.fitScale;
     this.vOffX = zoomed ? 0 : f.fitOffX; // ZOOM centers the cropped window via cropX
@@ -2250,6 +2297,14 @@ export class Game implements GameCtx {
       c.save();
       this.fitView(true);
       this.board.draw(c, this.frame, this.frames, this.touchActive);
+      c.restore();
+      return;
+    }
+    // v10: THE ARENA (full-screen canvas scene, own hotspot UI)
+    if (this.scene === 'arena') {
+      c.save();
+      this.fitView(true);
+      this.arena.draw(c, this.frame, this.art, this.touchActive);
       c.restore();
       return;
     }
