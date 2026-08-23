@@ -683,7 +683,9 @@ export class ArenaUI {
       return { act: 'move' };
     }
     if (id === 'page:next') {
-      this.page = Math.min(Math.max(0, Math.ceil(this.cards.length / 3) - 1), this.page + 1);
+      // v14.3: clamp with the SAME pageSize the renderer uses (2 when MY OPEN CARDS eats a row)
+      const pageSize = this.mine.length > 0 ? 2 : 3;
+      this.page = Math.min(Math.max(0, Math.ceil(this.cards.length / pageSize) - 1), this.page + 1);
       return { act: 'move' };
     }
     if (id.startsWith('hist:')) {
