@@ -49,7 +49,7 @@ interface Hot {
   id: string;
 }
 
-type Screen = 'board' | 'create' | 'versus' | 'history' | 'legacy' | 'share' | 'notfound' | 'seal';
+type Screen = 'board' | 'create' | 'versus' | 'history' | 'histcard' | 'legacy' | 'share' | 'notfound' | 'seal';
 type WizardStep = 'visibility' | 'format' | 'battle' | 'stake' | 'fighter' | 'confirm';
 
 const STAGE_NAMES = ['GHETTO GONNA', 'PUMP HARBOR', 'WALL STREET', 'CONSENSUS', 'THE HOUSE', 'LAUNCHPAD', 'THRONE ROOM'];
@@ -103,11 +103,13 @@ export class ArenaUI {
   private errT = 0;
   // board
   private cards: Challenge[] = [];
+  private mine: Challenge[] = []; // v13: my open cards (creator or seated)
   private page = 0; // v10.3: paginated board (3 cards/page)
   private feedLines: string[] = [];
   private feedT = 0;
   // history + legacy
   private hist: HistoryEntry[] = [];
+  private histDetail: HistoryEntry | null = null; // v13: tappable history rows
   private histPage = 0;
   private legacy: LegacyStats | null = null;
   // share sheet (v10.4)
@@ -234,8 +236,14 @@ export class ArenaUI {
       this.cards = all
         .filter((c) => c.status === 'open' || c.status === 'full' || c.status === 'expired')
         .sort((x, y) => Number(claimable(y)) - Number(claimable(x)) || x.deadline - y.deadline);
+      // v13: MY OPEN CARDS strip (the "lost private card" fix) — everything
+      // live where I'm the creator OR seated, public and private alike
+      this.mine = me
+        ? all.filter((c) => (c.status === 'open' || c.status === 'full') && (c.creator === me || c.players.some((p) => p.address === me)))
+        : [];
     } catch {
       this.cards = [];
+      this.mine = [];
     }
     this.buildFeed();
   }
@@ -334,6 +342,12 @@ export class ArenaUI {
       this.current = null;
       void this.refreshBoard();
       void this.refreshHistory();
+      return { act: 'move' };
+    }
+    if (this.screen === 'histcard') {
+      this.histDetail = null;
+      this.screen = 'history';
+      this.focus = 0;
       return { act: 'move' };
     }
     if (this.screen === 'history' || this.screen === 'legacy' || this.screen === 'notfound') {
@@ -647,6 +661,28 @@ export class ArenaUI {
     if (id === 'page:next') {
       this.page = Math.min(Math.max(0, Math.ceil(this.cards.length / 3) - 1), this.page + 1);
       return { act: 'move' };
+    }
+    if (id.startsWith('hist:')) {
+      const h = this.hist[Number(id.slice(5))];
+      if (h) {
+        this.histDetail = h;
+        this.screen = 'histcard';
+        this.focus = 0;
+      }
+      return { act: 'move' };
+    }
+    if (id === 'hview') {
+      // v13: the on-chain box is deleted after payout — the proof lives on
+      // the explorer (resolve txid remembered by recordTxid)
+      const h = this.histDetail;
+      if (h) {
+        try {
+          const m = JSON.parse(window.localStorage.getItem('gonna.arena.txids') ?? '{}') as Record<string, string>;
+          const txid = m[String(h.id)];
+          if (txid) window.open('https://testnet.explorer.perawallet.app/tx/' + txid, '_blank');
+        } catch { /* no storage */ }
+      }
+      return { act: 'none' };
     }
     if (id === 'hpage:prev') {
       this.histPage = Math.max(0, this.histPage - 1);
@@ -1150,6 +1186,7 @@ export class ArenaUI {
     if (this.screen === 'board') this.drawBoard(c, frame);
     else if (this.screen === 'create') this.drawCreate(c, frame, art);
     else if (this.screen === 'history') this.drawHistory(c, frame);
+    else if (this.screen === 'histcard') this.drawHistCard(c, frame);
     else if (this.screen === 'legacy') this.drawLegacy(c, frame);
     else if (this.screen === 'share') this.drawShare(c, frame);
     else if (this.screen === 'seal') this.drawSeal(c, frame);
@@ -1264,18 +1301,35 @@ export class ArenaUI {
     const line = this.feedLines.length > 0 ? this.feedLines[0] : 'THE BOARD IS LISTENING';
     drawText(c, 'LIVE> ' + line, 10, 46, 1, FLUO);
 
+    // v13: MY OPEN CARDS — compact chips strip under the feed (mobile-first:
+    // zero extra screens, thumb-reachable, private cards included)
+    let TOP = 60;
+    if (this.mine.length > 0) {
+      drawText(c, 'MY OPEN CARDS:', 10, 58, 1, GOLD);
+      let cx = 10 + textWidth('MY OPEN CARDS:', 1) + 8;
+      const maxShow = 4;
+      for (let mi = 0; mi < Math.min(maxShow, this.mine.length); mi++) {
+        const mc = this.mine[mi];
+        const label = '#' + mc.id + (mc.visibility === 'private' ? '*' : '');
+        const cw = textWidth(label, 1) + 10;
+        this.btn(c, frame, { id: 'card:' + mc.id, x: cx, y: 56, w: cw, h: 12 }, label, { small: true, gold: true });
+        cx += cw + 6;
+      }
+      if (this.mine.length > maxShow) drawText(c, '+' + (this.mine.length - maxShow), cx, 58, 1, DIM);
+      TOP = 76;
+    }
     const ROW_H = 44;
-    const TOP = 60;
     const me = arenaAddress();
     const rows = this.cards;
     if (rows.length === 0) {
       drawTextSh(c, 'NO LIVE CARDS - POST THE FIRST ONE', VW / 2, 100, 1, GRAY, 'center');
     }
-    // v10.3: paginated — 3 cards per page
-    const pages = Math.max(1, Math.ceil(rows.length / 3));
+    // v10.3: paginated — 3 cards per page (2 when MY OPEN CARDS eats a row)
+    const pageSize = this.mine.length > 0 ? 2 : 3;
+    const pages = Math.max(1, Math.ceil(rows.length / pageSize));
     this.page = clamp(this.page, 0, pages - 1);
-    for (let i = 0; i < 3; i++) {
-      const ri = this.page * 3 + i;
+    for (let i = 0; i < pageSize; i++) {
+      const ri = this.page * pageSize + i;
       const card = rows[ri];
       if (!card) break;
       const y = TOP + i * ROW_H;
@@ -1674,7 +1728,13 @@ export class ArenaUI {
       // played yet does.
       const iOweScore = seated && myEntry !== null && myEntry.score === 0;
       let ay = 148;
-      if (live && !seated) {
+      if (live && !seated && card.creator === me) {
+        // v13 self-join guard: you cannot fight yourself (the contract would
+        // reject it anyway — seat 0 is already you)
+        drawTextSh(c, 'YOUR CARD, DEGEN', VW / 2, ay + 2, 1, GOLD, 'center', '#4a3005');
+        drawText(c, 'SHARE IT OR CLOSE IT', VW / 2, ay + 14, 1, GRAY, 'center');
+        ay += 26;
+      } else if (live && !seated) {
         drawText(c, 'NETWORK FEE: ' + feeLine('join', acct, testnet), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
         ay += 12;
         this.btn(c, frame, { id: 'accept', x: 92, y: ay, w: 200, h: 20 }, 'ACCEPT & STAKE ' + fmtStake(card.stake), { gold: true });
@@ -1689,7 +1749,11 @@ export class ArenaUI {
         ay += 24;
       } else if (live && seated) {
         // committed but nobody can resolve yet — wait it out (or shill it)
-        const waitLine = tableFull ? 'WAITING FOR SCORES...' : 'WAITING FOR A CHALLENGER...';
+        const waitLine = tableFull
+          ? 'WAITING FOR SCORES...'
+          : card.creator === me
+            ? 'YOUR CARD, DEGEN - SHARE IT OR CLOSE IT'
+            : 'WAITING FOR A CHALLENGER...';
         if ((frame & 16) !== 0) drawTextSh(c, waitLine, VW / 2, ay + 4, 1, FLUO, 'center', '#0a3d00');
         ay += 18;
       } else if (!testnet && card.status === 'resolved' && card.winner === me) {
@@ -1809,12 +1873,54 @@ export class ArenaUI {
       if (!h.claimed && (frame & 16) !== 0) drawText(c, 'UNCLAIMED', VW - 14, y + 4, 1, '#ff8a3c', 'right');
       const sub = (h.format === 'duel' ? 'DUEL' : 'OPEN ' + h.seats) + ' - ' + this.stageLabel(h.stageMode, h.stageIdx) + ' - ' + fmtAgo(h.resolvedAt);
       drawText(c, sub.slice(0, 40), 40, y + 15, 1, DIM);
+      // v13: history rows are tappable — tap opens the battle detail
+      this.hots.push({ id: 'hist:' + (this.histPage * 5 + i), x: 8, y, w: VW - 16, h: ROW_H - 4 });
     }
     // paging keys (same pattern as the BOARD)
     if (this.histPage > 0) this.btn(c, frame, { id: 'hpage:prev', x: 8, y: 198, w: 34, h: 14 }, '<', { small: true });
     if (this.histPage < pages - 1) this.btn(c, frame, { id: 'hpage:next', x: 50, y: 198, w: 34, h: 14 }, '>', { small: true });
     if (pages > 1) drawText(c, 'PAGE ' + (this.histPage + 1) + '/' + pages, 96, 202, 1, DIM);
     this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
+  }
+
+  // ---------- v13: battle detail (tappable history rows) -------------------
+  private drawHistCard(c: CanvasRenderingContext2D, frame: number): void {
+    const h = this.histDetail;
+    if (!h) { this.screen = 'history'; return; }
+    this.drawHeader(c, 'BATTLE #' + h.id, h.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN TABLE - ' + h.seats + ' SEATS');
+    let y = 44;
+    drawTextSh(c, h.winnerName + ' TOOK THE POT', VW / 2, y, 1, GOLD, 'center', '#4a3005');
+    y += 14;
+    // contenders + scores
+    for (const p of h.players.slice(0, 4)) {
+      const win = p.address === h.winner;
+      drawText(c, (p.name || 'DEGEN').slice(0, 16), 24, y, 1, win ? GOLD : '#c8ccd4');
+      drawText(c, String(p.score).padStart(7, '0'), VW - 24, y, 1, win ? GOLD : GRAY, 'right');
+      if (win) drawText(c, 'W', VW - 24 - textWidth('0000000', 1) - 10, y, 1, FLUO);
+      y += 12;
+    }
+    y += 6;
+    const fee = h.pot * (5 / 95); // pot paid = 95% of the pool
+    const lines: [string, string][] = [
+      ['STAGE', this.stageLabel(h.stageMode, h.stageIdx)],
+      ['STAKE', fmtStake(h.stake) + ' $GONNA A SEAT'],
+      ['POT', fmtStake(h.pot) + ' $GONNA'],
+      ['FEE', fmtStake(fee) + ' $GONNA (5%)'],
+      ['SETTLED', new Date(h.resolvedAt).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'],
+    ];
+    for (const [k, v] of lines) {
+      drawText(c, k, 24, y, 1, DIM);
+      drawText(c, v, VW - 24, y, 1, '#c8ccd4', 'right');
+      y += 12;
+    }
+    if (!h.claimed) drawText(c, 'POT STILL UNCLAIMED', VW / 2, y + 2, 1, '#ff8a3c', 'center');
+    // VIEW ON CHAIN only when we actually remember the resolve txid
+    let txid: string | null = null;
+    try {
+      txid = (JSON.parse(window.localStorage.getItem('gonna.arena.txids') ?? '{}') as Record<string, string>)[String(h.id)] ?? null;
+    } catch { /* no storage */ }
+    if (txid) this.btn(c, frame, { id: 'hview', x: 92, y: 176, w: 200, h: 16 }, 'VIEW ON CHAIN', { gold: true });
+    this.btn(c, frame, { id: 'back', x: 147, y: 198, w: 90, h: 14 }, 'BACK');
   }
 
   // ---------- MY LEGACY (v10.3) ----------
