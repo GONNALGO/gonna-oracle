@@ -40,10 +40,11 @@ ORACLE_SEED = bytes(range(32))
 
 STAKE = 1_000_000  # 1 $GONNA with 6 decimals
 DECIMALS = 6
-# v2 box MBR (both boxes, worst-case 13 players):
-#   meta 2500 + 2500*(9+148) = 395_000
-#   players 2500 + 2500*(9+717) = 1_817_500
-CHALLENGE_MBR = 2_212_500
+# v2 box MBR (both boxes, worst-case 13 players), real on-chain formula
+# 2500 + 400*(key+value) per box:
+#   meta 2500 + 400*(9+148) = 65_300
+#   players 2500 + 400*(9+717) = 292_900
+CHALLENGE_MBR = 358_200
 EARLY_CLOSE_FEE = 1_000_000  # 1 ALGO anti-spam fee
 SEAT_TTL = 3600
 T0 = 1_790_000_000  # fixed "now" for deterministic tests
@@ -114,6 +115,10 @@ class Env:
         self.joiners = [ctx.any.account() for _ in range(12)]
         self.outsider = ctx.any.account()
         self.gonna = ctx.any.asset(total=10**15, decimals=DECIMALS)
+        # Every test account holds $GONNA (opted in) by default; individual
+        # tests close opt-ins via opt_out() to exercise the FIX-1 redirect.
+        for acct in [self.treasury, self.creator, self.outsider, *self.joiners]:
+            ctx.ledger.update_asset_holdings(self.gonna, acct, balance=10**12)
 
         self.contract = QuantumArena()
         self.app_id = int(self.contract.__app_id__)
@@ -215,6 +220,11 @@ class Env:
 
     def early_close(self, who: Account, cid: int, fee: int = EARLY_CLOSE_FEE) -> None:
         self._as(who, self.contract.early_close, self.fee_pay(who, fee), UInt64(cid))
+
+    def opt_out(self, who: Account) -> None:
+        """Simulate an ASA close-out: `who` no longer holds $GONNA."""
+        who.data.opted_assets.pop(int(self.gonna.id), None)
+        assert not who.is_opted_in(self.gonna)
 
     def boxes_exist(self, cid: int) -> tuple[bool, bool]:
         """(meta box exists, players box exists)."""

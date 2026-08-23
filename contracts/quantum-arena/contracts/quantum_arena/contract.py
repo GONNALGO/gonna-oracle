@@ -90,14 +90,15 @@ MODE_STAGE_IDX = 1  # verdict binds a stage index
 MODE_RANDOM_RESOLVED = 2  # oracle reveals committed seed
 
 # Box minimum-balance requirement charged at CREATE (microAlgos), v2.
-# On-chain box MBR = 2500 + 2500 * (key_len + value_len) per box.
-#   meta box "m":    key 9, value 148              -> 2500 + 2500*157 =   395_000
-#   players box "p": key 9, value 2 + 13*55 = 717  -> 2500 + 2500*726 = 1_817_500
+# Real on-chain box MBR = 2500 + 400 * (key_len + value_len) per box
+# (2500 flat per box + 400 per byte of key+value).
+#   meta box "m":    key 9, value 148              -> 2500 + 400*157 =  65_300
+#   players box "p": key 9, value 2 + 13*55 = 717  -> 2500 + 400*726 = 292_900
 # (players box sized for the worst case: MAX_PLAYERS = 13 entries of
 # 55 bytes each; v2 entries grew by 8 bytes for seated_at, meta by 8
 # bytes for mbr_paid). The exact amount paid is recorded in the box
 # (mbr_paid) and returned in full on EVERY close path.
-CHALLENGE_MBR = 2_212_500
+CHALLENGE_MBR = 358_200
 # Minimum ALGO the app account must receive at bootstrap (asset opt-in MBR
 # 0.1 ALGO + headroom for inner txn fees via fee pooling is paid by callers).
 BOOTSTRAP_MIN = 200_000
@@ -227,6 +228,18 @@ def build_score_msg(app_id: UInt64, cid: UInt64, seat: UInt64, addr: Bytes, scor
 
 
 @subroutine
+def protocol_fee(amount: UInt64) -> UInt64:
+    """Exact floor(amount * FEE_BPS / BPS_BASE), overflow-safe for any uint64.
+
+    amount * FEE_BPS overflows uint64 for amount >= 2**64 / 500 (~3.7e16).
+    With amount = q*BPS_BASE + r the identity
+    floor(a*f/b) == q*f + floor(r*f/b) holds exactly (same rounding), and
+    every intermediate stays below 2**64 (q*f <= (2**64-1)/20, r*f < 5e6).
+    """
+    return (amount // BPS_BASE) * FEE_BPS + (amount % BPS_BASE) * FEE_BPS // BPS_BASE
+
+
+@subroutine
 def next_rumble_deadline(now: UInt64) -> UInt64:
     """Next 21:00 UTC; if it is less than 4h away, take the following day's.
 
@@ -267,6 +280,7 @@ class QuantumArena(ARC4Contract):
     @arc4.abimethod(create="require")
     def create(self, treasury: Bytes, oracle_pub_key: Bytes, gonna: Asset) -> None:
         """Deploy. `treasury` should be a Falcon-1024 (PQ) account address."""
+        assert_no_rekey_app_call()
         assert treasury.length == 32, "invalid treasury"
         assert oracle_pub_key.length == 32, "v1 oracle key must be ed25519 (32 bytes)"
         self.treasury.value = treasury
@@ -289,6 +303,14 @@ class QuantumArena(ARC4Contract):
         assert funding.sender == Txn.sender, "funding sender mismatch"
         assert funding.receiver == Global.current_application_address, "funding receiver"
         assert funding.amount >= BOOTSTRAP_MIN, "funding too small"
+
+        # Liveness gate: the treasury collects protocol fees and receives
+        # redirected unpayable balances; if it is not opted into $GONNA
+        # those axfers would fail on-chain. Verified once, here.
+        treasury_balance, treasury_opted = op.AssetHoldingGet.asset_balance(
+            Account(self.treasury.value), Asset(self.gonna_asset_id.value)
+        )
+        assert treasury_opted, "treasury not opted into $GONNA"
 
         self.bootstrapped.value = True
         itxn.AssetTransfer(
@@ -727,12 +749,7 @@ class QuantumArena(ARC4Contract):
             # forfeits are refunded too (simplest anti-dispute rule).
             for i in urange(n):
                 entry = roster[i].copy()
-                itxn.AssetTransfer(
-                    xfer_asset=Asset(self.gonna_asset_id.value),
-                    asset_amount=meta.stake,
-                    asset_receiver=Account(entry.addr),
-                    fee=UInt64(0),
-                ).submit()
+                self._pay_gonna(entry.addr, meta.stake)
             itxn.Payment(
                 receiver=creator,
                 amount=mbr_paid,
@@ -751,14 +768,9 @@ class QuantumArena(ARC4Contract):
             )
             return Bytes(b"")
         else:
-            fee = pot * FEE_BPS // BPS_BASE
+            fee = protocol_fee(pot)
             payout = pot - fee
-            itxn.AssetTransfer(
-                xfer_asset=Asset(self.gonna_asset_id.value),
-                asset_amount=payout,
-                asset_receiver=Account(winner),
-                fee=UInt64(0),
-            ).submit()
+            self._pay_gonna(winner, payout)
             if fee > 0:
                 itxn.AssetTransfer(
                     xfer_asset=Asset(self.gonna_asset_id.value),
@@ -851,7 +863,7 @@ class QuantumArena(ARC4Contract):
         ), "seat clock not expired"
 
         # --- effects BEFORE any inner transaction (checks-effects)
-        fee = meta.stake * FEE_BPS // BPS_BASE  # 5% of the forfeited stake
+        fee = protocol_fee(meta.stake)  # 5% of the forfeited stake
         winner_share = meta.stake - fee
         own_stake = meta.stake
         mbr_paid = meta.mbr_paid
@@ -862,18 +874,8 @@ class QuantumArena(ARC4Contract):
         del self.players[challenge_id]
 
         # --- interactions
-        itxn.AssetTransfer(  # caller's own signed stake, back in full
-            xfer_asset=Asset(self.gonna_asset_id.value),
-            asset_amount=own_stake,
-            asset_receiver=Account(winner_addr),
-            fee=UInt64(0),
-        ).submit()
-        itxn.AssetTransfer(  # 95% of the forfeited stake
-            xfer_asset=Asset(self.gonna_asset_id.value),
-            asset_amount=winner_share,
-            asset_receiver=Account(winner_addr),
-            fee=UInt64(0),
-        ).submit()
+        self._pay_gonna(winner_addr, own_stake)  # caller's own stake, in full
+        self._pay_gonna(winner_addr, winner_share)  # 95% of the forfeited stake
         if fee > 0:
             itxn.AssetTransfer(
                 xfer_asset=Asset(self.gonna_asset_id.value),
@@ -952,6 +954,35 @@ class QuantumArena(ARC4Contract):
         return op.ed25519verify_bare(msg, sig, self.oracle_pub_key.value)
 
     @subroutine
+    def _gonna_dest(self, addr: Bytes) -> Bytes:
+        """Where a $GONNA payment to `addr` can actually land (FIX-1).
+
+        On-chain, an axfer to an account that closed its ASA opt-in fails
+        the WHOLE group — that would lock the escrow forever on any close
+        path. If `addr` does not currently hold $GONNA, the amount is
+        redirected to the treasury instead (documented behavior: unpayable
+        balances go to the treasury). No close path can ever fail because
+        of receiver state.
+        """
+        holding_balance, opted = op.AssetHoldingGet.asset_balance(
+            Account(addr), Asset(self.gonna_asset_id.value)
+        )
+        if opted:
+            return addr
+        return self.treasury.value
+
+    @subroutine
+    def _pay_gonna(self, addr: Bytes, amount: UInt64) -> None:
+        """Send `amount` of $GONNA to `addr`, or to the treasury if `addr`
+        is not opted in (see _gonna_dest)."""
+        itxn.AssetTransfer(
+            xfer_asset=Asset(self.gonna_asset_id.value),
+            asset_amount=amount,
+            asset_receiver=Account(self._gonna_dest(addr)),
+            fee=UInt64(0),
+        ).submit()
+
+    @subroutine
     def _refund_all(
         self,
         challenge_id: UInt64,
@@ -974,12 +1005,7 @@ class QuantumArena(ARC4Contract):
         # --- interactions
         for i in urange(roster.length):
             entry = roster[i].copy()
-            itxn.AssetTransfer(
-                xfer_asset=Asset(self.gonna_asset_id.value),
-                asset_amount=meta.stake,
-                asset_receiver=Account(entry.addr),
-                fee=UInt64(0),
-            ).submit()
+            self._pay_gonna(entry.addr, meta.stake)
         itxn.Payment(
             receiver=creator,
             amount=mbr_paid,

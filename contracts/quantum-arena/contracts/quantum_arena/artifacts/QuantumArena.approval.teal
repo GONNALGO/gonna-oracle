@@ -3,9 +3,9 @@
 
 // algopy.arc4.ARC4Contract.approval_program() -> uint64:
 main:
-    intcblock 0 1 2 8 86400 2212500 1000000 604800
-    bytecblock "gonna_asset_id" 0x6d 0x70 "treasury" "bootstrapped" "next_challenge_id" 0x0020 "oracle_pub_key" 0x0000 0x151f7c75 0x0002 0x004e 0xfb745950 0x0013000000000000000000 0xae488dc6 0x0bfda53a
-    // contracts/quantum_arena/contract.py:250
+    intcblock 0 1 2 8 86400 10000 358200 1000000 604800
+    bytecblock 0x6d 0x70 "gonna_asset_id" "treasury" "bootstrapped" "next_challenge_id" 0x0020 "oracle_pub_key" 0x0000 0x151f7c75 0x0002 0x004e 0xfb745950 0x0013000000000000000000 0xae488dc6 0x0bfda53a
+    // contracts/quantum_arena/contract.py:263
     // class QuantumArena(ARC4Contract):
     txn OnCompletion
     !
@@ -18,7 +18,7 @@ main:
     err
 
 main_create_NoOp@17:
-    // contracts/quantum_arena/contract.py:250
+    // contracts/quantum_arena/contract.py:263
     // class QuantumArena(ARC4Contract):
     pushbytes 0xaf719764 // method "create(byte[],byte[],uint64)void"
     txna ApplicationArgs 0
@@ -156,7 +156,7 @@ dynamic_array_concat_dynamic_element_after_for@8:
 
 // contracts.quantum_arena.contract.assert_no_rekey_app_call() -> void:
 assert_no_rekey_app_call:
-    // contracts/quantum_arena/contract.py:194-195
+    // contracts/quantum_arena/contract.py:195-196
     // # The app-call itself must not rekey the caller's account.
     // assert Txn.rekey_to == Global.zero_address, "app call rekey forbidden"
     txn RekeyTo
@@ -168,18 +168,18 @@ assert_no_rekey_app_call:
 
 // contracts.quantum_arena.contract.assert_clean_payment(pay: uint64) -> void:
 assert_clean_payment:
-    // contracts/quantum_arena/contract.py:198-199
+    // contracts/quantum_arena/contract.py:199-200
     // @subroutine
     // def assert_clean_payment(pay: gtxn.PaymentTransaction) -> None:
     proto 1 0
-    // contracts/quantum_arena/contract.py:200
+    // contracts/quantum_arena/contract.py:201
     // assert pay.rekey_to == Global.zero_address, "payment rekey forbidden"
     frame_dig -1
     gtxns RekeyTo
     global ZeroAddress
     ==
     assert // payment rekey forbidden
-    // contracts/quantum_arena/contract.py:201
+    // contracts/quantum_arena/contract.py:202
     // assert pay.close_remainder_to == Global.zero_address, "payment close-out forbidden"
     frame_dig -1
     gtxns CloseRemainderTo
@@ -191,25 +191,25 @@ assert_clean_payment:
 
 // contracts.quantum_arena.contract.assert_clean_axfer(axfer: uint64) -> void:
 assert_clean_axfer:
-    // contracts/quantum_arena/contract.py:204-205
+    // contracts/quantum_arena/contract.py:205-206
     // @subroutine
     // def assert_clean_axfer(axfer: gtxn.AssetTransferTransaction) -> None:
     proto 1 0
-    // contracts/quantum_arena/contract.py:206
+    // contracts/quantum_arena/contract.py:207
     // assert axfer.rekey_to == Global.zero_address, "axfer rekey forbidden"
     frame_dig -1
     gtxns RekeyTo
     global ZeroAddress
     ==
     assert // axfer rekey forbidden
-    // contracts/quantum_arena/contract.py:207
+    // contracts/quantum_arena/contract.py:208
     // assert axfer.asset_close_to == Global.zero_address, "axfer close-out forbidden"
     frame_dig -1
     gtxns AssetCloseTo
     global ZeroAddress
     ==
     assert // axfer close-out forbidden
-    // contracts/quantum_arena/contract.py:208
+    // contracts/quantum_arena/contract.py:209
     // assert axfer.asset_sender == Global.zero_address, "clawback axfer forbidden"
     frame_dig -1
     gtxns AssetSender
@@ -221,11 +221,11 @@ assert_clean_axfer:
 
 // contracts.quantum_arena.contract.seat_byte(seat: uint64) -> bytes:
 seat_byte:
-    // contracts/quantum_arena/contract.py:211-212
+    // contracts/quantum_arena/contract.py:212-213
     // @subroutine
     // def seat_byte(seat: UInt64) -> Bytes:
     proto 1 1
-    // contracts/quantum_arena/contract.py:213-214
+    // contracts/quantum_arena/contract.py:214-215
     // # seats <= 12 so a single big-endian byte is enough
     // return arc4.UInt8(seat).bytes
     frame_dig -1
@@ -241,42 +241,42 @@ seat_byte:
 
 // contracts.quantum_arena.contract.build_score_msg(app_id: uint64, cid: uint64, seat: uint64, addr: bytes, score: uint64) -> bytes:
 build_score_msg:
-    // contracts/quantum_arena/contract.py:217-218
+    // contracts/quantum_arena/contract.py:218-219
     // @subroutine
     // def build_score_msg(app_id: UInt64, cid: UInt64, seat: UInt64, addr: Bytes, score: UInt64) -> Bytes:
     proto 5 1
-    // contracts/quantum_arena/contract.py:221
+    // contracts/quantum_arena/contract.py:222
     // + op.itob(app_id)
     frame_dig -5
     itob
-    // contracts/quantum_arena/contract.py:220
+    // contracts/quantum_arena/contract.py:221
     // Bytes(SCORE_DOMAIN)
     pushbytes 0x51412d53434f52457c
-    // contracts/quantum_arena/contract.py:220-221
+    // contracts/quantum_arena/contract.py:221-222
     // Bytes(SCORE_DOMAIN)
     // + op.itob(app_id)
     swap
     concat
-    // contracts/quantum_arena/contract.py:222
+    // contracts/quantum_arena/contract.py:223
     // + op.itob(cid)
     frame_dig -4
     itob
-    // contracts/quantum_arena/contract.py:220-222
+    // contracts/quantum_arena/contract.py:221-223
     // Bytes(SCORE_DOMAIN)
     // + op.itob(app_id)
     // + op.itob(cid)
     concat
-    // contracts/quantum_arena/contract.py:223
+    // contracts/quantum_arena/contract.py:224
     // + seat_byte(seat)
     frame_dig -3
     callsub seat_byte
-    // contracts/quantum_arena/contract.py:220-223
+    // contracts/quantum_arena/contract.py:221-224
     // Bytes(SCORE_DOMAIN)
     // + op.itob(app_id)
     // + op.itob(cid)
     // + seat_byte(seat)
     concat
-    // contracts/quantum_arena/contract.py:220-224
+    // contracts/quantum_arena/contract.py:221-225
     // Bytes(SCORE_DOMAIN)
     // + op.itob(app_id)
     // + op.itob(cid)
@@ -284,11 +284,11 @@ build_score_msg:
     // + addr
     frame_dig -2
     concat
-    // contracts/quantum_arena/contract.py:225
+    // contracts/quantum_arena/contract.py:226
     // + op.itob(score)
     frame_dig -1
     itob
-    // contracts/quantum_arena/contract.py:220-225
+    // contracts/quantum_arena/contract.py:221-226
     // Bytes(SCORE_DOMAIN)
     // + op.itob(app_id)
     // + op.itob(cid)
@@ -296,7 +296,7 @@ build_score_msg:
     // + addr
     // + op.itob(score)
     concat
-    // contracts/quantum_arena/contract.py:219-226
+    // contracts/quantum_arena/contract.py:220-227
     // return (
     //     Bytes(SCORE_DOMAIN)
     //     + op.itob(app_id)
@@ -308,9 +308,33 @@ build_score_msg:
     retsub
 
 
+// contracts.quantum_arena.contract.protocol_fee(amount: uint64) -> uint64:
+protocol_fee:
+    // contracts/quantum_arena/contract.py:230-231
+    // @subroutine
+    // def protocol_fee(amount: UInt64) -> UInt64:
+    proto 1 1
+    // contracts/quantum_arena/contract.py:239
+    // return (amount // BPS_BASE) * FEE_BPS + (amount % BPS_BASE) * FEE_BPS // BPS_BASE
+    frame_dig -1
+    intc 5 // 10000
+    /
+    pushint 500
+    *
+    frame_dig -1
+    intc 5 // 10000
+    %
+    pushint 500
+    *
+    intc 5 // 10000
+    /
+    +
+    retsub
+
+
 // contracts.quantum_arena.contract.QuantumArena.create[routing]() -> void:
 create:
-    // contracts/quantum_arena/contract.py:267
+    // contracts/quantum_arena/contract.py:280
     // @arc4.abimethod(create="require")
     txna ApplicationArgs 1
     dup
@@ -341,51 +365,54 @@ create:
     ==
     assert // invalid number of bytes for arc4.uint64
     btoi
-    // contracts/quantum_arena/contract.py:270
+    // contracts/quantum_arena/contract.py:283
+    // assert_no_rekey_app_call()
+    callsub assert_no_rekey_app_call
+    // contracts/quantum_arena/contract.py:284
     // assert treasury.length == 32, "invalid treasury"
     dig 2
     len
     pushint 32
     ==
     assert // invalid treasury
-    // contracts/quantum_arena/contract.py:271
+    // contracts/quantum_arena/contract.py:285
     // assert oracle_pub_key.length == 32, "v1 oracle key must be ed25519 (32 bytes)"
     dig 1
     len
     pushint 32
     ==
     assert // v1 oracle key must be ed25519 (32 bytes)
-    // contracts/quantum_arena/contract.py:272
+    // contracts/quantum_arena/contract.py:286
     // self.treasury.value = treasury
     bytec_3 // "treasury"
     uncover 3
     app_global_put
-    // contracts/quantum_arena/contract.py:273
+    // contracts/quantum_arena/contract.py:287
     // self.oracle_pub_key.value = oracle_pub_key
     bytec 7 // "oracle_pub_key"
     uncover 2
     app_global_put
-    // contracts/quantum_arena/contract.py:274
+    // contracts/quantum_arena/contract.py:288
     // self.gonna_asset_id.value = gonna.id
-    bytec_0 // "gonna_asset_id"
+    bytec_2 // "gonna_asset_id"
     swap
     app_global_put
-    // contracts/quantum_arena/contract.py:275
+    // contracts/quantum_arena/contract.py:289
     // self.bootstrapped.value = False
     bytec 4 // "bootstrapped"
     intc_0 // 0
     app_global_put
-    // contracts/quantum_arena/contract.py:276
+    // contracts/quantum_arena/contract.py:290
     // self.next_challenge_id.value = UInt64(0)
     bytec 5 // "next_challenge_id"
     intc_0 // 0
     app_global_put
-    // contracts/quantum_arena/contract.py:277
+    // contracts/quantum_arena/contract.py:291
     // self.version.value = UInt64(VERSION)
     pushbytes "version"
     intc_2 // 2
     app_global_put
-    // contracts/quantum_arena/contract.py:267
+    // contracts/quantum_arena/contract.py:280
     // @arc4.abimethod(create="require")
     intc_1 // 1
     return
@@ -393,7 +420,7 @@ create:
 
 // contracts.quantum_arena.contract.QuantumArena.bootstrap[routing]() -> void:
 bootstrap:
-    // contracts/quantum_arena/contract.py:279
+    // contracts/quantum_arena/contract.py:293
     // @arc4.abimethod
     txn GroupIndex
     intc_1 // 1
@@ -403,10 +430,10 @@ bootstrap:
     intc_1 // pay
     ==
     assert // transaction type is pay
-    // contracts/quantum_arena/contract.py:286
+    // contracts/quantum_arena/contract.py:300
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:287
+    // contracts/quantum_arena/contract.py:301
     // assert not self.bootstrapped.value, "already bootstrapped"
     intc_0 // 0
     bytec 4 // "bootstrapped"
@@ -414,36 +441,63 @@ bootstrap:
     assert // check self.bootstrapped exists
     !
     assert // already bootstrapped
-    // contracts/quantum_arena/contract.py:288
+    // contracts/quantum_arena/contract.py:302
     // assert_clean_payment(funding)
     dup
     callsub assert_clean_payment
-    // contracts/quantum_arena/contract.py:289
+    // contracts/quantum_arena/contract.py:303
     // assert funding.sender == Txn.sender, "funding sender mismatch"
     dup
     gtxns Sender
     txn Sender
     ==
     assert // funding sender mismatch
-    // contracts/quantum_arena/contract.py:290
+    // contracts/quantum_arena/contract.py:304
     // assert funding.receiver == Global.current_application_address, "funding receiver"
     dup
     gtxns Receiver
     global CurrentApplicationAddress
     ==
     assert // funding receiver
-    // contracts/quantum_arena/contract.py:291
+    // contracts/quantum_arena/contract.py:305
     // assert funding.amount >= BOOTSTRAP_MIN, "funding too small"
     gtxns Amount
     pushint 200000
     >=
     assert // funding too small
-    // contracts/quantum_arena/contract.py:293
+    // contracts/quantum_arena/contract.py:311
+    // Account(self.treasury.value), Asset(self.gonna_asset_id.value)
+    intc_0 // 0
+    bytec_3 // "treasury"
+    app_global_get_ex
+    assert // check self.treasury exists
+    dup
+    len
+    pushint 32
+    ==
+    assert // Address length is 32 bytes
+    intc_0 // 0
+    bytec_2 // "gonna_asset_id"
+    app_global_get_ex
+    assert // check self.gonna_asset_id exists
+    // contracts/quantum_arena/contract.py:307-312
+    // # Liveness gate: the treasury collects protocol fees and receives
+    // # redirected unpayable balances; if it is not opted into $GONNA
+    // # those axfers would fail on-chain. Verified once, here.
+    // treasury_balance, treasury_opted = op.AssetHoldingGet.asset_balance(
+    //     Account(self.treasury.value), Asset(self.gonna_asset_id.value)
+    // )
+    asset_holding_get AssetBalance
+    bury 1
+    // contracts/quantum_arena/contract.py:313
+    // assert treasury_opted, "treasury not opted into $GONNA"
+    assert // treasury not opted into $GONNA
+    // contracts/quantum_arena/contract.py:315
     // self.bootstrapped.value = True
     bytec 4 // "bootstrapped"
     intc_1 // 1
     app_global_put
-    // contracts/quantum_arena/contract.py:294-299
+    // contracts/quantum_arena/contract.py:316-321
     // itxn.AssetTransfer(
     //     xfer_asset=Asset(self.gonna_asset_id.value),
     //     asset_amount=UInt64(0),
@@ -451,30 +505,30 @@ bootstrap:
     //     fee=UInt64(0),  # fee pooling: covered by the outer group
     // ).submit()
     itxn_begin
-    // contracts/quantum_arena/contract.py:295
+    // contracts/quantum_arena/contract.py:317
     // xfer_asset=Asset(self.gonna_asset_id.value),
     intc_0 // 0
-    bytec_0 // "gonna_asset_id"
+    bytec_2 // "gonna_asset_id"
     app_global_get_ex
     assert // check self.gonna_asset_id exists
-    // contracts/quantum_arena/contract.py:297
+    // contracts/quantum_arena/contract.py:319
     // asset_receiver=Global.current_application_address,
     global CurrentApplicationAddress
     itxn_field AssetReceiver
-    // contracts/quantum_arena/contract.py:296
+    // contracts/quantum_arena/contract.py:318
     // asset_amount=UInt64(0),
     intc_0 // 0
     itxn_field AssetAmount
     itxn_field XferAsset
-    // contracts/quantum_arena/contract.py:294
+    // contracts/quantum_arena/contract.py:316
     // itxn.AssetTransfer(
     pushint 4 // axfer
     itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:298
+    // contracts/quantum_arena/contract.py:320
     // fee=UInt64(0),  # fee pooling: covered by the outer group
     intc_0 // 0
     itxn_field Fee
-    // contracts/quantum_arena/contract.py:294-299
+    // contracts/quantum_arena/contract.py:316-321
     // itxn.AssetTransfer(
     //     xfer_asset=Asset(self.gonna_asset_id.value),
     //     asset_amount=UInt64(0),
@@ -482,7 +536,7 @@ bootstrap:
     //     fee=UInt64(0),  # fee pooling: covered by the outer group
     // ).submit()
     itxn_submit
-    // contracts/quantum_arena/contract.py:279
+    // contracts/quantum_arena/contract.py:293
     // @arc4.abimethod
     intc_1 // 1
     return
@@ -490,7 +544,7 @@ bootstrap:
 
 // contracts.quantum_arena.contract.QuantumArena.create_challenge[routing]() -> void:
 create_challenge:
-    // contracts/quantum_arena/contract.py:303
+    // contracts/quantum_arena/contract.py:325
     // @arc4.abimethod
     txn GroupIndex
     intc_2 // 2
@@ -577,60 +631,60 @@ create_challenge:
     assert // invalid number of bytes for arc4.dynamic_array<arc4.uint8>
     extract 2 0
     cover 6
-    // contracts/quantum_arena/contract.py:320
+    // contracts/quantum_arena/contract.py:342
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:321
+    // contracts/quantum_arena/contract.py:343
     // assert self.bootstrapped.value, "app not bootstrapped"
     intc_0 // 0
     bytec 4 // "bootstrapped"
     app_global_get_ex
     assert // check self.bootstrapped exists
     assert // app not bootstrapped
-    // contracts/quantum_arena/contract.py:323-324
+    // contracts/quantum_arena/contract.py:345-346
     // # --- parameter validation
     // assert stake > 0, "stake must be positive"
     swap
     assert // stake must be positive
-    // contracts/quantum_arena/contract.py:326
+    // contracts/quantum_arena/contract.py:348
     // seats_total == SEATS_DUEL
     intc_1 // 1
     ==
     dup
-    // contracts/quantum_arena/contract.py:326-329
+    // contracts/quantum_arena/contract.py:348-351
     // seats_total == SEATS_DUEL
     // or seats_total == SEATS_SMALL
     // or seats_total == SEATS_MEDIUM
     // or seats_total == SEATS_LARGE
     bnz create_challenge_bool_true@5
-    // contracts/quantum_arena/contract.py:327
+    // contracts/quantum_arena/contract.py:349
     // or seats_total == SEATS_SMALL
     dig 4
     pushint 4
     ==
-    // contracts/quantum_arena/contract.py:326-329
+    // contracts/quantum_arena/contract.py:348-351
     // seats_total == SEATS_DUEL
     // or seats_total == SEATS_SMALL
     // or seats_total == SEATS_MEDIUM
     // or seats_total == SEATS_LARGE
     bnz create_challenge_bool_true@5
-    // contracts/quantum_arena/contract.py:328
+    // contracts/quantum_arena/contract.py:350
     // or seats_total == SEATS_MEDIUM
     dig 4
     intc_3 // 8
     ==
-    // contracts/quantum_arena/contract.py:326-329
+    // contracts/quantum_arena/contract.py:348-351
     // seats_total == SEATS_DUEL
     // or seats_total == SEATS_SMALL
     // or seats_total == SEATS_MEDIUM
     // or seats_total == SEATS_LARGE
     bnz create_challenge_bool_true@5
-    // contracts/quantum_arena/contract.py:329
+    // contracts/quantum_arena/contract.py:351
     // or seats_total == SEATS_LARGE
     dig 4
     pushint 12
     ==
-    // contracts/quantum_arena/contract.py:326-329
+    // contracts/quantum_arena/contract.py:348-351
     // seats_total == SEATS_DUEL
     // or seats_total == SEATS_SMALL
     // or seats_total == SEATS_MEDIUM
@@ -641,7 +695,7 @@ create_challenge_bool_true@5:
     intc_1 // 1
 
 create_challenge_bool_merge@7:
-    // contracts/quantum_arena/contract.py:325-330
+    // contracts/quantum_arena/contract.py:347-352
     // assert (
     //     seats_total == SEATS_DUEL
     //     or seats_total == SEATS_SMALL
@@ -649,10 +703,10 @@ create_challenge_bool_merge@7:
     //     or seats_total == SEATS_LARGE
     // ), "invalid seats"
     assert // invalid seats
-    // contracts/quantum_arena/contract.py:331
+    // contracts/quantum_arena/contract.py:353
     // if seats_total == SEATS_DUEL:
     bz create_challenge_else_body@9
-    // contracts/quantum_arena/contract.py:332-333
+    // contracts/quantum_arena/contract.py:354-355
     // # duels are always 24h
     // assert duration_secs == DUEL_DURATION, "duel duration must be 24h"
     dig 2
@@ -661,14 +715,14 @@ create_challenge_bool_merge@7:
     assert // duel duration must be 24h
 
 create_challenge_after_if_else@15:
-    // contracts/quantum_arena/contract.py:340
+    // contracts/quantum_arena/contract.py:362
     // assert stage_mode <= MODE_RANDOM_RESOLVED, "invalid stage mode"
     swap
     dup
     intc_2 // 2
     <=
     assert // invalid stage mode
-    // contracts/quantum_arena/contract.py:341
+    // contracts/quantum_arena/contract.py:363
     // assert seed_commitment.length == 32, "seed commitment must be 32 bytes"
     dig 1
     len
@@ -676,56 +730,56 @@ create_challenge_after_if_else@15:
     pushint 32
     ==
     assert // seed commitment must be 32 bytes
-    // contracts/quantum_arena/contract.py:343-344
+    // contracts/quantum_arena/contract.py:365-366
     // # --- atomic funding validation (checks before effects)
     // assert_clean_payment(mbr_payment)
     uncover 9
     dup
     callsub assert_clean_payment
-    // contracts/quantum_arena/contract.py:345
+    // contracts/quantum_arena/contract.py:367
     // assert mbr_payment.sender == Txn.sender, "mbr sender mismatch"
     dup
     gtxns Sender
     txn Sender
     ==
     assert // mbr sender mismatch
-    // contracts/quantum_arena/contract.py:346
+    // contracts/quantum_arena/contract.py:368
     // assert mbr_payment.receiver == Global.current_application_address, "mbr receiver"
     dup
     gtxns Receiver
     global CurrentApplicationAddress
     ==
     assert // mbr receiver
-    // contracts/quantum_arena/contract.py:347
+    // contracts/quantum_arena/contract.py:369
     // assert mbr_payment.amount >= CHALLENGE_MBR, "mbr too small"
     gtxns Amount
     dup
-    intc 5 // 2212500
+    intc 6 // 358200
     >=
     assert // mbr too small
-    // contracts/quantum_arena/contract.py:349
+    // contracts/quantum_arena/contract.py:371
     // assert_clean_axfer(stake_payment)
     uncover 9
     dup
     callsub assert_clean_axfer
-    // contracts/quantum_arena/contract.py:350
+    // contracts/quantum_arena/contract.py:372
     // assert stake_payment.sender == Txn.sender, "stake sender mismatch"
     dup
     gtxns Sender
     txn Sender
     ==
     assert // stake sender mismatch
-    // contracts/quantum_arena/contract.py:351
+    // contracts/quantum_arena/contract.py:373
     // assert stake_payment.xfer_asset.id == self.gonna_asset_id.value, "wrong asset"
     dup
     gtxns XferAsset
     intc_0 // 0
-    bytec_0 // "gonna_asset_id"
+    bytec_2 // "gonna_asset_id"
     app_global_get_ex
     assert // check self.gonna_asset_id exists
     ==
     assert // wrong asset
-    // contracts/quantum_arena/contract.py:352
+    // contracts/quantum_arena/contract.py:374
     // assert stake_payment.asset_amount == stake, "stake amount mismatch"
     dup
     gtxns AssetAmount
@@ -734,29 +788,29 @@ create_challenge_after_if_else@15:
     cover 3
     ==
     assert // stake amount mismatch
-    // contracts/quantum_arena/contract.py:354
+    // contracts/quantum_arena/contract.py:376
     // stake_payment.asset_receiver == Global.current_application_address
     gtxns AssetReceiver
     global CurrentApplicationAddress
     ==
-    // contracts/quantum_arena/contract.py:353-355
+    // contracts/quantum_arena/contract.py:375-377
     // assert (
     //     stake_payment.asset_receiver == Global.current_application_address
     // ), "stake receiver"
     assert // stake receiver
-    // contracts/quantum_arena/contract.py:357
+    // contracts/quantum_arena/contract.py:379
     // cid = self.next_challenge_id.value
     intc_0 // 0
     bytec 5 // "next_challenge_id"
     app_global_get_ex
     assert // check self.next_challenge_id exists
-    // contracts/quantum_arena/contract.py:365
+    // contracts/quantum_arena/contract.py:387
     // Txn.sender.bytes,
     txn Sender
-    // contracts/quantum_arena/contract.py:362
+    // contracts/quantum_arena/contract.py:384
     // Global.current_application_id.id,
     global CurrentApplicationID
-    // contracts/quantum_arena/contract.py:361-367
+    // contracts/quantum_arena/contract.py:383-389
     // build_score_msg(
     //     Global.current_application_id.id,
     //     cid,
@@ -765,10 +819,10 @@ create_challenge_after_if_else@15:
     //     creator_score,
     // ),
     dig 2
-    // contracts/quantum_arena/contract.py:364
+    // contracts/quantum_arena/contract.py:386
     // UInt64(0),
     intc_0 // 0
-    // contracts/quantum_arena/contract.py:361-367
+    // contracts/quantum_arena/contract.py:383-389
     // build_score_msg(
     //     Global.current_application_id.id,
     //     cid,
@@ -781,7 +835,7 @@ create_challenge_after_if_else@15:
     dup
     cover 6
     callsub build_score_msg
-    // contracts/quantum_arena/contract.py:952
+    // contracts/quantum_arena/contract.py:954
     // return op.ed25519verify_bare(msg, sig, self.oracle_pub_key.value)
     intc_0 // 0
     bytec 7 // "oracle_pub_key"
@@ -791,7 +845,7 @@ create_challenge_after_if_else@15:
     uncover 11
     uncover 2
     ed25519verify_bare
-    // contracts/quantum_arena/contract.py:359-369
+    // contracts/quantum_arena/contract.py:381-391
     // # --- oracle proof of the creator score
     // assert self._verify_oracle_sig(
     //     build_score_msg(
@@ -804,13 +858,13 @@ create_challenge_after_if_else@15:
     //     creator_score_sig,
     // ), "bad creator score proof"
     assert // bad creator score proof
-    // contracts/quantum_arena/contract.py:371-372
+    // contracts/quantum_arena/contract.py:393-394
     // # --- effects (state first, no inner txns in this method)
     // deadline = Global.latest_timestamp + duration_secs
     global LatestTimestamp
     uncover 8
     +
-    // contracts/quantum_arena/contract.py:373-386
+    // contracts/quantum_arena/contract.py:395-408
     // self.challenges[cid] = ChallengeMeta(
     //     creator=Txn.sender.bytes,
     //     stake=stake,
@@ -826,10 +880,10 @@ create_challenge_after_if_else@15:
     //     mbr_paid=mbr_payment.amount,
     // ).copy()
     bytec 6 // 0x0020
-    // contracts/quantum_arena/contract.py:374
+    // contracts/quantum_arena/contract.py:396
     // creator=Txn.sender.bytes,
     txn Sender
-    // contracts/quantum_arena/contract.py:373-386
+    // contracts/quantum_arena/contract.py:395-408
     // self.challenges[cid] = ChallengeMeta(
     //     creator=Txn.sender.bytes,
     //     stake=stake,
@@ -857,10 +911,10 @@ create_challenge_after_if_else@15:
     uncover 11
     itob
     concat
-    // contracts/quantum_arena/contract.py:377
+    // contracts/quantum_arena/contract.py:399
     // seats_taken=UInt64(0),
     intc_0 // 0
-    // contracts/quantum_arena/contract.py:373-386
+    // contracts/quantum_arena/contract.py:395-408
     // self.challenges[cid] = ChallengeMeta(
     //     creator=Txn.sender.bytes,
     //     stake=stake,
@@ -924,14 +978,14 @@ create_challenge_after_if_else@15:
     concat
     bytec 8 // 0x0000
     concat
-    // contracts/quantum_arena/contract.py:373
+    // contracts/quantum_arena/contract.py:395
     // self.challenges[cid] = ChallengeMeta(
     dig 3
     itob
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     dig 1
     concat
-    // contracts/quantum_arena/contract.py:373-386
+    // contracts/quantum_arena/contract.py:395-408
     // self.challenges[cid] = ChallengeMeta(
     //     creator=Txn.sender.bytes,
     //     stake=stake,
@@ -951,10 +1005,10 @@ create_challenge_after_if_else@15:
     pop
     uncover 2
     box_put
-    // contracts/quantum_arena/contract.py:393
+    // contracts/quantum_arena/contract.py:415
     // seated_at=Global.latest_timestamp,
     global LatestTimestamp
-    // contracts/quantum_arena/contract.py:389-394
+    // contracts/quantum_arena/contract.py:411-416
     // PlayerEntry(
     //     addr=Txn.sender.bytes,
     //     score=creator_score,
@@ -962,10 +1016,10 @@ create_challenge_after_if_else@15:
     //     seated_at=Global.latest_timestamp,
     // )
     bytec 6 // 0x0020
-    // contracts/quantum_arena/contract.py:390
+    // contracts/quantum_arena/contract.py:412
     // addr=Txn.sender.bytes,
     txn Sender
-    // contracts/quantum_arena/contract.py:389-394
+    // contracts/quantum_arena/contract.py:411-416
     // PlayerEntry(
     //     addr=Txn.sender.bytes,
     //     score=creator_score,
@@ -983,7 +1037,7 @@ create_challenge_after_if_else@15:
     concat
     swap
     concat
-    // contracts/quantum_arena/contract.py:388-395
+    // contracts/quantum_arena/contract.py:410-417
     // roster.append(
     //     PlayerEntry(
     //         addr=Txn.sender.bytes,
@@ -995,10 +1049,10 @@ create_challenge_after_if_else@15:
     bytec 10 // 0x0002
     swap
     concat
-    // contracts/quantum_arena/contract.py:387
+    // contracts/quantum_arena/contract.py:409
     // roster = Array[PlayerEntry]()
     bytec 8 // 0x0000
-    // contracts/quantum_arena/contract.py:388-395
+    // contracts/quantum_arena/contract.py:410-417
     // roster.append(
     //     PlayerEntry(
     //         addr=Txn.sender.bytes,
@@ -1010,9 +1064,9 @@ create_challenge_after_if_else@15:
     swap
     intc_1 // 1
     callsub dynamic_array_concat_dynamic_element
-    // contracts/quantum_arena/contract.py:396
+    // contracts/quantum_arena/contract.py:418
     // self.players[cid] = roster.copy()
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     dig 2
     concat
     dup
@@ -1020,7 +1074,7 @@ create_challenge_after_if_else@15:
     pop
     swap
     box_put
-    // contracts/quantum_arena/contract.py:398
+    // contracts/quantum_arena/contract.py:420
     // self.next_challenge_id.value = cid + 1
     uncover 2
     intc_1 // 1
@@ -1028,7 +1082,7 @@ create_challenge_after_if_else@15:
     bytec 5 // "next_challenge_id"
     swap
     app_global_put
-    // contracts/quantum_arena/contract.py:401-407
+    // contracts/quantum_arena/contract.py:423-429
     // ChallengeCreated(
     //     challenge_id=arc4.UInt64(cid),
     //     creator=arc4.Address(Txn.sender.bytes),
@@ -1037,10 +1091,10 @@ create_challenge_after_if_else@15:
     //     deadline=arc4.UInt64(deadline),
     // )
     dup
-    // contracts/quantum_arena/contract.py:403
+    // contracts/quantum_arena/contract.py:425
     // creator=arc4.Address(Txn.sender.bytes),
     txn Sender
-    // contracts/quantum_arena/contract.py:401-407
+    // contracts/quantum_arena/contract.py:423-429
     // ChallengeCreated(
     //     challenge_id=arc4.UInt64(cid),
     //     creator=arc4.Address(Txn.sender.bytes),
@@ -1055,7 +1109,7 @@ create_challenge_after_if_else@15:
     concat
     uncover 2
     concat
-    // contracts/quantum_arena/contract.py:400-408
+    // contracts/quantum_arena/contract.py:422-430
     // arc4.emit(
     //     ChallengeCreated(
     //         challenge_id=arc4.UInt64(cid),
@@ -1069,7 +1123,7 @@ create_challenge_after_if_else@15:
     swap
     concat
     log
-    // contracts/quantum_arena/contract.py:303
+    // contracts/quantum_arena/contract.py:325
     // @arc4.abimethod
     bytec 9 // 0x151f7c75
     swap
@@ -1079,32 +1133,32 @@ create_challenge_after_if_else@15:
     return
 
 create_challenge_else_body@9:
-    // contracts/quantum_arena/contract.py:336
+    // contracts/quantum_arena/contract.py:358
     // duration_secs == DURATION_4H
     dig 2
     pushint 14400
     ==
-    // contracts/quantum_arena/contract.py:336-338
+    // contracts/quantum_arena/contract.py:358-360
     // duration_secs == DURATION_4H
     // or duration_secs == DURATION_12H
     // or duration_secs == DURATION_24H
     bnz create_challenge_bool_true@12
-    // contracts/quantum_arena/contract.py:337
+    // contracts/quantum_arena/contract.py:359
     // or duration_secs == DURATION_12H
     dig 2
     pushint 43200
     ==
-    // contracts/quantum_arena/contract.py:336-338
+    // contracts/quantum_arena/contract.py:358-360
     // duration_secs == DURATION_4H
     // or duration_secs == DURATION_12H
     // or duration_secs == DURATION_24H
     bnz create_challenge_bool_true@12
-    // contracts/quantum_arena/contract.py:338
+    // contracts/quantum_arena/contract.py:360
     // or duration_secs == DURATION_24H
     dig 2
     intc 4 // 86400
     ==
-    // contracts/quantum_arena/contract.py:336-338
+    // contracts/quantum_arena/contract.py:358-360
     // duration_secs == DURATION_4H
     // or duration_secs == DURATION_12H
     // or duration_secs == DURATION_24H
@@ -1114,7 +1168,7 @@ create_challenge_bool_true@12:
     intc_1 // 1
 
 create_challenge_bool_merge@14:
-    // contracts/quantum_arena/contract.py:335-339
+    // contracts/quantum_arena/contract.py:357-361
     // assert (
     //     duration_secs == DURATION_4H
     //     or duration_secs == DURATION_12H
@@ -1134,7 +1188,7 @@ create_challenge_bool_false@6:
 
 // contracts.quantum_arena.contract.QuantumArena.spawn_rumble[routing]() -> void:
 spawn_rumble:
-    // contracts/quantum_arena/contract.py:411
+    // contracts/quantum_arena/contract.py:433
     // @arc4.abimethod
     txn GroupIndex
     pushint 3
@@ -1202,46 +1256,46 @@ spawn_rumble:
     assert // invalid number of bytes for arc4.dynamic_array<arc4.uint8>
     extract 2 0
     cover 4
-    // contracts/quantum_arena/contract.py:431
+    // contracts/quantum_arena/contract.py:453
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:432
+    // contracts/quantum_arena/contract.py:454
     // assert self.bootstrapped.value, "app not bootstrapped"
     intc_0 // 0
     bytec 4 // "bootstrapped"
     app_global_get_ex
     assert // check self.bootstrapped exists
     assert // app not bootstrapped
-    // contracts/quantum_arena/contract.py:434-435
+    // contracts/quantum_arena/contract.py:456-457
     // # --- parameter validation (duels stay on create_challenge)
     // assert stake > 0, "stake must be positive"
     swap
     assert // stake must be positive
-    // contracts/quantum_arena/contract.py:437
+    // contracts/quantum_arena/contract.py:459
     // seats_total == SEATS_SMALL
     pushint 4
     ==
-    // contracts/quantum_arena/contract.py:437-439
+    // contracts/quantum_arena/contract.py:459-461
     // seats_total == SEATS_SMALL
     // or seats_total == SEATS_MEDIUM
     // or seats_total == SEATS_LARGE
     bnz spawn_rumble_bool_true@4
-    // contracts/quantum_arena/contract.py:438
+    // contracts/quantum_arena/contract.py:460
     // or seats_total == SEATS_MEDIUM
     dup
     intc_3 // 8
     ==
-    // contracts/quantum_arena/contract.py:437-439
+    // contracts/quantum_arena/contract.py:459-461
     // seats_total == SEATS_SMALL
     // or seats_total == SEATS_MEDIUM
     // or seats_total == SEATS_LARGE
     bnz spawn_rumble_bool_true@4
-    // contracts/quantum_arena/contract.py:439
+    // contracts/quantum_arena/contract.py:461
     // or seats_total == SEATS_LARGE
     dup
     pushint 12
     ==
-    // contracts/quantum_arena/contract.py:437-439
+    // contracts/quantum_arena/contract.py:459-461
     // seats_total == SEATS_SMALL
     // or seats_total == SEATS_MEDIUM
     // or seats_total == SEATS_LARGE
@@ -1251,20 +1305,20 @@ spawn_rumble_bool_true@4:
     intc_1 // 1
 
 spawn_rumble_bool_merge@6:
-    // contracts/quantum_arena/contract.py:436-440
+    // contracts/quantum_arena/contract.py:458-462
     // assert (
     //     seats_total == SEATS_SMALL
     //     or seats_total == SEATS_MEDIUM
     //     or seats_total == SEATS_LARGE
     // ), "invalid seats"
     assert // invalid seats
-    // contracts/quantum_arena/contract.py:441
+    // contracts/quantum_arena/contract.py:463
     // assert stage_mode <= MODE_RANDOM_RESOLVED, "invalid stage mode"
     dig 1
     intc_2 // 2
     <=
     assert // invalid stage mode
-    // contracts/quantum_arena/contract.py:442
+    // contracts/quantum_arena/contract.py:464
     // assert seed_commitment.length == 32, "seed commitment must be 32 bytes"
     dig 2
     len
@@ -1273,87 +1327,87 @@ spawn_rumble_bool_merge@6:
     pushint 32
     ==
     assert // seed commitment must be 32 bytes
-    // contracts/quantum_arena/contract.py:444-445
+    // contracts/quantum_arena/contract.py:466-467
     // # --- atomic funding validation (checks before effects)
     // assert_clean_payment(mbr_payment)
     uncover 6
     dup
     callsub assert_clean_payment
-    // contracts/quantum_arena/contract.py:446
+    // contracts/quantum_arena/contract.py:468
     // assert mbr_payment.sender == Txn.sender, "mbr sender mismatch"
     dup
     gtxns Sender
     txn Sender
     ==
     assert // mbr sender mismatch
-    // contracts/quantum_arena/contract.py:447
+    // contracts/quantum_arena/contract.py:469
     // assert mbr_payment.receiver == Global.current_application_address, "mbr receiver"
     dup
     gtxns Receiver
     global CurrentApplicationAddress
     ==
     assert // mbr receiver
-    // contracts/quantum_arena/contract.py:448
+    // contracts/quantum_arena/contract.py:470
     // assert mbr_payment.amount >= CHALLENGE_MBR, "mbr too small"
     gtxns Amount
     dup
     cover 6
-    intc 5 // 2212500
+    intc 6 // 358200
     >=
     assert // mbr too small
-    // contracts/quantum_arena/contract.py:450
+    // contracts/quantum_arena/contract.py:472
     // assert_clean_axfer(stake_payment)
     uncover 6
     dup
     callsub assert_clean_axfer
-    // contracts/quantum_arena/contract.py:451
+    // contracts/quantum_arena/contract.py:473
     // assert stake_payment.sender == Txn.sender, "stake sender mismatch"
     dup
     gtxns Sender
     txn Sender
     ==
     assert // stake sender mismatch
-    // contracts/quantum_arena/contract.py:452
+    // contracts/quantum_arena/contract.py:474
     // assert stake_payment.xfer_asset.id == self.gonna_asset_id.value, "wrong asset"
     dup
     gtxns XferAsset
     intc_0 // 0
-    bytec_0 // "gonna_asset_id"
+    bytec_2 // "gonna_asset_id"
     app_global_get_ex
     assert // check self.gonna_asset_id exists
     ==
     assert // wrong asset
-    // contracts/quantum_arena/contract.py:453
+    // contracts/quantum_arena/contract.py:475
     // assert stake_payment.asset_amount == stake, "stake amount mismatch"
     dup
     gtxns AssetAmount
     dig 5
     ==
     assert // stake amount mismatch
-    // contracts/quantum_arena/contract.py:455
+    // contracts/quantum_arena/contract.py:477
     // stake_payment.asset_receiver == Global.current_application_address
     gtxns AssetReceiver
     global CurrentApplicationAddress
     ==
-    // contracts/quantum_arena/contract.py:454-456
+    // contracts/quantum_arena/contract.py:476-478
     // assert (
     //     stake_payment.asset_receiver == Global.current_application_address
     // ), "stake receiver"
     assert // stake receiver
-    // contracts/quantum_arena/contract.py:458-459
+    // contracts/quantum_arena/contract.py:480-481
     // # anti-spam fee, same convention as early_close
     // assert_clean_payment(fee_payment)
     uncover 6
     dup
     callsub assert_clean_payment
-    // contracts/quantum_arena/contract.py:460
+    // contracts/quantum_arena/contract.py:482
     // assert fee_payment.sender == Txn.sender, "fee sender mismatch"
     dup
     gtxns Sender
     txn Sender
     ==
     assert // fee sender mismatch
-    // contracts/quantum_arena/contract.py:461
+    // contracts/quantum_arena/contract.py:483
     // assert fee_payment.receiver.bytes == self.treasury.value, "fee receiver"
     dup
     gtxns Receiver
@@ -1363,13 +1417,13 @@ spawn_rumble_bool_merge@6:
     assert // check self.treasury exists
     ==
     assert // fee receiver
-    // contracts/quantum_arena/contract.py:462
+    // contracts/quantum_arena/contract.py:484
     // assert fee_payment.amount == EARLY_CLOSE_FEE, "fee must be 1 ALGO"
     gtxns Amount
-    intc 6 // 1000000
+    intc 7 // 1000000
     ==
     assert // fee must be 1 ALGO
-    // contracts/quantum_arena/contract.py:464
+    // contracts/quantum_arena/contract.py:486
     // cid = self.next_challenge_id.value
     intc_0 // 0
     bytec 5 // "next_challenge_id"
@@ -1377,36 +1431,36 @@ spawn_rumble_bool_merge@6:
     swap
     cover 6
     assert // check self.next_challenge_id exists
-    // contracts/quantum_arena/contract.py:466-467
+    // contracts/quantum_arena/contract.py:488-489
     // # --- effects (state first, no inner txns in this method)
     // deadline = next_rumble_deadline(Global.latest_timestamp)
     global LatestTimestamp
     dup
     cover 2
-    // contracts/quantum_arena/contract.py:236
+    // contracts/quantum_arena/contract.py:249
     // day_start = now // UInt64(86_400) * UInt64(86_400)
     dup
     intc 4 // 86400
     /
     intc 4 // 86400
     *
-    // contracts/quantum_arena/contract.py:237
+    // contracts/quantum_arena/contract.py:250
     // candidate = day_start + UInt64(RUMBLE_HOUR_UTC * 3600)
     pushint 75600
     +
     dup
     uncover 2
-    // contracts/quantum_arena/contract.py:238
+    // contracts/quantum_arena/contract.py:251
     // if candidate <= now:
     <=
     bz spawn_rumble_after_if_else@9
-    // contracts/quantum_arena/contract.py:239
+    // contracts/quantum_arena/contract.py:252
     // candidate += UInt64(86_400)
     intc 4 // 86400
     +
 
 spawn_rumble_after_if_else@9:
-    // contracts/quantum_arena/contract.py:240
+    // contracts/quantum_arena/contract.py:253
     // if candidate - now < UInt64(RUMBLE_MIN_HORIZON):
     dup
     uncover 3
@@ -1414,13 +1468,13 @@ spawn_rumble_after_if_else@9:
     pushint 14400
     <
     bz spawn_rumble_after_if_else@11
-    // contracts/quantum_arena/contract.py:241
+    // contracts/quantum_arena/contract.py:254
     // candidate += UInt64(86_400)
     intc 4 // 86400
     +
 
 spawn_rumble_after_if_else@11:
-    // contracts/quantum_arena/contract.py:468-481
+    // contracts/quantum_arena/contract.py:490-503
     // self.challenges[cid] = ChallengeMeta(
     //     creator=Txn.sender.bytes,
     //     stake=stake,
@@ -1436,10 +1490,10 @@ spawn_rumble_after_if_else@11:
     //     mbr_paid=mbr_payment.amount,
     // ).copy()
     bytec 6 // 0x0020
-    // contracts/quantum_arena/contract.py:469
+    // contracts/quantum_arena/contract.py:491
     // creator=Txn.sender.bytes,
     txn Sender
-    // contracts/quantum_arena/contract.py:468-481
+    // contracts/quantum_arena/contract.py:490-503
     // self.challenges[cid] = ChallengeMeta(
     //     creator=Txn.sender.bytes,
     //     stake=stake,
@@ -1467,10 +1521,10 @@ spawn_rumble_after_if_else@11:
     uncover 5
     itob
     concat
-    // contracts/quantum_arena/contract.py:472
+    // contracts/quantum_arena/contract.py:494
     // seats_taken=UInt64(0),
     intc_0 // 0
-    // contracts/quantum_arena/contract.py:468-481
+    // contracts/quantum_arena/contract.py:490-503
     // self.challenges[cid] = ChallengeMeta(
     //     creator=Txn.sender.bytes,
     //     stake=stake,
@@ -1532,16 +1586,16 @@ spawn_rumble_after_if_else@11:
     concat
     bytec 8 // 0x0000
     concat
-    // contracts/quantum_arena/contract.py:468
+    // contracts/quantum_arena/contract.py:490
     // self.challenges[cid] = ChallengeMeta(
     uncover 2
     dup
     cover 2
     itob
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     dig 1
     concat
-    // contracts/quantum_arena/contract.py:468-481
+    // contracts/quantum_arena/contract.py:490-503
     // self.challenges[cid] = ChallengeMeta(
     //     creator=Txn.sender.bytes,
     //     stake=stake,
@@ -1561,10 +1615,10 @@ spawn_rumble_after_if_else@11:
     pop
     uncover 2
     box_put
-    // contracts/quantum_arena/contract.py:488
+    // contracts/quantum_arena/contract.py:510
     // seated_at=Global.latest_timestamp,
     global LatestTimestamp
-    // contracts/quantum_arena/contract.py:484-489
+    // contracts/quantum_arena/contract.py:506-511
     // PlayerEntry(
     //     addr=Txn.sender.bytes,
     //     score=UInt64(0),
@@ -1572,10 +1626,10 @@ spawn_rumble_after_if_else@11:
     //     seated_at=Global.latest_timestamp,
     // )
     bytec 6 // 0x0020
-    // contracts/quantum_arena/contract.py:485
+    // contracts/quantum_arena/contract.py:507
     // addr=Txn.sender.bytes,
     txn Sender
-    // contracts/quantum_arena/contract.py:484-489
+    // contracts/quantum_arena/contract.py:506-511
     // PlayerEntry(
     //     addr=Txn.sender.bytes,
     //     score=UInt64(0),
@@ -1590,7 +1644,7 @@ spawn_rumble_after_if_else@11:
     concat
     swap
     concat
-    // contracts/quantum_arena/contract.py:483-490
+    // contracts/quantum_arena/contract.py:505-512
     // roster.append(
     //     PlayerEntry(
     //         addr=Txn.sender.bytes,
@@ -1602,10 +1656,10 @@ spawn_rumble_after_if_else@11:
     bytec 10 // 0x0002
     swap
     concat
-    // contracts/quantum_arena/contract.py:482
+    // contracts/quantum_arena/contract.py:504
     // roster = Array[PlayerEntry]()
     bytec 8 // 0x0000
-    // contracts/quantum_arena/contract.py:483-490
+    // contracts/quantum_arena/contract.py:505-512
     // roster.append(
     //     PlayerEntry(
     //         addr=Txn.sender.bytes,
@@ -1617,9 +1671,9 @@ spawn_rumble_after_if_else@11:
     swap
     intc_1 // 1
     callsub dynamic_array_concat_dynamic_element
-    // contracts/quantum_arena/contract.py:491
+    // contracts/quantum_arena/contract.py:513
     // self.players[cid] = roster.copy()
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     dig 2
     concat
     dup
@@ -1627,7 +1681,7 @@ spawn_rumble_after_if_else@11:
     pop
     swap
     box_put
-    // contracts/quantum_arena/contract.py:493
+    // contracts/quantum_arena/contract.py:515
     // self.next_challenge_id.value = cid + 1
     swap
     intc_1 // 1
@@ -1635,7 +1689,7 @@ spawn_rumble_after_if_else@11:
     bytec 5 // "next_challenge_id"
     swap
     app_global_put
-    // contracts/quantum_arena/contract.py:496-502
+    // contracts/quantum_arena/contract.py:518-524
     // ChallengeCreated(
     //     challenge_id=arc4.UInt64(cid),
     //     creator=arc4.Address(Txn.sender.bytes),
@@ -1644,10 +1698,10 @@ spawn_rumble_after_if_else@11:
     //     deadline=arc4.UInt64(deadline),
     // )
     dup
-    // contracts/quantum_arena/contract.py:498
+    // contracts/quantum_arena/contract.py:520
     // creator=arc4.Address(Txn.sender.bytes),
     txn Sender
-    // contracts/quantum_arena/contract.py:496-502
+    // contracts/quantum_arena/contract.py:518-524
     // ChallengeCreated(
     //     challenge_id=arc4.UInt64(cid),
     //     creator=arc4.Address(Txn.sender.bytes),
@@ -1662,7 +1716,7 @@ spawn_rumble_after_if_else@11:
     concat
     uncover 2
     concat
-    // contracts/quantum_arena/contract.py:495-503
+    // contracts/quantum_arena/contract.py:517-525
     // arc4.emit(
     //     ChallengeCreated(
     //         challenge_id=arc4.UInt64(cid),
@@ -1676,7 +1730,7 @@ spawn_rumble_after_if_else@11:
     swap
     concat
     log
-    // contracts/quantum_arena/contract.py:411
+    // contracts/quantum_arena/contract.py:433
     // @arc4.abimethod
     bytec 9 // 0x151f7c75
     swap
@@ -1692,7 +1746,7 @@ spawn_rumble_bool_false@5:
 
 // contracts.quantum_arena.contract.QuantumArena.join_challenge[routing]() -> void:
 join_challenge:
-    // contracts/quantum_arena/contract.py:506
+    // contracts/quantum_arena/contract.py:528
     // @arc4.abimethod
     txn GroupIndex
     intc_1 // 1
@@ -1711,13 +1765,13 @@ join_challenge:
     ==
     assert // invalid number of bytes for arc4.uint64
     btoi
-    // contracts/quantum_arena/contract.py:512
+    // contracts/quantum_arena/contract.py:534
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:514
+    // contracts/quantum_arena/contract.py:536
     // assert challenge_id in self.challenges, "challenge not found"
     itob
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     dig 1
     concat
     dup
@@ -1726,25 +1780,25 @@ join_challenge:
     box_len
     bury 1
     assert // challenge not found
-    // contracts/quantum_arena/contract.py:515
+    // contracts/quantum_arena/contract.py:537
     // meta = self.challenges[challenge_id].copy()
     dup
     box_get
     pop
     cover 2
-    // contracts/quantum_arena/contract.py:515-516
+    // contracts/quantum_arena/contract.py:537-538
     // meta = self.challenges[challenge_id].copy()
     // assert meta.status == STATUS_OPEN, "not open"
     dup
     pushint 52
     intc_3 // 8
     box_extract // on error: index out of bounds
-    // contracts/quantum_arena/contract.py:516
+    // contracts/quantum_arena/contract.py:538
     // assert meta.status == STATUS_OPEN, "not open"
     btoi
     !
     assert // not open
-    // contracts/quantum_arena/contract.py:517
+    // contracts/quantum_arena/contract.py:539
     // assert meta.seats_taken < meta.seats_total, "table full"
     dup
     pushint 18
@@ -1762,7 +1816,7 @@ join_challenge:
     uncover 2
     >
     assert // table full
-    // contracts/quantum_arena/contract.py:518
+    // contracts/quantum_arena/contract.py:540
     // assert Global.latest_timestamp < meta.deadline - JOIN_CUTOFF, "join cutoff"
     global LatestTimestamp
     swap
@@ -1774,22 +1828,22 @@ join_challenge:
     -
     <
     assert // join cutoff
-    // contracts/quantum_arena/contract.py:520
+    // contracts/quantum_arena/contract.py:542
     // assert challenge_id in self.players, "roster missing"
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     swap
     concat
     dupn 2
     box_len
     bury 1
     assert // roster missing
-    // contracts/quantum_arena/contract.py:521
+    // contracts/quantum_arena/contract.py:543
     // roster = self.players[challenge_id].copy()
     dup
     box_get
     pop
     cover 2
-    // contracts/quantum_arena/contract.py:523-524
+    // contracts/quantum_arena/contract.py:545-546
     // # no duplicate participants
     // for i in urange(roster.length):
     intc_0 // 0
@@ -1800,14 +1854,14 @@ join_challenge:
     intc_0 // 0
 
 join_challenge_for_header@2:
-    // contracts/quantum_arena/contract.py:523-524
+    // contracts/quantum_arena/contract.py:545-546
     // # no duplicate participants
     // for i in urange(roster.length):
     dup
     dig 8
     <
     bz join_challenge_after_for@5
-    // contracts/quantum_arena/contract.py:525
+    // contracts/quantum_arena/contract.py:547
     // assert roster[i].addr != Txn.sender.bytes, "already joined"
     intc_2 // 2
     dig 1
@@ -1833,7 +1887,7 @@ join_challenge_for_header@2:
     txn Sender
     !=
     assert // already joined
-    // contracts/quantum_arena/contract.py:523-524
+    // contracts/quantum_arena/contract.py:545-546
     // # no duplicate participants
     // for i in urange(roster.length):
     intc_1 // 1
@@ -1842,30 +1896,30 @@ join_challenge_for_header@2:
 
 join_challenge_after_for@5:
     pop
-    // contracts/quantum_arena/contract.py:527-528
+    // contracts/quantum_arena/contract.py:549-550
     // # --- atomic funding validation
     // assert_clean_axfer(stake_payment)
     uncover 5
     dup
     callsub assert_clean_axfer
-    // contracts/quantum_arena/contract.py:529
+    // contracts/quantum_arena/contract.py:551
     // assert stake_payment.sender == Txn.sender, "stake sender mismatch"
     dup
     gtxns Sender
     txn Sender
     ==
     assert // stake sender mismatch
-    // contracts/quantum_arena/contract.py:530
+    // contracts/quantum_arena/contract.py:552
     // assert stake_payment.xfer_asset.id == self.gonna_asset_id.value, "wrong asset"
     dup
     gtxns XferAsset
     intc_0 // 0
-    bytec_0 // "gonna_asset_id"
+    bytec_2 // "gonna_asset_id"
     app_global_get_ex
     assert // check self.gonna_asset_id exists
     ==
     assert // wrong asset
-    // contracts/quantum_arena/contract.py:531
+    // contracts/quantum_arena/contract.py:553
     // assert stake_payment.asset_amount == meta.stake, "stake amount mismatch"
     dup
     gtxns AssetAmount
@@ -1876,20 +1930,20 @@ join_challenge_after_for@5:
     btoi
     ==
     assert // stake amount mismatch
-    // contracts/quantum_arena/contract.py:533
+    // contracts/quantum_arena/contract.py:555
     // stake_payment.asset_receiver == Global.current_application_address
     gtxns AssetReceiver
     global CurrentApplicationAddress
     ==
-    // contracts/quantum_arena/contract.py:532-534
+    // contracts/quantum_arena/contract.py:554-556
     // assert (
     //     stake_payment.asset_receiver == Global.current_application_address
     // ), "stake receiver"
     assert // stake receiver
-    // contracts/quantum_arena/contract.py:542
+    // contracts/quantum_arena/contract.py:564
     // seated_at=Global.latest_timestamp,
     global LatestTimestamp
-    // contracts/quantum_arena/contract.py:538-543
+    // contracts/quantum_arena/contract.py:560-565
     // PlayerEntry(
     //     addr=Txn.sender.bytes,
     //     score=UInt64(0),
@@ -1897,10 +1951,10 @@ join_challenge_after_for@5:
     //     seated_at=Global.latest_timestamp,
     // )
     bytec 6 // 0x0020
-    // contracts/quantum_arena/contract.py:539
+    // contracts/quantum_arena/contract.py:561
     // addr=Txn.sender.bytes,
     txn Sender
-    // contracts/quantum_arena/contract.py:538-543
+    // contracts/quantum_arena/contract.py:560-565
     // PlayerEntry(
     //     addr=Txn.sender.bytes,
     //     score=UInt64(0),
@@ -1915,7 +1969,7 @@ join_challenge_after_for@5:
     concat
     swap
     concat
-    // contracts/quantum_arena/contract.py:536-544
+    // contracts/quantum_arena/contract.py:558-566
     // # --- effects
     // roster.append(
     //     PlayerEntry(
@@ -1933,7 +1987,7 @@ join_challenge_after_for@5:
     intc_1 // 1
     callsub dynamic_array_concat_dynamic_element
     swap
-    // contracts/quantum_arena/contract.py:545
+    // contracts/quantum_arena/contract.py:567
     // meta.seats_taken += 1
     uncover 4
     intc_1 // 1
@@ -1942,7 +1996,7 @@ join_challenge_after_for@5:
     uncover 3
     swap
     replace2 18
-    // contracts/quantum_arena/contract.py:546
+    // contracts/quantum_arena/contract.py:568
     // meta.paid_total += meta.stake
     dup
     pushint 62
@@ -1955,7 +2009,7 @@ join_challenge_after_for@5:
     replace2 62
     dup
     cover 3
-    // contracts/quantum_arena/contract.py:547
+    // contracts/quantum_arena/contract.py:569
     // if meta.seats_taken == meta.seats_total:
     dup
     pushint 18
@@ -1965,7 +2019,7 @@ join_challenge_after_for@5:
     extract_uint64
     ==
     bz join_challenge_after_if_else@7
-    // contracts/quantum_arena/contract.py:548
+    // contracts/quantum_arena/contract.py:570
     // meta.status = UInt64(STATUS_CLOSED)  # table full: no more joins
     intc_1 // 1
     itob
@@ -1975,14 +2029,14 @@ join_challenge_after_for@5:
     cover 2
 
 join_challenge_after_if_else@7:
-    // contracts/quantum_arena/contract.py:549
+    // contracts/quantum_arena/contract.py:571
     // self.players[challenge_id] = roster.copy()
     dup
     box_del
     pop
     swap
     box_put
-    // contracts/quantum_arena/contract.py:550
+    // contracts/quantum_arena/contract.py:572
     // self.challenges[challenge_id] = meta.copy()
     swap
     dup
@@ -1990,14 +2044,14 @@ join_challenge_after_if_else@7:
     pop
     dig 1
     box_put
-    // contracts/quantum_arena/contract.py:555
+    // contracts/quantum_arena/contract.py:577
     // player=arc4.Address(Txn.sender.bytes),
     txn Sender
-    // contracts/quantum_arena/contract.py:556
+    // contracts/quantum_arena/contract.py:578
     // seats_taken=arc4.UInt64(meta.seats_taken),
     swap
     extract 18 8
-    // contracts/quantum_arena/contract.py:553-557
+    // contracts/quantum_arena/contract.py:575-579
     // ChallengeJoined(
     //     challenge_id=arc4.UInt64(challenge_id),
     //     player=arc4.Address(Txn.sender.bytes),
@@ -2008,7 +2062,7 @@ join_challenge_after_if_else@7:
     concat
     dig 1
     concat
-    // contracts/quantum_arena/contract.py:552-558
+    // contracts/quantum_arena/contract.py:574-580
     // arc4.emit(
     //     ChallengeJoined(
     //         challenge_id=arc4.UInt64(challenge_id),
@@ -2020,7 +2074,7 @@ join_challenge_after_if_else@7:
     swap
     concat
     log
-    // contracts/quantum_arena/contract.py:506
+    // contracts/quantum_arena/contract.py:528
     // @arc4.abimethod
     bytec 9 // 0x151f7c75
     swap
@@ -2035,7 +2089,7 @@ submit_score:
     intc_0 // 0
     dup
     pushbytes ""
-    // contracts/quantum_arena/contract.py:561
+    // contracts/quantum_arena/contract.py:583
     // @arc4.abimethod
     txna ApplicationArgs 1
     dupn 2
@@ -2067,27 +2121,27 @@ submit_score:
     assert // invalid number of bytes for arc4.dynamic_array<arc4.uint8>
     extract 2 0
     cover 2
-    // contracts/quantum_arena/contract.py:564
+    // contracts/quantum_arena/contract.py:586
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:566
+    // contracts/quantum_arena/contract.py:588
     // assert challenge_id in self.challenges, "challenge not found"
     itob
     dup
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     swap
     concat
     dupn 2
     box_len
     bury 1
     assert // challenge not found
-    // contracts/quantum_arena/contract.py:567-568
+    // contracts/quantum_arena/contract.py:589-590
     // meta = self.challenges[challenge_id].copy()
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not active"
     pushint 52
     intc_3 // 8
     box_extract // on error: index out of bounds
-    // contracts/quantum_arena/contract.py:568
+    // contracts/quantum_arena/contract.py:590
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not active"
     btoi
     dup
@@ -2102,10 +2156,10 @@ submit_score_bool_true@3:
     intc_1 // 1
 
 submit_score_bool_merge@5:
-    // contracts/quantum_arena/contract.py:568
+    // contracts/quantum_arena/contract.py:590
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not active"
     assert // not active
-    // contracts/quantum_arena/contract.py:569
+    // contracts/quantum_arena/contract.py:591
     // assert Global.latest_timestamp < meta.deadline, "deadline passed"
     global LatestTimestamp
     swap
@@ -2115,9 +2169,9 @@ submit_score_bool_merge@5:
     btoi
     <
     assert // deadline passed
-    // contracts/quantum_arena/contract.py:571
+    // contracts/quantum_arena/contract.py:593
     // assert challenge_id in self.players, "roster missing"
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     swap
     concat
     dup
@@ -2126,21 +2180,21 @@ submit_score_bool_merge@5:
     box_len
     bury 1
     assert // roster missing
-    // contracts/quantum_arena/contract.py:572
+    // contracts/quantum_arena/contract.py:594
     // roster = self.players[challenge_id].copy()
     dup
     box_get
     pop
     swap
-    // contracts/quantum_arena/contract.py:574
+    // contracts/quantum_arena/contract.py:596
     // seat = UInt64(0)
     intc_0 // 0
     cover 2
-    // contracts/quantum_arena/contract.py:575
+    // contracts/quantum_arena/contract.py:597
     // found = False
     intc_0 // 0
     swap
-    // contracts/quantum_arena/contract.py:576
+    // contracts/quantum_arena/contract.py:598
     // for i in urange(roster.length):
     intc_0 // 0
     intc_2 // 2
@@ -2150,13 +2204,13 @@ submit_score_bool_merge@5:
     intc_0 // 0
 
 submit_score_for_header@6:
-    // contracts/quantum_arena/contract.py:576
+    // contracts/quantum_arena/contract.py:598
     // for i in urange(roster.length):
     dup
     dig 11
     <
     bz submit_score_after_for@11
-    // contracts/quantum_arena/contract.py:577
+    // contracts/quantum_arena/contract.py:599
     // entry = roster[i].copy()
     dig 2
     dup
@@ -2165,7 +2219,7 @@ submit_score_for_header@6:
     cover 3
     callsub dynamic_array_read_dynamic_element
     bury 15
-    // contracts/quantum_arena/contract.py:577-578
+    // contracts/quantum_arena/contract.py:599-600
     // entry = roster[i].copy()
     // if entry.addr == Txn.sender.bytes:
     swap
@@ -2176,7 +2230,7 @@ submit_score_for_header@6:
     dig 1
     len
     substring3
-    // contracts/quantum_arena/contract.py:578
+    // contracts/quantum_arena/contract.py:600
     // if entry.addr == Txn.sender.bytes:
     extract 2 0
     txn Sender
@@ -2185,7 +2239,7 @@ submit_score_for_header@6:
     bury 1
     uncover 2
     pop
-    // contracts/quantum_arena/contract.py:579
+    // contracts/quantum_arena/contract.py:601
     // assert not entry.signed, "score already submitted"
     swap
     dup
@@ -2197,13 +2251,13 @@ submit_score_for_header@6:
     getbit
     !
     assert // score already submitted
-    // contracts/quantum_arena/contract.py:587
+    // contracts/quantum_arena/contract.py:609
     // Txn.sender.bytes,
     txn Sender
-    // contracts/quantum_arena/contract.py:584
+    // contracts/quantum_arena/contract.py:606
     // Global.current_application_id.id,
     global CurrentApplicationID
-    // contracts/quantum_arena/contract.py:583-589
+    // contracts/quantum_arena/contract.py:605-611
     // build_score_msg(
     //     Global.current_application_id.id,
     //     challenge_id,
@@ -2216,7 +2270,7 @@ submit_score_for_header@6:
     uncover 3
     dig 10
     callsub build_score_msg
-    // contracts/quantum_arena/contract.py:952
+    // contracts/quantum_arena/contract.py:954
     // return op.ed25519verify_bare(msg, sig, self.oracle_pub_key.value)
     intc_0 // 0
     bytec 7 // "oracle_pub_key"
@@ -2225,7 +2279,7 @@ submit_score_for_header@6:
     dig 7
     swap
     ed25519verify_bare
-    // contracts/quantum_arena/contract.py:581-591
+    // contracts/quantum_arena/contract.py:603-613
     // # oracle proof binds app, challenge, seat, player and score
     // assert self._verify_oracle_sig(
     //     build_score_msg(
@@ -2238,12 +2292,12 @@ submit_score_for_header@6:
     //     sig,
     // ), "bad score proof"
     assert // bad score proof
-    // contracts/quantum_arena/contract.py:592
+    // contracts/quantum_arena/contract.py:614
     // entry.score = score
     dig 11
     dig 4
     replace2 2
-    // contracts/quantum_arena/contract.py:593
+    // contracts/quantum_arena/contract.py:615
     // entry.signed = True
     pushint 80
     intc_1 // 1
@@ -2336,7 +2390,7 @@ submit_score_after_for@15:
     cover 2
     concat
     swap
-    // contracts/quantum_arena/contract.py:595
+    // contracts/quantum_arena/contract.py:617
     // found = True
     intc_1 // 1
     swap
@@ -2344,7 +2398,7 @@ submit_score_after_for@15:
     cover 3
 
 submit_score_after_if_else@9:
-    // contracts/quantum_arena/contract.py:576
+    // contracts/quantum_arena/contract.py:598
     // for i in urange(roster.length):
     intc_1 // 1
     +
@@ -2352,10 +2406,10 @@ submit_score_after_if_else@9:
 
 submit_score_after_for@11:
     pop
-    // contracts/quantum_arena/contract.py:596
+    // contracts/quantum_arena/contract.py:618
     // assert found, "not a participant"
     assert // not a participant
-    // contracts/quantum_arena/contract.py:598
+    // contracts/quantum_arena/contract.py:620
     // self.players[challenge_id] = roster.copy()
     dig 9
     dup
@@ -2363,14 +2417,14 @@ submit_score_after_for@11:
     pop
     swap
     box_put
-    // contracts/quantum_arena/contract.py:603
+    // contracts/quantum_arena/contract.py:625
     // player=arc4.Address(Txn.sender.bytes),
     txn Sender
-    // contracts/quantum_arena/contract.py:604
+    // contracts/quantum_arena/contract.py:626
     // seat=arc4.UInt64(seat),
     swap
     itob
-    // contracts/quantum_arena/contract.py:601-606
+    // contracts/quantum_arena/contract.py:623-628
     // ScoreSubmitted(
     //     challenge_id=arc4.UInt64(challenge_id),
     //     player=arc4.Address(Txn.sender.bytes),
@@ -2384,7 +2438,7 @@ submit_score_after_for@11:
     concat
     swap
     concat
-    // contracts/quantum_arena/contract.py:600-607
+    // contracts/quantum_arena/contract.py:622-629
     // arc4.emit(
     //     ScoreSubmitted(
     //         challenge_id=arc4.UInt64(challenge_id),
@@ -2397,7 +2451,7 @@ submit_score_after_for@11:
     swap
     concat
     log
-    // contracts/quantum_arena/contract.py:561
+    // contracts/quantum_arena/contract.py:583
     // @arc4.abimethod
     intc_1 // 1
     return
@@ -2412,7 +2466,7 @@ resolve:
     intc_0 // 0
     pushbytes ""
     dupn 11
-    // contracts/quantum_arena/contract.py:609
+    // contracts/quantum_arena/contract.py:631
     // @arc4.abimethod
     txna ApplicationArgs 1
     dupn 2
@@ -2453,27 +2507,27 @@ resolve:
     assert // invalid number of bytes for arc4.dynamic_array<arc4.uint8>
     extract 2 0
     cover 4
-    // contracts/quantum_arena/contract.py:624
+    // contracts/quantum_arena/contract.py:646
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:626
+    // contracts/quantum_arena/contract.py:648
     // assert challenge_id in self.challenges, "challenge not found"
     itob
     dup
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     swap
     concat
     dupn 2
     box_len
     bury 1
     assert // challenge not found
-    // contracts/quantum_arena/contract.py:627-628
+    // contracts/quantum_arena/contract.py:649-650
     // meta = self.challenges[challenge_id].copy()
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not active"
     pushint 52
     intc_3 // 8
     box_extract // on error: index out of bounds
-    // contracts/quantum_arena/contract.py:628
+    // contracts/quantum_arena/contract.py:650
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not active"
     btoi
     dup
@@ -2488,12 +2542,12 @@ resolve_bool_true@3:
     intc_1 // 1
 
 resolve_bool_merge@5:
-    // contracts/quantum_arena/contract.py:628
+    // contracts/quantum_arena/contract.py:650
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not active"
     assert // not active
-    // contracts/quantum_arena/contract.py:630
+    // contracts/quantum_arena/contract.py:652
     // assert challenge_id in self.players, "roster missing"
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     dig 2
     concat
     dup
@@ -2502,7 +2556,7 @@ resolve_bool_merge@5:
     box_len
     bury 1
     assert // roster missing
-    // contracts/quantum_arena/contract.py:633
+    // contracts/quantum_arena/contract.py:655
     // n = roster.length
     intc_0 // 0
     intc_2 // 2
@@ -2510,10 +2564,10 @@ resolve_bool_merge@5:
     btoi
     dup
     cover 5
-    // contracts/quantum_arena/contract.py:634
+    // contracts/quantum_arena/contract.py:656
     // assert n >= 1, "empty roster"
     assert // empty roster
-    // contracts/quantum_arena/contract.py:636-637
+    // contracts/quantum_arena/contract.py:658-659
     // # --- eligibility
     // filled = meta.seats_taken == meta.seats_total
     dupn 2
@@ -2528,27 +2582,27 @@ resolve_bool_merge@5:
     btoi
     ==
     cover 4
-    // contracts/quantum_arena/contract.py:638
+    // contracts/quantum_arena/contract.py:660
     // all_signed = True
     intc_1 // 1
     bury 22
-    // contracts/quantum_arena/contract.py:639
+    // contracts/quantum_arena/contract.py:661
     // signed_joiners = UInt64(0)
     intc_0 // 0
     bury 12
-    // contracts/quantum_arena/contract.py:640
+    // contracts/quantum_arena/contract.py:662
     // for i in urange(n):
     intc_0 // 0
     bury 16
 
 resolve_for_header@6:
-    // contracts/quantum_arena/contract.py:640
+    // contracts/quantum_arena/contract.py:662
     // for i in urange(n):
     dig 15
     dig 6
     <
     bz resolve_after_for@14
-    // contracts/quantum_arena/contract.py:641-642
+    // contracts/quantum_arena/contract.py:663-664
     // entry = roster[i].copy()
     // if entry.signed:
     intc_2 // 2
@@ -2568,14 +2622,14 @@ resolve_for_header@6:
     box_extract // on error: index out of bounds
     intc_0 // 0
     getbit
-    // contracts/quantum_arena/contract.py:642
+    // contracts/quantum_arena/contract.py:664
     // if entry.signed:
     bz resolve_else_body@11
-    // contracts/quantum_arena/contract.py:643
+    // contracts/quantum_arena/contract.py:665
     // if i > 0:
     dig 15
     bz resolve_after_if_else@12
-    // contracts/quantum_arena/contract.py:644
+    // contracts/quantum_arena/contract.py:666
     // signed_joiners += 1
     dig 11
     intc_1 // 1
@@ -2583,7 +2637,7 @@ resolve_for_header@6:
     bury 12
 
 resolve_after_if_else@12:
-    // contracts/quantum_arena/contract.py:640
+    // contracts/quantum_arena/contract.py:662
     // for i in urange(n):
     dig 15
     intc_1 // 1
@@ -2592,18 +2646,18 @@ resolve_after_if_else@12:
     b resolve_for_header@6
 
 resolve_else_body@11:
-    // contracts/quantum_arena/contract.py:646
+    // contracts/quantum_arena/contract.py:668
     // all_signed = False
     intc_0 // 0
     bury 22
     b resolve_after_if_else@12
 
 resolve_after_for@14:
-    // contracts/quantum_arena/contract.py:647
+    // contracts/quantum_arena/contract.py:669
     // now = Global.latest_timestamp
     global LatestTimestamp
     bury 15
-    // contracts/quantum_arena/contract.py:648
+    // contracts/quantum_arena/contract.py:670
     // allowed = (filled and all_signed) or (now >= meta.deadline and signed_joiners >= 1)
     uncover 4
     bz resolve_or_contd@16
@@ -2611,7 +2665,7 @@ resolve_after_for@14:
     bnz resolve_bool_true@18
 
 resolve_or_contd@16:
-    // contracts/quantum_arena/contract.py:648
+    // contracts/quantum_arena/contract.py:670
     // allowed = (filled and all_signed) or (now >= meta.deadline and signed_joiners >= 1)
     dup
     pushint 26
@@ -2628,31 +2682,31 @@ resolve_bool_true@18:
     intc_1 // 1
 
 resolve_bool_merge@20:
-    // contracts/quantum_arena/contract.py:649
+    // contracts/quantum_arena/contract.py:671
     // assert allowed, "not resolvable yet"
     assert // not resolvable yet
-    // contracts/quantum_arena/contract.py:651-652
+    // contracts/quantum_arena/contract.py:673-674
     // # --- digest of signed scores, in seat order
     // digest_input = Bytes()
     pushbytes 0x
     cover 4
-    // contracts/quantum_arena/contract.py:653
+    // contracts/quantum_arena/contract.py:675
     // n_signed = UInt64(0)
     intc_0 // 0
     cover 4
-    // contracts/quantum_arena/contract.py:654
+    // contracts/quantum_arena/contract.py:676
     // for i in urange(n):
     intc_0 // 0
     bury 17
 
 resolve_for_header@21:
-    // contracts/quantum_arena/contract.py:654
+    // contracts/quantum_arena/contract.py:676
     // for i in urange(n):
     dig 16
     dig 7
     <
     bz resolve_after_for@26
-    // contracts/quantum_arena/contract.py:655-656
+    // contracts/quantum_arena/contract.py:677-678
     // entry = roster[i].copy()
     // if entry.signed:
     intc_2 // 2
@@ -2674,10 +2728,10 @@ resolve_for_header@21:
     box_extract // on error: index out of bounds
     intc_0 // 0
     getbit
-    // contracts/quantum_arena/contract.py:656
+    // contracts/quantum_arena/contract.py:678
     // if entry.signed:
     bz resolve_after_if_else@24
-    // contracts/quantum_arena/contract.py:657
+    // contracts/quantum_arena/contract.py:679
     // digest_input += seat_byte(i) + entry.addr + op.itob(entry.score)
     dig 16
     callsub seat_byte
@@ -2718,7 +2772,7 @@ resolve_for_header@21:
     swap
     concat
     cover 5
-    // contracts/quantum_arena/contract.py:658
+    // contracts/quantum_arena/contract.py:680
     // n_signed += 1
     uncover 4
     intc_1 // 1
@@ -2726,7 +2780,7 @@ resolve_for_header@21:
     cover 4
 
 resolve_after_if_else@24:
-    // contracts/quantum_arena/contract.py:654
+    // contracts/quantum_arena/contract.py:676
     // for i in urange(n):
     dig 16
     intc_1 // 1
@@ -2735,12 +2789,12 @@ resolve_after_if_else@24:
     b resolve_for_header@21
 
 resolve_after_for@26:
-    // contracts/quantum_arena/contract.py:659
+    // contracts/quantum_arena/contract.py:681
     // digest = op.sha256(digest_input)
     uncover 5
     sha256
     cover 6
-    // contracts/quantum_arena/contract.py:663
+    // contracts/quantum_arena/contract.py:685
     // if meta.stage_mode == MODE_FULL:
     dup
     pushint 34
@@ -2749,41 +2803,41 @@ resolve_after_for@26:
     btoi
     dup
     bnz resolve_else_body@28
-    // contracts/quantum_arena/contract.py:664
+    // contracts/quantum_arena/contract.py:686
     // assert stage_idx == 0, "unexpected stage idx"
     uncover 8
     !
     assert // unexpected stage idx
-    // contracts/quantum_arena/contract.py:665
+    // contracts/quantum_arena/contract.py:687
     // assert seed_reveal.length == 0, "unexpected seed reveal"
     dig 3
     len
     !
     assert // unexpected seed reveal
-    // contracts/quantum_arena/contract.py:666
+    // contracts/quantum_arena/contract.py:688
     // extra = Bytes(ZERO_32)
     pushbytes 0x0000000000000000000000000000000000000000000000000000000000000000
 
 resolve_after_if_else@32:
-    // contracts/quantum_arena/contract.py:678
+    // contracts/quantum_arena/contract.py:700
     // + op.itob(Global.current_application_id.id)
     global CurrentApplicationID
     itob
-    // contracts/quantum_arena/contract.py:677
+    // contracts/quantum_arena/contract.py:699
     // Bytes(VERDICT_DOMAIN)
     pushbytes 0x51412d564552444943547c
-    // contracts/quantum_arena/contract.py:677-678
+    // contracts/quantum_arena/contract.py:699-700
     // Bytes(VERDICT_DOMAIN)
     // + op.itob(Global.current_application_id.id)
     swap
     concat
-    // contracts/quantum_arena/contract.py:677-679
+    // contracts/quantum_arena/contract.py:699-701
     // Bytes(VERDICT_DOMAIN)
     // + op.itob(Global.current_application_id.id)
     // + op.itob(challenge_id)
     uncover 4
     concat
-    // contracts/quantum_arena/contract.py:680
+    // contracts/quantum_arena/contract.py:702
     // + arc4.UInt8(meta.stage_mode).bytes
     uncover 2
     dup
@@ -2795,13 +2849,13 @@ resolve_after_if_else@32:
     <=
     assert // overflow
     extract 7 1
-    // contracts/quantum_arena/contract.py:677-680
+    // contracts/quantum_arena/contract.py:699-702
     // Bytes(VERDICT_DOMAIN)
     // + op.itob(Global.current_application_id.id)
     // + op.itob(challenge_id)
     // + arc4.UInt8(meta.stage_mode).bytes
     concat
-    // contracts/quantum_arena/contract.py:677-681
+    // contracts/quantum_arena/contract.py:699-703
     // Bytes(VERDICT_DOMAIN)
     // + op.itob(Global.current_application_id.id)
     // + op.itob(challenge_id)
@@ -2809,7 +2863,7 @@ resolve_after_if_else@32:
     // + extra
     uncover 2
     concat
-    // contracts/quantum_arena/contract.py:677-682
+    // contracts/quantum_arena/contract.py:699-704
     // Bytes(VERDICT_DOMAIN)
     // + op.itob(Global.current_application_id.id)
     // + op.itob(challenge_id)
@@ -2818,7 +2872,7 @@ resolve_after_if_else@32:
     // + digest
     uncover 7
     concat
-    // contracts/quantum_arena/contract.py:952
+    // contracts/quantum_arena/contract.py:954
     // return op.ed25519verify_bare(msg, sig, self.oracle_pub_key.value)
     intc_0 // 0
     bytec 7 // "oracle_pub_key"
@@ -2827,24 +2881,24 @@ resolve_after_if_else@32:
     dig 10
     swap
     ed25519verify_bare
-    // contracts/quantum_arena/contract.py:684
+    // contracts/quantum_arena/contract.py:706
     // assert self._verify_oracle_sig(verdict_msg, verdict_sig), "bad verdict"
     assert // bad verdict
-    // contracts/quantum_arena/contract.py:686-687
+    // contracts/quantum_arena/contract.py:708-709
     // # --- winner selection
     // winner = Bytes()
     pushbytes 0x
     bury 22
-    // contracts/quantum_arena/contract.py:688
+    // contracts/quantum_arena/contract.py:710
     // tie = False
     intc_0 // 0
     swap
-    // contracts/quantum_arena/contract.py:689
+    // contracts/quantum_arena/contract.py:711
     // if meta.stage_mode == MODE_RANDOM_RESOLVED:
     intc_2 // 2
     ==
     bz resolve_else_body@42
-    // contracts/quantum_arena/contract.py:690-691
+    // contracts/quantum_arena/contract.py:712-713
     // # deterministic pick among signed players, oracle-committed seed
     // pick = op.extract_uint64(seed_reveal, 0) % n_signed
     uncover 2
@@ -2853,23 +2907,23 @@ resolve_after_if_else@32:
     uncover 4
     %
     bury 11
-    // contracts/quantum_arena/contract.py:692
+    // contracts/quantum_arena/contract.py:714
     // seen = UInt64(0)
     intc_0 // 0
     bury 10
-    // contracts/quantum_arena/contract.py:693
+    // contracts/quantum_arena/contract.py:715
     // for i in urange(n):
     intc_0 // 0
     bury 13
 
 resolve_for_header@34:
-    // contracts/quantum_arena/contract.py:693
+    // contracts/quantum_arena/contract.py:715
     // for i in urange(n):
     dig 12
     dig 4
     <
     bz resolve_after_if_else@55
-    // contracts/quantum_arena/contract.py:694-695
+    // contracts/quantum_arena/contract.py:716-717
     // entry = roster[i].copy()
     // if entry.signed:
     intc_2 // 2
@@ -2891,16 +2945,16 @@ resolve_for_header@34:
     box_extract // on error: index out of bounds
     intc_0 // 0
     getbit
-    // contracts/quantum_arena/contract.py:695
+    // contracts/quantum_arena/contract.py:717
     // if entry.signed:
     bz resolve_after_if_else@39
-    // contracts/quantum_arena/contract.py:696
+    // contracts/quantum_arena/contract.py:718
     // if seen == pick:
     dig 9
     dig 11
     ==
     bz resolve_after_if_else@38
-    // contracts/quantum_arena/contract.py:697
+    // contracts/quantum_arena/contract.py:719
     // winner = entry.addr
     dig 2
     dup
@@ -2921,7 +2975,7 @@ resolve_for_header@34:
     bury 20
 
 resolve_after_if_else@38:
-    // contracts/quantum_arena/contract.py:698
+    // contracts/quantum_arena/contract.py:720
     // seen += 1
     dig 9
     intc_1 // 1
@@ -2929,7 +2983,7 @@ resolve_after_if_else@38:
     bury 10
 
 resolve_after_if_else@39:
-    // contracts/quantum_arena/contract.py:693
+    // contracts/quantum_arena/contract.py:715
     // for i in urange(n):
     dig 12
     intc_1 // 1
@@ -2938,7 +2992,7 @@ resolve_after_if_else@39:
     b resolve_for_header@34
 
 resolve_after_if_else@55:
-    // contracts/quantum_arena/contract.py:713-718
+    // contracts/quantum_arena/contract.py:735-740
     // # --- effects BEFORE any inner transaction (checks-effects)
     // # v2: terminal state transition deletes BOTH boxes; the exact MBR
     // # paid at create goes back to the payer (creator). The terminal
@@ -2951,8 +3005,8 @@ resolve_after_if_else@55:
     intc_3 // 8
     box_extract // on error: index out of bounds
     btoi
-    cover 3
-    // contracts/quantum_arena/contract.py:719
+    swap
+    // contracts/quantum_arena/contract.py:741
     // mbr_paid = meta.mbr_paid
     dup
     pushint 70
@@ -2960,7 +3014,7 @@ resolve_after_if_else@55:
     box_extract // on error: index out of bounds
     btoi
     swap
-    // contracts/quantum_arena/contract.py:720
+    // contracts/quantum_arena/contract.py:742
     // creator = Account(meta.creator)
     dup
     pushint 78
@@ -2980,23 +3034,23 @@ resolve_after_if_else@55:
     pushint 32
     ==
     assert // Address length is 32 bytes
-    // contracts/quantum_arena/contract.py:721
+    // contracts/quantum_arena/contract.py:743
     // del self.challenges[challenge_id]
     box_del
     pop
-    // contracts/quantum_arena/contract.py:722
+    // contracts/quantum_arena/contract.py:744
     // del self.players[challenge_id]
     dig 5
     box_del
     pop
-    // contracts/quantum_arena/contract.py:724-725
+    // contracts/quantum_arena/contract.py:746-747
     // # --- interactions
     // if tie:
-    uncover 2
-    bz resolve_else_body@63
     uncover 3
+    bz resolve_else_body@62
+    uncover 2
     pop
-    // contracts/quantum_arena/contract.py:726-728
+    // contracts/quantum_arena/contract.py:748-750
     // # perfect tie: every payer gets the full stake back, zero fee,
     // # forfeits are refunded too (simplest anti-dispute rule).
     // for i in urange(n):
@@ -3004,45 +3058,25 @@ resolve_after_if_else@55:
     bury 14
 
 resolve_for_header@57:
-    // contracts/quantum_arena/contract.py:726-728
+    // contracts/quantum_arena/contract.py:748-750
     // # perfect tie: every payer gets the full stake back, zero fee,
     // # forfeits are refunded too (simplest anti-dispute rule).
     // for i in urange(n):
     dig 13
     dig 5
     <
-    bz resolve_after_for@61
-    // contracts/quantum_arena/contract.py:730-735
-    // itxn.AssetTransfer(
-    //     xfer_asset=Asset(self.gonna_asset_id.value),
-    //     asset_amount=meta.stake,
-    //     asset_receiver=Account(entry.addr),
-    //     fee=UInt64(0),
-    // ).submit()
-    itxn_begin
-    // contracts/quantum_arena/contract.py:731
-    // xfer_asset=Asset(self.gonna_asset_id.value),
-    intc_0 // 0
-    bytec_0 // "gonna_asset_id"
-    app_global_get_ex
-    assert // check self.gonna_asset_id exists
-    // contracts/quantum_arena/contract.py:732
-    // asset_amount=meta.stake,
-    dig 3
+    bz resolve_after_for@60
+    // contracts/quantum_arena/contract.py:751-752
+    // entry = roster[i].copy()
+    // self._pay_gonna(entry.addr, meta.stake)
     intc_2 // 2
-    intc_3 // 8
-    box_extract // on error: index out of bounds
-    btoi
-    // contracts/quantum_arena/contract.py:733
-    // asset_receiver=Account(entry.addr),
-    intc_2 // 2
-    dig 16
+    dig 14
     dup
-    cover 3
+    cover 2
     *
     intc_2 // 2
     +
-    dig 7
+    dig 5
     dup
     uncover 2
     intc_2 // 2
@@ -3057,33 +3091,16 @@ resolve_for_header@57:
     intc_2 // 2
     +
     box_extract
+    // contracts/quantum_arena/contract.py:752
+    // self._pay_gonna(entry.addr, meta.stake)
     extract 2 0
-    dup
-    len
-    pushint 32
-    ==
-    assert // Address length is 32 bytes
-    itxn_field AssetReceiver
-    itxn_field AssetAmount
-    swap
-    itxn_field XferAsset
-    // contracts/quantum_arena/contract.py:730
-    // itxn.AssetTransfer(
-    pushint 4 // axfer
-    itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:734
-    // fee=UInt64(0),
-    intc_0 // 0
-    itxn_field Fee
-    // contracts/quantum_arena/contract.py:730-735
-    // itxn.AssetTransfer(
-    //     xfer_asset=Asset(self.gonna_asset_id.value),
-    //     asset_amount=meta.stake,
-    //     asset_receiver=Account(entry.addr),
-    //     fee=UInt64(0),
-    // ).submit()
-    itxn_submit
-    // contracts/quantum_arena/contract.py:726-728
+    dig 4
+    intc_2 // 2
+    intc_3 // 8
+    box_extract // on error: index out of bounds
+    btoi
+    callsub _pay_gonna
+    // contracts/quantum_arena/contract.py:748-750
     // # perfect tie: every payer gets the full stake back, zero fee,
     // # forfeits are refunded too (simplest anti-dispute rule).
     // for i in urange(n):
@@ -3092,14 +3109,14 @@ resolve_for_header@57:
     bury 14
     b resolve_for_header@57
 
-resolve_after_for@61:
+resolve_after_for@60:
     uncover 2
     pop
     uncover 2
     pop
     uncover 2
     pop
-    // contracts/quantum_arena/contract.py:736-740
+    // contracts/quantum_arena/contract.py:753-757
     // itxn.Payment(
     //     receiver=creator,
     //     amount=mbr_paid,
@@ -3108,29 +3125,29 @@ resolve_after_for@61:
     itxn_begin
     itxn_field Amount
     itxn_field Receiver
-    // contracts/quantum_arena/contract.py:736
+    // contracts/quantum_arena/contract.py:753
     // itxn.Payment(
     intc_1 // pay
     itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:739
+    // contracts/quantum_arena/contract.py:756
     // fee=UInt64(0),
     intc_0 // 0
     itxn_field Fee
-    // contracts/quantum_arena/contract.py:736-740
+    // contracts/quantum_arena/contract.py:753-757
     // itxn.Payment(
     //     receiver=creator,
     //     amount=mbr_paid,
     //     fee=UInt64(0),
     // ).submit()
     itxn_submit
-    // contracts/quantum_arena/contract.py:744
+    // contracts/quantum_arena/contract.py:761
     // winner=arc4.Address(),  # zero address signals a tie
     global ZeroAddress
-    // contracts/quantum_arena/contract.py:745
+    // contracts/quantum_arena/contract.py:762
     // payout=arc4.UInt64(0),
     intc_0 // 0
     itob
-    // contracts/quantum_arena/contract.py:742-747
+    // contracts/quantum_arena/contract.py:759-764
     // ChallengeResolved(
     //     challenge_id=arc4.UInt64(challenge_id),
     //     winner=arc4.Address(),  # zero address signals a tie
@@ -3144,7 +3161,7 @@ resolve_after_for@61:
     concat
     swap
     concat
-    // contracts/quantum_arena/contract.py:741-748
+    // contracts/quantum_arena/contract.py:758-765
     // arc4.emit(
     //     ChallengeResolved(
     //         challenge_id=arc4.UInt64(challenge_id),
@@ -3157,12 +3174,12 @@ resolve_after_for@61:
     swap
     concat
     log
-    // contracts/quantum_arena/contract.py:750
+    // contracts/quantum_arena/contract.py:767
     // ChallengeRefunded(challenge_id=arc4.UInt64(challenge_id), reason=arc4.UInt64(3))
     pushint 3
     itob
     concat
-    // contracts/quantum_arena/contract.py:749-751
+    // contracts/quantum_arena/contract.py:766-768
     // arc4.emit(
     //     ChallengeRefunded(challenge_id=arc4.UInt64(challenge_id), reason=arc4.UInt64(3))
     // )
@@ -3170,12 +3187,12 @@ resolve_after_for@61:
     swap
     concat
     log
-    // contracts/quantum_arena/contract.py:752
+    // contracts/quantum_arena/contract.py:769
     // return Bytes(b"")
     pushbytes 0x
 
-resolve_after_inlined_contracts.quantum_arena.contract.QuantumArena.resolve@69:
-    // contracts/quantum_arena/contract.py:609
+resolve_after_inlined_contracts.quantum_arena.contract.QuantumArena.resolve@67:
+    // contracts/quantum_arena/contract.py:631
     // @arc4.abimethod
     dup
     len
@@ -3190,75 +3207,36 @@ resolve_after_inlined_contracts.quantum_arena.contract.QuantumArena.resolve@69:
     intc_1 // 1
     return
 
-resolve_else_body@63:
-    uncover 2
-    pop
+resolve_else_body@62:
     uncover 3
     pop
     uncover 3
     pop
-    // contracts/quantum_arena/contract.py:754
-    // fee = pot * FEE_BPS // BPS_BASE
+    uncover 3
+    pop
+    // contracts/quantum_arena/contract.py:771
+    // fee = protocol_fee(pot)
     uncover 2
     dup
-    pushint 500
-    *
-    pushint 10000
-    /
+    callsub protocol_fee
     dup
     cover 4
-    // contracts/quantum_arena/contract.py:755
+    // contracts/quantum_arena/contract.py:772
     // payout = pot - fee
     swap
     dig 1
     -
     dup
     cover 2
-    // contracts/quantum_arena/contract.py:756-761
-    // itxn.AssetTransfer(
-    //     xfer_asset=Asset(self.gonna_asset_id.value),
-    //     asset_amount=payout,
-    //     asset_receiver=Account(winner),
-    //     fee=UInt64(0),
-    // ).submit()
-    itxn_begin
-    // contracts/quantum_arena/contract.py:757
-    // xfer_asset=Asset(self.gonna_asset_id.value),
-    intc_0 // 0
-    bytec_0 // "gonna_asset_id"
-    app_global_get_ex
-    assert // check self.gonna_asset_id exists
-    // contracts/quantum_arena/contract.py:759
-    // asset_receiver=Account(winner),
-    dig 22
-    dup
-    len
-    pushint 32
-    ==
-    assert // Address length is 32 bytes
-    itxn_field AssetReceiver
-    itxn_field XferAsset
-    itxn_field AssetAmount
-    // contracts/quantum_arena/contract.py:756
-    // itxn.AssetTransfer(
-    pushint 4 // axfer
-    itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:760
-    // fee=UInt64(0),
-    intc_0 // 0
-    itxn_field Fee
-    // contracts/quantum_arena/contract.py:756-761
-    // itxn.AssetTransfer(
-    //     xfer_asset=Asset(self.gonna_asset_id.value),
-    //     asset_amount=payout,
-    //     asset_receiver=Account(winner),
-    //     fee=UInt64(0),
-    // ).submit()
-    itxn_submit
-    // contracts/quantum_arena/contract.py:762
+    // contracts/quantum_arena/contract.py:773
+    // self._pay_gonna(winner, payout)
+    dig 21
+    swap
+    callsub _pay_gonna
+    // contracts/quantum_arena/contract.py:774
     // if fee > 0:
-    bz resolve_after_if_else@67
-    // contracts/quantum_arena/contract.py:763-768
+    bz resolve_after_if_else@65
+    // contracts/quantum_arena/contract.py:775-780
     // itxn.AssetTransfer(
     //     xfer_asset=Asset(self.gonna_asset_id.value),
     //     asset_amount=fee,
@@ -3266,13 +3244,13 @@ resolve_else_body@63:
     //     fee=UInt64(0),
     // ).submit()
     itxn_begin
-    // contracts/quantum_arena/contract.py:764
+    // contracts/quantum_arena/contract.py:776
     // xfer_asset=Asset(self.gonna_asset_id.value),
     intc_0 // 0
-    bytec_0 // "gonna_asset_id"
+    bytec_2 // "gonna_asset_id"
     app_global_get_ex
     assert // check self.gonna_asset_id exists
-    // contracts/quantum_arena/contract.py:766
+    // contracts/quantum_arena/contract.py:778
     // asset_receiver=Account(self.treasury.value),
     intc_0 // 0
     bytec_3 // "treasury"
@@ -3287,15 +3265,15 @@ resolve_else_body@63:
     dig 4
     itxn_field AssetAmount
     itxn_field XferAsset
-    // contracts/quantum_arena/contract.py:763
+    // contracts/quantum_arena/contract.py:775
     // itxn.AssetTransfer(
     pushint 4 // axfer
     itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:767
+    // contracts/quantum_arena/contract.py:779
     // fee=UInt64(0),
     intc_0 // 0
     itxn_field Fee
-    // contracts/quantum_arena/contract.py:763-768
+    // contracts/quantum_arena/contract.py:775-780
     // itxn.AssetTransfer(
     //     xfer_asset=Asset(self.gonna_asset_id.value),
     //     asset_amount=fee,
@@ -3304,8 +3282,8 @@ resolve_else_body@63:
     // ).submit()
     itxn_submit
 
-resolve_after_if_else@67:
-    // contracts/quantum_arena/contract.py:769-773
+resolve_after_if_else@65:
+    // contracts/quantum_arena/contract.py:781-785
     // itxn.Payment(
     //     receiver=creator,
     //     amount=mbr_paid,
@@ -3316,45 +3294,52 @@ resolve_after_if_else@67:
     itxn_field Amount
     swap
     itxn_field Receiver
-    // contracts/quantum_arena/contract.py:769
+    // contracts/quantum_arena/contract.py:781
     // itxn.Payment(
     intc_1 // pay
     itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:772
+    // contracts/quantum_arena/contract.py:784
     // fee=UInt64(0),
     intc_0 // 0
     itxn_field Fee
-    // contracts/quantum_arena/contract.py:769-773
+    // contracts/quantum_arena/contract.py:781-785
     // itxn.Payment(
     //     receiver=creator,
     //     amount=mbr_paid,
     //     fee=UInt64(0),
     // ).submit()
     itxn_submit
-    // contracts/quantum_arena/contract.py:778
+    // contracts/quantum_arena/contract.py:789
+    // winner=arc4.Address(winner),
+    dig 17
+    dup
+    len
+    pushint 32
+    ==
+    assert // Address length is 32 bytes
+    // contracts/quantum_arena/contract.py:790
     // payout=arc4.UInt64(payout),
-    itob
-    // contracts/quantum_arena/contract.py:779
-    // fee=arc4.UInt64(fee),
     swap
     itob
-    // contracts/quantum_arena/contract.py:775-780
+    // contracts/quantum_arena/contract.py:791
+    // fee=arc4.UInt64(fee),
+    uncover 2
+    itob
+    // contracts/quantum_arena/contract.py:787-792
     // ChallengeResolved(
     //     challenge_id=arc4.UInt64(challenge_id),
     //     winner=arc4.Address(winner),
     //     payout=arc4.UInt64(payout),
     //     fee=arc4.UInt64(fee),
     // )
-    uncover 2
-    dig 17
-    dup
-    cover 4
+    uncover 3
+    dig 3
     concat
     uncover 2
     concat
     swap
     concat
-    // contracts/quantum_arena/contract.py:774-781
+    // contracts/quantum_arena/contract.py:786-793
     // arc4.emit(
     //     ChallengeResolved(
     //         challenge_id=arc4.UInt64(challenge_id),
@@ -3367,36 +3352,36 @@ resolve_after_if_else@67:
     swap
     concat
     log
-    // contracts/quantum_arena/contract.py:609
+    // contracts/quantum_arena/contract.py:631
     // @arc4.abimethod
-    b resolve_after_inlined_contracts.quantum_arena.contract.QuantumArena.resolve@69
+    b resolve_after_inlined_contracts.quantum_arena.contract.QuantumArena.resolve@67
 
 resolve_else_body@42:
     pop
     bury 1
     uncover 2
     pop
-    // contracts/quantum_arena/contract.py:700
+    // contracts/quantum_arena/contract.py:722
     // best = UInt64(0)
     intc_0 // 0
     bury 17
-    // contracts/quantum_arena/contract.py:701
+    // contracts/quantum_arena/contract.py:723
     // best_count = UInt64(0)
     intc_0 // 0
     bury 16
-    // contracts/quantum_arena/contract.py:702
+    // contracts/quantum_arena/contract.py:724
     // for i in urange(n):
     intc_0 // 0
     bury 12
 
 resolve_for_header@43:
-    // contracts/quantum_arena/contract.py:702
+    // contracts/quantum_arena/contract.py:724
     // for i in urange(n):
     dig 11
     dig 3
     <
     bz resolve_after_for@54
-    // contracts/quantum_arena/contract.py:703-704
+    // contracts/quantum_arena/contract.py:725-726
     // entry = roster[i].copy()
     // if entry.signed:
     intc_2 // 2
@@ -3418,10 +3403,10 @@ resolve_for_header@43:
     box_extract // on error: index out of bounds
     intc_0 // 0
     getbit
-    // contracts/quantum_arena/contract.py:704
+    // contracts/quantum_arena/contract.py:726
     // if entry.signed:
     bz resolve_after_if_else@52
-    // contracts/quantum_arena/contract.py:705
+    // contracts/quantum_arena/contract.py:727
     // if best_count == 0 or entry.score > best:
     dig 15
     bz resolve_if_body@47
@@ -3443,7 +3428,7 @@ resolve_for_header@43:
     bz resolve_else_body@48
 
 resolve_if_body@47:
-    // contracts/quantum_arena/contract.py:706
+    // contracts/quantum_arena/contract.py:728
     // best = entry.score
     dig 1
     dup
@@ -3460,11 +3445,11 @@ resolve_if_body@47:
     box_extract // on error: index out of bounds
     btoi
     bury 19
-    // contracts/quantum_arena/contract.py:707
+    // contracts/quantum_arena/contract.py:729
     // best_count = UInt64(1)
     intc_1 // 1
     bury 18
-    // contracts/quantum_arena/contract.py:708
+    // contracts/quantum_arena/contract.py:730
     // winner = entry.addr
     pushint 21
     +
@@ -3479,7 +3464,7 @@ resolve_if_body@47:
     bury 19
 
 resolve_after_if_else@52:
-    // contracts/quantum_arena/contract.py:702
+    // contracts/quantum_arena/contract.py:724
     // for i in urange(n):
     dig 11
     intc_1 // 1
@@ -3488,13 +3473,13 @@ resolve_after_if_else@52:
     b resolve_for_header@43
 
 resolve_else_body@48:
-    // contracts/quantum_arena/contract.py:709
+    // contracts/quantum_arena/contract.py:731
     // elif entry.score == best:
     dig 6
     dig 17
     ==
     bz resolve_after_if_else@52
-    // contracts/quantum_arena/contract.py:710
+    // contracts/quantum_arena/contract.py:732
     // best_count += 1
     dig 15
     intc_1 // 1
@@ -3503,7 +3488,7 @@ resolve_else_body@48:
     b resolve_after_if_else@52
 
 resolve_after_for@54:
-    // contracts/quantum_arena/contract.py:711
+    // contracts/quantum_arena/contract.py:733
     // tie = best_count > 1
     dig 15
     intc_1 // 1
@@ -3511,19 +3496,19 @@ resolve_after_for@54:
     b resolve_after_if_else@55
 
 resolve_else_body@28:
-    // contracts/quantum_arena/contract.py:667
+    // contracts/quantum_arena/contract.py:689
     // elif meta.stage_mode == MODE_STAGE_IDX:
     dup
     intc_1 // 1
     ==
     bz resolve_else_body@30
-    // contracts/quantum_arena/contract.py:668
+    // contracts/quantum_arena/contract.py:690
     // assert seed_reveal.length == 0, "unexpected seed reveal"
     dig 3
     len
     !
     assert // unexpected seed reveal
-    // contracts/quantum_arena/contract.py:669
+    // contracts/quantum_arena/contract.py:691
     // extra = Bytes(ZERO_24) + op.itob(stage_idx)
     uncover 8
     itob
@@ -3535,7 +3520,7 @@ resolve_else_body@28:
 resolve_else_body@30:
     uncover 8
     pop
-    // contracts/quantum_arena/contract.py:671
+    // contracts/quantum_arena/contract.py:693
     // assert seed_reveal.length == 32, "seed reveal must be 32 bytes"
     dig 3
     dup
@@ -3543,7 +3528,7 @@ resolve_else_body@30:
     pushint 32
     ==
     assert // seed reveal must be 32 bytes
-    // contracts/quantum_arena/contract.py:672
+    // contracts/quantum_arena/contract.py:694
     // assert op.sha256(seed_reveal) == meta.seed_commitment, "bad seed reveal"
     dup
     sha256
@@ -3576,7 +3561,7 @@ resolve_bool_false@4:
 
 // contracts.quantum_arena.contract.QuantumArena.claim[routing]() -> void:
 claim:
-    // contracts/quantum_arena/contract.py:784
+    // contracts/quantum_arena/contract.py:796
     // @arc4.abimethod
     txna ApplicationArgs 1
     dup
@@ -3586,33 +3571,33 @@ claim:
     assert // invalid number of bytes for arc4.uint64
     btoi
     dup
-    // contracts/quantum_arena/contract.py:790
+    // contracts/quantum_arena/contract.py:802
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:791
+    // contracts/quantum_arena/contract.py:803
     // assert challenge_id in self.challenges, "challenge not found"
     itob
     dup
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     swap
     concat
     dupn 2
     box_len
     bury 1
     assert // challenge not found
-    // contracts/quantum_arena/contract.py:792
+    // contracts/quantum_arena/contract.py:804
     // meta = self.challenges[challenge_id].copy()
     dup
     box_get
     pop
     cover 3
-    // contracts/quantum_arena/contract.py:792-793
+    // contracts/quantum_arena/contract.py:804-805
     // meta = self.challenges[challenge_id].copy()
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     pushint 52
     intc_3 // 8
     box_extract // on error: index out of bounds
-    // contracts/quantum_arena/contract.py:793
+    // contracts/quantum_arena/contract.py:805
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     btoi
     dup
@@ -3627,23 +3612,23 @@ claim_bool_true@3:
     intc_1 // 1
 
 claim_bool_merge@5:
-    // contracts/quantum_arena/contract.py:793
+    // contracts/quantum_arena/contract.py:805
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     assert // not refundable
-    // contracts/quantum_arena/contract.py:794
+    // contracts/quantum_arena/contract.py:806
     // assert challenge_id in self.players, "roster missing"
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     uncover 2
     concat
     dup
     box_len
     bury 1
     assert // roster missing
-    // contracts/quantum_arena/contract.py:795
+    // contracts/quantum_arena/contract.py:807
     // roster = self.players[challenge_id].copy()
     box_get
     pop
-    // contracts/quantum_arena/contract.py:796
+    // contracts/quantum_arena/contract.py:808
     // assert meta.seats_taken == 0, "challenge has joiners"
     swap
     dup
@@ -3653,7 +3638,7 @@ claim_bool_merge@5:
     btoi
     !
     assert // challenge has joiners
-    // contracts/quantum_arena/contract.py:797
+    // contracts/quantum_arena/contract.py:809
     // assert Global.latest_timestamp >= meta.deadline, "deadline not reached"
     global LatestTimestamp
     dig 1
@@ -3663,7 +3648,7 @@ claim_bool_merge@5:
     btoi
     >=
     assert // deadline not reached
-    // contracts/quantum_arena/contract.py:798
+    // contracts/quantum_arena/contract.py:810
     // assert Txn.sender.bytes == meta.creator, "only creator"
     txn Sender
     dig 1
@@ -3680,13 +3665,13 @@ claim_bool_merge@5:
     extract 2 0
     ==
     assert // only creator
-    // contracts/quantum_arena/contract.py:799
+    // contracts/quantum_arena/contract.py:811
     // self._refund_all(challenge_id, meta, roster, arc4.UInt64(1))
     intc_1 // 1
     itob
     callsub _refund_all
     popn 2
-    // contracts/quantum_arena/contract.py:784
+    // contracts/quantum_arena/contract.py:796
     // @arc4.abimethod
     intc_1 // 1
     return
@@ -3698,7 +3683,7 @@ claim_bool_false@4:
 
 // contracts.quantum_arena.contract.QuantumArena.claim_for[routing]() -> void:
 claim_for:
-    // contracts/quantum_arena/contract.py:801
+    // contracts/quantum_arena/contract.py:813
     // @arc4.abimethod
     txna ApplicationArgs 1
     dup
@@ -3708,33 +3693,33 @@ claim_for:
     assert // invalid number of bytes for arc4.uint64
     btoi
     dup
-    // contracts/quantum_arena/contract.py:807
+    // contracts/quantum_arena/contract.py:819
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:808
+    // contracts/quantum_arena/contract.py:820
     // assert challenge_id in self.challenges, "challenge not found"
     itob
     dup
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     swap
     concat
     dupn 2
     box_len
     bury 1
     assert // challenge not found
-    // contracts/quantum_arena/contract.py:809
+    // contracts/quantum_arena/contract.py:821
     // meta = self.challenges[challenge_id].copy()
     dup
     box_get
     pop
     cover 3
-    // contracts/quantum_arena/contract.py:809-810
+    // contracts/quantum_arena/contract.py:821-822
     // meta = self.challenges[challenge_id].copy()
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     pushint 52
     intc_3 // 8
     box_extract // on error: index out of bounds
-    // contracts/quantum_arena/contract.py:810
+    // contracts/quantum_arena/contract.py:822
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     btoi
     dup
@@ -3749,23 +3734,23 @@ claim_for_bool_true@3:
     intc_1 // 1
 
 claim_for_bool_merge@5:
-    // contracts/quantum_arena/contract.py:810
+    // contracts/quantum_arena/contract.py:822
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     assert // not refundable
-    // contracts/quantum_arena/contract.py:811
+    // contracts/quantum_arena/contract.py:823
     // assert challenge_id in self.players, "roster missing"
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     uncover 2
     concat
     dup
     box_len
     bury 1
     assert // roster missing
-    // contracts/quantum_arena/contract.py:812
+    // contracts/quantum_arena/contract.py:824
     // roster = self.players[challenge_id].copy()
     box_get
     pop
-    // contracts/quantum_arena/contract.py:813
+    // contracts/quantum_arena/contract.py:825
     // assert meta.seats_taken == 0, "challenge has joiners"
     swap
     dup
@@ -3775,7 +3760,7 @@ claim_for_bool_merge@5:
     btoi
     !
     assert // challenge has joiners
-    // contracts/quantum_arena/contract.py:815
+    // contracts/quantum_arena/contract.py:827
     // Global.latest_timestamp >= meta.deadline + CATASTROPHE_WINDOW
     global LatestTimestamp
     swap
@@ -3783,21 +3768,21 @@ claim_for_bool_merge@5:
     intc_3 // 8
     box_extract // on error: index out of bounds
     btoi
-    intc 7 // 604800
+    intc 8 // 604800
     +
     >=
-    // contracts/quantum_arena/contract.py:814-816
+    // contracts/quantum_arena/contract.py:826-828
     // assert (
     //     Global.latest_timestamp >= meta.deadline + CATASTROPHE_WINDOW
     // ), "sweep window not reached"
     assert // sweep window not reached
-    // contracts/quantum_arena/contract.py:817
+    // contracts/quantum_arena/contract.py:829
     // self._refund_all(challenge_id, meta, roster, arc4.UInt64(1))
     intc_1 // 1
     itob
     callsub _refund_all
     popn 2
-    // contracts/quantum_arena/contract.py:801
+    // contracts/quantum_arena/contract.py:813
     // @arc4.abimethod
     intc_1 // 1
     return
@@ -3809,7 +3794,7 @@ claim_for_bool_false@4:
 
 // contracts.quantum_arena.contract.QuantumArena.claim_forfeit[routing]() -> void:
 claim_forfeit:
-    // contracts/quantum_arena/contract.py:819
+    // contracts/quantum_arena/contract.py:831
     // @arc4.abimethod
     txna ApplicationArgs 1
     dupn 2
@@ -3826,27 +3811,27 @@ claim_forfeit:
     assert // invalid number of bytes for arc4.uint64
     btoi
     swap
-    // contracts/quantum_arena/contract.py:834
+    // contracts/quantum_arena/contract.py:846
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:835
+    // contracts/quantum_arena/contract.py:847
     // assert challenge_id in self.challenges, "challenge not found"
     itob
     dup
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     swap
     concat
     dupn 2
     box_len
     bury 1
     assert // challenge not found
-    // contracts/quantum_arena/contract.py:836-837
+    // contracts/quantum_arena/contract.py:848-849
     // meta = self.challenges[challenge_id].copy()
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not active"
     pushint 52
     intc_3 // 8
     box_extract // on error: index out of bounds
-    // contracts/quantum_arena/contract.py:837
+    // contracts/quantum_arena/contract.py:849
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not active"
     btoi
     dup
@@ -3861,10 +3846,10 @@ claim_forfeit_bool_true@3:
     intc_1 // 1
 
 claim_forfeit_bool_merge@5:
-    // contracts/quantum_arena/contract.py:837
+    // contracts/quantum_arena/contract.py:849
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not active"
     assert // not active
-    // contracts/quantum_arena/contract.py:838
+    // contracts/quantum_arena/contract.py:850
     // assert meta.seats_total == SEATS_DUEL, "forfeit claims are duel-only"
     dup
     pushint 10
@@ -3874,16 +3859,16 @@ claim_forfeit_bool_merge@5:
     intc_1 // 1
     ==
     assert // forfeit claims are duel-only
-    // contracts/quantum_arena/contract.py:839
+    // contracts/quantum_arena/contract.py:851
     // assert challenge_id in self.players, "roster missing"
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     uncover 2
     concat
     dup
     box_len
     bury 1
     assert // roster missing
-    // contracts/quantum_arena/contract.py:841
+    // contracts/quantum_arena/contract.py:853
     // assert meta.seats_taken == 1, "opponent seat empty"
     dig 1
     pushint 18
@@ -3893,19 +3878,19 @@ claim_forfeit_bool_merge@5:
     intc_1 // 1
     ==
     assert // opponent seat empty
-    // contracts/quantum_arena/contract.py:842
+    // contracts/quantum_arena/contract.py:854
     // assert seat <= 1, "invalid seat"
     uncover 2
     dup
     intc_1 // 1
     <=
     assert // invalid seat
-    // contracts/quantum_arena/contract.py:845
+    // contracts/quantum_arena/contract.py:857
     // caller = roster[1 - seat].copy()  # a duel has exactly seats 0 and 1
     intc_1 // 1
     dig 1
     -
-    // contracts/quantum_arena/contract.py:845-846
+    // contracts/quantum_arena/contract.py:857-858
     // caller = roster[1 - seat].copy()  # a duel has exactly seats 0 and 1
     // assert caller.addr == Txn.sender.bytes, "only the opponent can claim"
     intc_2 // 2
@@ -3930,16 +3915,16 @@ claim_forfeit_bool_merge@5:
     dig 4
     cover 2
     box_extract
-    // contracts/quantum_arena/contract.py:846
+    // contracts/quantum_arena/contract.py:858
     // assert caller.addr == Txn.sender.bytes, "only the opponent can claim"
     extract 2 0
     dup
-    cover 6
+    cover 5
     dup
     txn Sender
     ==
     assert // only the opponent can claim
-    // contracts/quantum_arena/contract.py:847
+    // contracts/quantum_arena/contract.py:859
     // assert caller.signed, "caller must have a signed score"
     swap
     pushint 12
@@ -3951,7 +3936,7 @@ claim_forfeit_bool_merge@5:
     intc_0 // 0
     getbit
     assert // caller must have a signed score
-    // contracts/quantum_arena/contract.py:848
+    // contracts/quantum_arena/contract.py:860
     // assert not target.signed, "target has a signed score"
     intc_2 // 2
     uncover 2
@@ -3974,7 +3959,7 @@ claim_forfeit_bool_merge@5:
     getbit
     !
     assert // target has a signed score
-    // contracts/quantum_arena/contract.py:850
+    // contracts/quantum_arena/contract.py:862
     // Global.latest_timestamp > target.seated_at + SEAT_TTL
     global LatestTimestamp
     swap
@@ -3988,34 +3973,31 @@ claim_forfeit_bool_merge@5:
     pushint 3600
     +
     >
-    // contracts/quantum_arena/contract.py:849-851
+    // contracts/quantum_arena/contract.py:861-863
     // assert (
     //     Global.latest_timestamp > target.seated_at + SEAT_TTL
     // ), "seat clock not expired"
     assert // seat clock not expired
-    // contracts/quantum_arena/contract.py:853-854
+    // contracts/quantum_arena/contract.py:865-866
     // # --- effects BEFORE any inner transaction (checks-effects)
-    // fee = meta.stake * FEE_BPS // BPS_BASE  # 5% of the forfeited stake
+    // fee = protocol_fee(meta.stake)  # 5% of the forfeited stake
     dig 2
     intc_2 // 2
     intc_3 // 8
     box_extract // on error: index out of bounds
     btoi
     dup
-    pushint 500
-    *
-    pushint 10000
-    /
+    callsub protocol_fee
     dup
     cover 5
-    // contracts/quantum_arena/contract.py:855
+    // contracts/quantum_arena/contract.py:867
     // winner_share = meta.stake - fee
     dup2
     -
     dup
     cover 3
-    cover 6
-    // contracts/quantum_arena/contract.py:857
+    cover 7
+    // contracts/quantum_arena/contract.py:869
     // mbr_paid = meta.mbr_paid
     dig 5
     pushint 70
@@ -4023,7 +4005,7 @@ claim_forfeit_bool_merge@5:
     box_extract // on error: index out of bounds
     btoi
     cover 6
-    // contracts/quantum_arena/contract.py:859
+    // contracts/quantum_arena/contract.py:871
     // creator = Account(meta.creator)
     dig 5
     pushint 78
@@ -4043,96 +4025,31 @@ claim_forfeit_bool_merge@5:
     pushint 32
     ==
     assert // Address length is 32 bytes
-    // contracts/quantum_arena/contract.py:860-861
+    // contracts/quantum_arena/contract.py:872-873
     // # single claim possible: the challenge is gone after this
     // del self.challenges[challenge_id]
     uncover 5
     box_del
     pop
-    // contracts/quantum_arena/contract.py:862
+    // contracts/quantum_arena/contract.py:874
     // del self.players[challenge_id]
     uncover 4
     box_del
     pop
-    // contracts/quantum_arena/contract.py:864-870
+    // contracts/quantum_arena/contract.py:876-877
     // # --- interactions
-    // itxn.AssetTransfer(  # caller's own signed stake, back in full
-    //     xfer_asset=Asset(self.gonna_asset_id.value),
-    //     asset_amount=own_stake,
-    //     asset_receiver=Account(winner_addr),
-    //     fee=UInt64(0),
-    // ).submit()
-    itxn_begin
-    // contracts/quantum_arena/contract.py:866
-    // xfer_asset=Asset(self.gonna_asset_id.value),
-    intc_0 // 0
-    bytec_0 // "gonna_asset_id"
-    app_global_get_ex
-    assert // check self.gonna_asset_id exists
-    // contracts/quantum_arena/contract.py:868
-    // asset_receiver=Account(winner_addr),
-    dig 4
-    len
-    pushint 32
-    ==
-    assert // Address length is 32 bytes
-    dig 4
-    itxn_field AssetReceiver
+    // self._pay_gonna(winner_addr, own_stake)  # caller's own stake, in full
+    dig 3
     uncover 2
-    itxn_field AssetAmount
-    dup
-    itxn_field XferAsset
-    // contracts/quantum_arena/contract.py:864-865
-    // # --- interactions
-    // itxn.AssetTransfer(  # caller's own signed stake, back in full
-    pushint 4 // axfer
-    itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:869
-    // fee=UInt64(0),
-    intc_0 // 0
-    itxn_field Fee
-    // contracts/quantum_arena/contract.py:864-870
-    // # --- interactions
-    // itxn.AssetTransfer(  # caller's own signed stake, back in full
-    //     xfer_asset=Asset(self.gonna_asset_id.value),
-    //     asset_amount=own_stake,
-    //     asset_receiver=Account(winner_addr),
-    //     fee=UInt64(0),
-    // ).submit()
-    itxn_submit
-    // contracts/quantum_arena/contract.py:871-876
-    // itxn.AssetTransfer(  # 95% of the forfeited stake
-    //     xfer_asset=Asset(self.gonna_asset_id.value),
-    //     asset_amount=winner_share,
-    //     asset_receiver=Account(winner_addr),
-    //     fee=UInt64(0),
-    // ).submit()
-    itxn_begin
-    uncover 3
-    itxn_field AssetReceiver
-    uncover 2
-    itxn_field AssetAmount
-    itxn_field XferAsset
-    // contracts/quantum_arena/contract.py:871
-    // itxn.AssetTransfer(  # 95% of the forfeited stake
-    pushint 4 // axfer
-    itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:875
-    // fee=UInt64(0),
-    intc_0 // 0
-    itxn_field Fee
-    // contracts/quantum_arena/contract.py:871-876
-    // itxn.AssetTransfer(  # 95% of the forfeited stake
-    //     xfer_asset=Asset(self.gonna_asset_id.value),
-    //     asset_amount=winner_share,
-    //     asset_receiver=Account(winner_addr),
-    //     fee=UInt64(0),
-    // ).submit()
-    itxn_submit
-    // contracts/quantum_arena/contract.py:877
+    callsub _pay_gonna
+    // contracts/quantum_arena/contract.py:878
+    // self._pay_gonna(winner_addr, winner_share)  # 95% of the forfeited stake
+    cover 2
+    callsub _pay_gonna
+    // contracts/quantum_arena/contract.py:879
     // if fee > 0:
-    bz claim_forfeit_after_if_else@10
-    // contracts/quantum_arena/contract.py:878-883
+    bz claim_forfeit_after_if_else@8
+    // contracts/quantum_arena/contract.py:880-885
     // itxn.AssetTransfer(
     //     xfer_asset=Asset(self.gonna_asset_id.value),
     //     asset_amount=fee,
@@ -4140,13 +4057,13 @@ claim_forfeit_bool_merge@5:
     //     fee=UInt64(0),
     // ).submit()
     itxn_begin
-    // contracts/quantum_arena/contract.py:879
+    // contracts/quantum_arena/contract.py:881
     // xfer_asset=Asset(self.gonna_asset_id.value),
     intc_0 // 0
-    bytec_0 // "gonna_asset_id"
+    bytec_2 // "gonna_asset_id"
     app_global_get_ex
     assert // check self.gonna_asset_id exists
-    // contracts/quantum_arena/contract.py:881
+    // contracts/quantum_arena/contract.py:883
     // asset_receiver=Account(self.treasury.value),
     intc_0 // 0
     bytec_3 // "treasury"
@@ -4158,18 +4075,18 @@ claim_forfeit_bool_merge@5:
     ==
     assert // Address length is 32 bytes
     itxn_field AssetReceiver
-    dig 4
+    dig 3
     itxn_field AssetAmount
     itxn_field XferAsset
-    // contracts/quantum_arena/contract.py:878
+    // contracts/quantum_arena/contract.py:880
     // itxn.AssetTransfer(
     pushint 4 // axfer
     itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:882
+    // contracts/quantum_arena/contract.py:884
     // fee=UInt64(0),
     intc_0 // 0
     itxn_field Fee
-    // contracts/quantum_arena/contract.py:878-883
+    // contracts/quantum_arena/contract.py:880-885
     // itxn.AssetTransfer(
     //     xfer_asset=Asset(self.gonna_asset_id.value),
     //     asset_amount=fee,
@@ -4178,8 +4095,8 @@ claim_forfeit_bool_merge@5:
     // ).submit()
     itxn_submit
 
-claim_forfeit_after_if_else@10:
-    // contracts/quantum_arena/contract.py:884-888
+claim_forfeit_after_if_else@8:
+    // contracts/quantum_arena/contract.py:886-890
     // itxn.Payment(  # exact MBR paid at create, back to the payer
     //     receiver=creator,
     //     amount=mbr_paid,
@@ -4188,43 +4105,52 @@ claim_forfeit_after_if_else@10:
     itxn_begin
     itxn_field Receiver
     itxn_field Amount
-    // contracts/quantum_arena/contract.py:884
+    // contracts/quantum_arena/contract.py:886
     // itxn.Payment(  # exact MBR paid at create, back to the payer
     intc_1 // pay
     itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:887
+    // contracts/quantum_arena/contract.py:889
     // fee=UInt64(0),
     intc_0 // 0
     itxn_field Fee
-    // contracts/quantum_arena/contract.py:884-888
+    // contracts/quantum_arena/contract.py:886-890
     // itxn.Payment(  # exact MBR paid at create, back to the payer
     //     receiver=creator,
     //     amount=mbr_paid,
     //     fee=UInt64(0),
     // ).submit()
     itxn_submit
-    // contracts/quantum_arena/contract.py:894
-    // payout=arc4.UInt64(winner_share),
-    itob
     // contracts/quantum_arena/contract.py:895
-    // fee=arc4.UInt64(fee),
-    swap
+    // winner=arc4.Address(winner_addr),
+    uncover 2
+    dup
+    len
+    pushint 32
+    ==
+    assert // Address length is 32 bytes
+    // contracts/quantum_arena/contract.py:896
+    // payout=arc4.UInt64(winner_share),
+    uncover 2
     itob
-    // contracts/quantum_arena/contract.py:891-896
+    // contracts/quantum_arena/contract.py:897
+    // fee=arc4.UInt64(fee),
+    uncover 2
+    itob
+    // contracts/quantum_arena/contract.py:893-898
     // ChallengeForfeited(
     //     challenge_id=arc4.UInt64(challenge_id),
     //     winner=arc4.Address(winner_addr),
     //     payout=arc4.UInt64(winner_share),
     //     fee=arc4.UInt64(fee),
     // )
-    uncover 2
+    uncover 3
     uncover 3
     concat
     uncover 2
     concat
     swap
     concat
-    // contracts/quantum_arena/contract.py:890-897
+    // contracts/quantum_arena/contract.py:892-899
     // arc4.emit(
     //     ChallengeForfeited(
     //         challenge_id=arc4.UInt64(challenge_id),
@@ -4237,7 +4163,7 @@ claim_forfeit_after_if_else@10:
     swap
     concat
     log
-    // contracts/quantum_arena/contract.py:819
+    // contracts/quantum_arena/contract.py:831
     // @arc4.abimethod
     intc_1 // 1
     return
@@ -4249,7 +4175,7 @@ claim_forfeit_bool_false@4:
 
 // contracts.quantum_arena.contract.QuantumArena.early_close[routing]() -> void:
 early_close:
-    // contracts/quantum_arena/contract.py:899
+    // contracts/quantum_arena/contract.py:901
     // @arc4.abimethod
     txn GroupIndex
     intc_1 // 1
@@ -4267,33 +4193,33 @@ early_close:
     assert // invalid number of bytes for arc4.uint64
     btoi
     dup
-    // contracts/quantum_arena/contract.py:907
+    // contracts/quantum_arena/contract.py:909
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:908
+    // contracts/quantum_arena/contract.py:910
     // assert challenge_id in self.challenges, "challenge not found"
     itob
     dup
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     swap
     concat
     dupn 2
     box_len
     bury 1
     assert // challenge not found
-    // contracts/quantum_arena/contract.py:909
+    // contracts/quantum_arena/contract.py:911
     // meta = self.challenges[challenge_id].copy()
     dup
     box_get
     pop
     cover 3
-    // contracts/quantum_arena/contract.py:909-910
+    // contracts/quantum_arena/contract.py:911-912
     // meta = self.challenges[challenge_id].copy()
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     pushint 52
     intc_3 // 8
     box_extract // on error: index out of bounds
-    // contracts/quantum_arena/contract.py:910
+    // contracts/quantum_arena/contract.py:912
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     btoi
     dup
@@ -4308,23 +4234,23 @@ early_close_bool_true@3:
     intc_1 // 1
 
 early_close_bool_merge@5:
-    // contracts/quantum_arena/contract.py:910
+    // contracts/quantum_arena/contract.py:912
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     assert // not refundable
-    // contracts/quantum_arena/contract.py:911
+    // contracts/quantum_arena/contract.py:913
     // assert challenge_id in self.players, "roster missing"
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     uncover 2
     concat
     dup
     box_len
     bury 1
     assert // roster missing
-    // contracts/quantum_arena/contract.py:912
+    // contracts/quantum_arena/contract.py:914
     // roster = self.players[challenge_id].copy()
     box_get
     pop
-    // contracts/quantum_arena/contract.py:913
+    // contracts/quantum_arena/contract.py:915
     // assert meta.seats_taken == 0, "challenge has joiners"
     swap
     dup
@@ -4334,7 +4260,7 @@ early_close_bool_merge@5:
     btoi
     !
     assert // challenge has joiners
-    // contracts/quantum_arena/contract.py:914
+    // contracts/quantum_arena/contract.py:916
     // assert Global.latest_timestamp < meta.deadline, "too late for early close"
     global LatestTimestamp
     dig 1
@@ -4344,7 +4270,7 @@ early_close_bool_merge@5:
     btoi
     <
     assert // too late for early close
-    // contracts/quantum_arena/contract.py:915
+    // contracts/quantum_arena/contract.py:917
     // assert Txn.sender.bytes == meta.creator, "only creator"
     txn Sender
     dig 1
@@ -4361,19 +4287,19 @@ early_close_bool_merge@5:
     extract 2 0
     ==
     assert // only creator
-    // contracts/quantum_arena/contract.py:917
+    // contracts/quantum_arena/contract.py:919
     // assert_clean_payment(fee_payment)
     uncover 3
     dup
     callsub assert_clean_payment
-    // contracts/quantum_arena/contract.py:918
+    // contracts/quantum_arena/contract.py:920
     // assert fee_payment.sender == Txn.sender, "fee sender mismatch"
     dup
     gtxns Sender
     txn Sender
     ==
     assert // fee sender mismatch
-    // contracts/quantum_arena/contract.py:919
+    // contracts/quantum_arena/contract.py:921
     // assert fee_payment.receiver.bytes == self.treasury.value, "fee receiver"
     dup
     gtxns Receiver
@@ -4383,19 +4309,19 @@ early_close_bool_merge@5:
     assert // check self.treasury exists
     ==
     assert // fee receiver
-    // contracts/quantum_arena/contract.py:920
+    // contracts/quantum_arena/contract.py:922
     // assert fee_payment.amount == EARLY_CLOSE_FEE, "fee must be 1 ALGO"
     gtxns Amount
-    intc 6 // 1000000
+    intc 7 // 1000000
     ==
     assert // fee must be 1 ALGO
-    // contracts/quantum_arena/contract.py:922
+    // contracts/quantum_arena/contract.py:924
     // self._refund_all(challenge_id, meta, roster, arc4.UInt64(2))
     intc_2 // 2
     itob
     callsub _refund_all
     popn 2
-    // contracts/quantum_arena/contract.py:899
+    // contracts/quantum_arena/contract.py:901
     // @arc4.abimethod
     intc_1 // 1
     return
@@ -4407,7 +4333,7 @@ early_close_bool_false@4:
 
 // contracts.quantum_arena.contract.QuantumArena.catastrophe_refund[routing]() -> void:
 catastrophe_refund:
-    // contracts/quantum_arena/contract.py:924
+    // contracts/quantum_arena/contract.py:926
     // @arc4.abimethod
     txna ApplicationArgs 1
     dup
@@ -4417,33 +4343,33 @@ catastrophe_refund:
     assert // invalid number of bytes for arc4.uint64
     btoi
     dup
-    // contracts/quantum_arena/contract.py:931
+    // contracts/quantum_arena/contract.py:933
     // assert_no_rekey_app_call()
     callsub assert_no_rekey_app_call
-    // contracts/quantum_arena/contract.py:932
+    // contracts/quantum_arena/contract.py:934
     // assert challenge_id in self.challenges, "challenge not found"
     itob
     dup
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     swap
     concat
     dupn 2
     box_len
     bury 1
     assert // challenge not found
-    // contracts/quantum_arena/contract.py:933
+    // contracts/quantum_arena/contract.py:935
     // meta = self.challenges[challenge_id].copy()
     dup
     box_get
     pop
     cover 3
-    // contracts/quantum_arena/contract.py:933-934
+    // contracts/quantum_arena/contract.py:935-936
     // meta = self.challenges[challenge_id].copy()
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     pushint 52
     intc_3 // 8
     box_extract // on error: index out of bounds
-    // contracts/quantum_arena/contract.py:934
+    // contracts/quantum_arena/contract.py:936
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     btoi
     dup
@@ -4458,23 +4384,23 @@ catastrophe_refund_bool_true@3:
     intc_1 // 1
 
 catastrophe_refund_bool_merge@5:
-    // contracts/quantum_arena/contract.py:934
+    // contracts/quantum_arena/contract.py:936
     // assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not refundable"
     assert // not refundable
-    // contracts/quantum_arena/contract.py:935
+    // contracts/quantum_arena/contract.py:937
     // assert challenge_id in self.players, "roster missing"
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     uncover 2
     concat
     dup
     box_len
     bury 1
     assert // roster missing
-    // contracts/quantum_arena/contract.py:936
+    // contracts/quantum_arena/contract.py:938
     // roster = self.players[challenge_id].copy()
     box_get
     pop
-    // contracts/quantum_arena/contract.py:938
+    // contracts/quantum_arena/contract.py:940
     // Global.latest_timestamp >= meta.deadline + CATASTROPHE_WINDOW
     global LatestTimestamp
     uncover 2
@@ -4482,21 +4408,21 @@ catastrophe_refund_bool_merge@5:
     intc_3 // 8
     box_extract // on error: index out of bounds
     btoi
-    intc 7 // 604800
+    intc 8 // 604800
     +
     >=
-    // contracts/quantum_arena/contract.py:937-939
+    // contracts/quantum_arena/contract.py:939-941
     // assert (
     //     Global.latest_timestamp >= meta.deadline + CATASTROPHE_WINDOW
     // ), "catastrophe window not reached"
     assert // catastrophe window not reached
-    // contracts/quantum_arena/contract.py:940
+    // contracts/quantum_arena/contract.py:942
     // self._refund_all(challenge_id, meta, roster, arc4.UInt64(4))
     pushint 4
     itob
     callsub _refund_all
     popn 2
-    // contracts/quantum_arena/contract.py:924
+    // contracts/quantum_arena/contract.py:926
     // @arc4.abimethod
     intc_1 // 1
     return
@@ -4506,9 +4432,94 @@ catastrophe_refund_bool_false@4:
     b catastrophe_refund_bool_merge@5
 
 
+// contracts.quantum_arena.contract.QuantumArena._pay_gonna(addr: bytes, amount: uint64) -> void:
+_pay_gonna:
+    // contracts/quantum_arena/contract.py:974-975
+    // @subroutine
+    // def _pay_gonna(self, addr: Bytes, amount: UInt64) -> None:
+    proto 2 0
+    // contracts/quantum_arena/contract.py:978-983
+    // itxn.AssetTransfer(
+    //     xfer_asset=Asset(self.gonna_asset_id.value),
+    //     asset_amount=amount,
+    //     asset_receiver=Account(self._gonna_dest(addr)),
+    //     fee=UInt64(0),
+    // ).submit()
+    itxn_begin
+    // contracts/quantum_arena/contract.py:979
+    // xfer_asset=Asset(self.gonna_asset_id.value),
+    intc_0 // 0
+    bytec_2 // "gonna_asset_id"
+    app_global_get_ex
+    swap
+    dup
+    uncover 2
+    assert // check self.gonna_asset_id exists
+    // contracts/quantum_arena/contract.py:968
+    // Account(addr), Asset(self.gonna_asset_id.value)
+    frame_dig -2
+    len
+    pushint 32
+    ==
+    assert // Address length is 32 bytes
+    // contracts/quantum_arena/contract.py:967-969
+    // holding_balance, opted = op.AssetHoldingGet.asset_balance(
+    //     Account(addr), Asset(self.gonna_asset_id.value)
+    // )
+    frame_dig -2
+    swap
+    asset_holding_get AssetBalance
+    bury 1
+    // contracts/quantum_arena/contract.py:970
+    // if opted:
+    bz _pay_gonna_after_if_else@4
+    frame_dig -2
+
+_pay_gonna_after_inlined_contracts.quantum_arena.contract.QuantumArena._gonna_dest@5:
+    // contracts/quantum_arena/contract.py:981
+    // asset_receiver=Account(self._gonna_dest(addr)),
+    dup
+    len
+    pushint 32
+    ==
+    assert // Address length is 32 bytes
+    itxn_field AssetReceiver
+    frame_dig -1
+    itxn_field AssetAmount
+    itxn_field XferAsset
+    // contracts/quantum_arena/contract.py:978
+    // itxn.AssetTransfer(
+    pushint 4 // axfer
+    itxn_field TypeEnum
+    // contracts/quantum_arena/contract.py:982
+    // fee=UInt64(0),
+    intc_0 // 0
+    itxn_field Fee
+    // contracts/quantum_arena/contract.py:978-983
+    // itxn.AssetTransfer(
+    //     xfer_asset=Asset(self.gonna_asset_id.value),
+    //     asset_amount=amount,
+    //     asset_receiver=Account(self._gonna_dest(addr)),
+    //     fee=UInt64(0),
+    // ).submit()
+    itxn_submit
+    retsub
+
+_pay_gonna_after_if_else@4:
+    // contracts/quantum_arena/contract.py:972
+    // return self.treasury.value
+    intc_0 // 0
+    bytec_3 // "treasury"
+    app_global_get_ex
+    assert // check self.treasury exists
+    // contracts/quantum_arena/contract.py:981
+    // asset_receiver=Account(self._gonna_dest(addr)),
+    b _pay_gonna_after_inlined_contracts.quantum_arena.contract.QuantumArena._gonna_dest@5
+
+
 // contracts.quantum_arena.contract.QuantumArena._refund_all(challenge_id: uint64, meta: bytes, roster: bytes, reason: bytes) -> bytes, bytes:
 _refund_all:
-    // contracts/quantum_arena/contract.py:954-961
+    // contracts/quantum_arena/contract.py:985-992
     // @subroutine
     // def _refund_all(
     //     self,
@@ -4518,7 +4529,7 @@ _refund_all:
     //     reason: arc4.UInt64,
     // ) -> None:
     proto 4 2
-    // contracts/quantum_arena/contract.py:968-969
+    // contracts/quantum_arena/contract.py:999-1000
     // # --- effects
     // creator = Account(meta.creator)
     frame_dig -3
@@ -4536,30 +4547,30 @@ _refund_all:
     pushint 32
     ==
     assert // Address length is 32 bytes
-    // contracts/quantum_arena/contract.py:970
+    // contracts/quantum_arena/contract.py:1001
     // mbr_paid = meta.mbr_paid
     frame_dig -3
     pushint 70
     extract_uint64
-    // contracts/quantum_arena/contract.py:971
+    // contracts/quantum_arena/contract.py:1002
     // del self.challenges[challenge_id]
     frame_dig -4
     itob
     dup
     cover 2
-    bytec_1 // 0x6d
+    bytec_0 // 0x6d
     dig 1
     concat
     box_del
     pop
-    // contracts/quantum_arena/contract.py:972
+    // contracts/quantum_arena/contract.py:1003
     // del self.players[challenge_id]
-    bytec_2 // 0x70
+    bytec_1 // 0x70
     swap
     concat
     box_del
     pop
-    // contracts/quantum_arena/contract.py:974-975
+    // contracts/quantum_arena/contract.py:1005-1006
     // # --- interactions
     // for i in urange(roster.length):
     frame_dig -2
@@ -4568,38 +4579,18 @@ _refund_all:
     intc_0 // 0
 
 _refund_all_for_header@1:
-    // contracts/quantum_arena/contract.py:974-975
+    // contracts/quantum_arena/contract.py:1005-1006
     // # --- interactions
     // for i in urange(roster.length):
     dup
     dig 2
     <
-    bz _refund_all_after_for@5
-    // contracts/quantum_arena/contract.py:977-982
-    // itxn.AssetTransfer(
-    //     xfer_asset=Asset(self.gonna_asset_id.value),
-    //     asset_amount=meta.stake,
-    //     asset_receiver=Account(entry.addr),
-    //     fee=UInt64(0),
-    // ).submit()
-    itxn_begin
-    // contracts/quantum_arena/contract.py:978
-    // xfer_asset=Asset(self.gonna_asset_id.value),
-    intc_0 // 0
-    bytec_0 // "gonna_asset_id"
-    app_global_get_ex
-    assert // check self.gonna_asset_id exists
-    // contracts/quantum_arena/contract.py:979
-    // asset_amount=meta.stake,
-    frame_dig -3
-    intc_2 // 2
-    extract_uint64
-    // contracts/quantum_arena/contract.py:980
-    // asset_receiver=Account(entry.addr),
+    bz _refund_all_after_for@4
+    // contracts/quantum_arena/contract.py:1007-1008
+    // entry = roster[i].copy()
+    // self._pay_gonna(entry.addr, meta.stake)
     frame_dig -2
-    uncover 3
-    dup
-    cover 3
+    dig 1
     callsub dynamic_array_read_dynamic_element
     dup
     intc_0 // 0
@@ -4607,42 +4598,23 @@ _refund_all_for_header@1:
     dig 1
     len
     substring3
+    // contracts/quantum_arena/contract.py:1008
+    // self._pay_gonna(entry.addr, meta.stake)
     extract 2 0
-    dup
-    len
-    pushint 32
-    ==
-    assert // Address length is 32 bytes
-    itxn_field AssetReceiver
-    itxn_field AssetAmount
-    swap
-    itxn_field XferAsset
-    // contracts/quantum_arena/contract.py:977
-    // itxn.AssetTransfer(
-    pushint 4 // axfer
-    itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:981
-    // fee=UInt64(0),
-    intc_0 // 0
-    itxn_field Fee
-    // contracts/quantum_arena/contract.py:977-982
-    // itxn.AssetTransfer(
-    //     xfer_asset=Asset(self.gonna_asset_id.value),
-    //     asset_amount=meta.stake,
-    //     asset_receiver=Account(entry.addr),
-    //     fee=UInt64(0),
-    // ).submit()
-    itxn_submit
-    // contracts/quantum_arena/contract.py:974-975
+    frame_dig -3
+    intc_2 // 2
+    extract_uint64
+    callsub _pay_gonna
+    // contracts/quantum_arena/contract.py:1005-1006
     // # --- interactions
     // for i in urange(roster.length):
     intc_1 // 1
     +
     b _refund_all_for_header@1
 
-_refund_all_after_for@5:
+_refund_all_after_for@4:
     popn 2
-    // contracts/quantum_arena/contract.py:983-987
+    // contracts/quantum_arena/contract.py:1009-1013
     // itxn.Payment(
     //     receiver=creator,
     //     amount=mbr_paid,
@@ -4652,22 +4624,22 @@ _refund_all_after_for@5:
     itxn_field Amount
     swap
     itxn_field Receiver
-    // contracts/quantum_arena/contract.py:983
+    // contracts/quantum_arena/contract.py:1009
     // itxn.Payment(
     intc_1 // pay
     itxn_field TypeEnum
-    // contracts/quantum_arena/contract.py:986
+    // contracts/quantum_arena/contract.py:1012
     // fee=UInt64(0),
     intc_0 // 0
     itxn_field Fee
-    // contracts/quantum_arena/contract.py:983-987
+    // contracts/quantum_arena/contract.py:1009-1013
     // itxn.Payment(
     //     receiver=creator,
     //     amount=mbr_paid,
     //     fee=UInt64(0),
     // ).submit()
     itxn_submit
-    // contracts/quantum_arena/contract.py:989
+    // contracts/quantum_arena/contract.py:1015
     // arc4.emit(ChallengeRefunded(challenge_id=arc4.UInt64(challenge_id), reason=reason))
     frame_dig -1
     concat
