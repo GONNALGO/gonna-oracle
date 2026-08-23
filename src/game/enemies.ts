@@ -1,18 +1,21 @@
 // The 4 enemy types: STREET GECKO PUNK, ALGO-BOT drone, WHALE BRUTE, KNIFE SNEK.
-import { chance, clamp, GRAV, LANE_BOT, LANE_TOP, VW } from './types';
+import { clamp, GRAV, LANE_BOT, LANE_TOP, VW } from './types';
 import type { Facing, HitInfo } from './types';
 import type { GameCtx } from './ctx';
 import { blockObjects, blockingAt } from './items';
 import type { Obstacle } from './items';
+import type { BonusKind } from './descent';
 
 export type EnemyKind =
   | 'gecko' | 'drone' | 'whale' | 'snek' | 'ninja' | 'coinsnek' | 'bouncer'
-  | 'moltov' | 'bull' | 'cultist'; // v5
+  | 'moltov' | 'bull' | 'cultist' // v5
+  | 'carrier'; // v15: THE DESCENT golden bonus carrier (flees, drops bonuses)
 
 export type EState =
   | 'enter' | 'seek' | 'attack' | 'recover' | 'reposition'
   | 'stun' | 'down' | 'getup' | 'held' | 'thrown' | 'block' | 'dead' | 'windup'
-  | 'channel'; // v5: cultist revive ritual
+  | 'channel' // v5: cultist revive ritual
+  | 'flee'; // v15: carrier bolting for the edge of the screen
 
 interface Stats {
   hp: number;
@@ -33,6 +36,7 @@ const STATS: Record<EnemyKind, Stats> = {
   moltov: { hp: 30, spd: 1.0, dmg: 4, range: 26, score: 300 }, // MOLTOTOV SNEK (v5): kiter, area denial
   bull: { hp: 70, spd: 0.5, dmg: 14, range: 40, score: 600 }, // RIOT SHIELD BULL (v5): frontal-immune wall
   cultist: { hp: 35, spd: 0.9, dmg: 6, range: 120, score: 500 }, // FUD CULTIST (v5): revives + heals
+  carrier: { hp: 25, spd: 1.15, dmg: 0, range: 0, score: 300 }, // v15: GOLDEN CARRIER — never fights, RUNS
 };
 
 function isBrute(k: EnemyKind): boolean {
@@ -67,7 +71,12 @@ export class Enemy {
   removeMe = false;
   atkCd = 0; // attack cooldown
   swingId = 0;
-  hoverPhase = Math.random() * 6.28;
+  hoverPhase = 0; // v15: seeded at spawn via g.rng (determinism)
+  spdMul = 1; // v15: DESCENT wave ramp (integer-rounded at spawn)
+  // ---- v15: GOLDEN CARRIER (THE DESCENT) ----
+  escapeT = 0; // frames before the carrier bolts for the edge
+  escaped = false; // slipped away: no drop, no score
+  bonusDrop: BonusKind | null = null; // seeded drop rolled at wave composition
   // dive attack (drone)
   diveTX = 0;
   diveTY = 0;
@@ -111,7 +120,7 @@ export class Enemy {
       return false;
     }
     // brutes block frontal hits sometimes (thrown objects & explosions pierce)
-    if (!hit.pierce && isBrute(this.kind) && this.state === 'seek' && hit.dir !== this.face && chance(0.25)) {
+    if (!hit.pierce && isBrute(this.kind) && this.state === 'seek' && hit.dir !== this.face && g.rng.chance(0.25)) {
       this.set('block');
       g.audio.block();
       g.fx.spark(this.x + this.face * 14, this.y - 36, false);
@@ -148,8 +157,18 @@ export class Enemy {
     this.vx = hit.dir * 2.2;
     this.lieT = 0;
     g.audio.ko();
-    g.addScore(STATS[this.kind].score);
-    g.fx.popup(this.x, this.y - 70, '+' + STATS[this.kind].score, '#7fd858');
+    // v15 juice (DESCENT): kill hits are MEATIER — extra freeze, shake, burst
+    if (g.descent) {
+      g.hitStop(7); // hurt() already banked 4-5; the kill tops it up
+      g.fx.shake(2.5);
+      g.fx.debris(this.x, this.y - this.z - 30, '#f5c542', '#7fd858', 8);
+    }
+    // v15 DESCENT: kill score x combo multiplier (x2 during GREEN CANDLE)
+    const mult = g.killMult();
+    const pts = STATS[this.kind].score * mult;
+    g.addScore(pts);
+    const candle = g.descent !== null && g.descent.candleT > 0;
+    g.fx.popup(this.x, this.y - 70, '+' + pts, candle ? '#39FF14' : mult >= 5 ? '#f5c542' : '#7fd858', 42, mult >= 5 ? 2 : 1);
   }
 
   // drop a carried trash can back to the ground (interrupted / released)
@@ -273,28 +292,61 @@ export class Enemy {
     if (this.turnCd > 0) this.turnCd--;
     const p = g.player;
     const st = STATS[this.kind];
+    const spd = st.spd * this.spdMul; // v15: DESCENT wave ramp
     const prevX = this.x;
+
+    // ---- v15: GOLDEN CARRIER — the escape clock is ALWAYS ticking ----
+    if (this.kind === 'carrier' && this.alive && (this.state === 'seek' || this.state === 'reposition')) {
+      if (this.escapeT > 0) this.escapeT--;
+      if (this.escapeT <= 0) {
+        this.set('flee');
+        this.face = this.x >= g.camX + VW / 2 ? 1 : -1; // bolt for the NEAR edge
+        g.fx.popup(this.x, this.y - 72, 'IT IS BOLTING!', '#f5c542');
+        g.audio.swing();
+      }
+    }
 
     switch (this.state) {
       case 'enter': {
         // walk onto screen
-        this.x += this.face * st.spd * 1.4;
+        this.x += this.face * spd * 1.4;
         const inX = this.x > g.camX + 20 && this.x < g.camX + VW - 20;
         if (inX) this.set('seek');
         break;
       }
+      case 'flee': {
+        // v15: carrier escape run — gone once it clears the screen edge
+        this.x += this.face * spd * 1.8;
+        if (this.x < g.camX - 26 || this.x > g.camX + VW + 26) {
+          this.escaped = true;
+          this.alive = false;
+          this.removeMe = true; // no drop, no score — it got away with the goods
+        }
+        break;
+      }
       case 'seek': {
         const dx0 = p.x - this.x;
+        // ---- v15: GOLDEN CARRIER — true flee, never throws a punch ----
+        if (this.kind === 'carrier') {
+          this.face = dx0 >= 0 ? -1 : 1; // back turned: it RUNS
+          const adx = Math.abs(dx0);
+          if (adx < 130) this.x -= Math.sign(dx0) * spd * 1.35; // sprint away
+          else this.x -= Math.sign(dx0) * spd * 0.4; // drift to comfort range
+          const dy = this.y - p.y;
+          if (Math.abs(dy) < 12) this.y = clamp(this.y + (g.rng.chance(0.5) ? 1 : -1) * spd, LANE_TOP, LANE_BOT);
+          this.x = clamp(this.x, g.camX + 16, g.camX + VW - 16);
+          break;
+        }
         // ---- v5: MOLTOTOV SNEK — kite the player, lob fire from afar ----
         if (this.kind === 'moltov') {
           this.face = dx0 >= 0 ? 1 : -1;
           const dy = p.y - this.y;
-          if (Math.abs(dy) > 6) this.y = clamp(this.y + Math.sign(dy) * st.spd * 0.8, LANE_TOP, LANE_BOT);
+          if (Math.abs(dy) > 6) this.y = clamp(this.y + Math.sign(dy) * spd * 0.8, LANE_TOP, LANE_BOT);
           const adx = Math.abs(dx0);
           if (adx < 70) {
-            this.x -= Math.sign(dx0) * st.spd * 1.25; // frail: flee when close
+            this.x -= Math.sign(dx0) * spd * 1.25; // frail: flee when close
           } else if (adx > 150) {
-            this.x += Math.sign(dx0) * st.spd;
+            this.x += Math.sign(dx0) * spd;
           }
           this.x = clamp(this.x, g.camX - 30, g.camX + VW + 30);
           if (this.atkCd <= 0 && p.state !== 'dead' && Math.abs(dy) < 16) {
@@ -319,8 +371,8 @@ export class Enemy {
             this.turnCd = 45; // the blind side stays open a moment
           }
           const dy = p.y - this.y;
-          if (Math.abs(dy) > 6) this.y = clamp(this.y + Math.sign(dy) * st.spd * 0.8, LANE_TOP, LANE_BOT);
-          if (Math.abs(dx0) > st.range - 10) this.x += this.face * st.spd;
+          if (Math.abs(dy) > 6) this.y = clamp(this.y + Math.sign(dy) * spd * 0.8, LANE_TOP, LANE_BOT);
+          if (Math.abs(dx0) > st.range - 10) this.x += this.face * spd;
           this.x = clamp(this.x, g.camX - 30, g.camX + VW + 30);
           if (this.atkCd <= 0 && p.state !== 'dead' && Math.abs(dy) < 14 && Math.abs(dx0) < 160) {
             this.set('attack');
@@ -333,12 +385,12 @@ export class Enemy {
         if (this.kind === 'cultist') {
           this.face = dx0 >= 0 ? 1 : -1;
           const dy = p.y - this.y;
-          if (Math.abs(dy) > 8) this.y = clamp(this.y + Math.sign(dy) * st.spd * 0.7, LANE_TOP, LANE_BOT);
+          if (Math.abs(dy) > 8) this.y = clamp(this.y + Math.sign(dy) * spd * 0.7, LANE_TOP, LANE_BOT);
           const adx = Math.abs(dx0);
           if (adx < 95) {
-            this.x -= Math.sign(dx0) * st.spd * 1.1; // drift away
+            this.x -= Math.sign(dx0) * spd * 1.1; // drift away
           } else if (adx > 185) {
-            this.x += Math.sign(dx0) * st.spd * 0.8;
+            this.x += Math.sign(dx0) * spd * 0.8;
           }
           this.x = clamp(this.x, g.camX - 30, g.camX + VW + 30);
           // revive countdown
@@ -362,13 +414,13 @@ export class Enemy {
         const dy = p.y - this.y;
         // align lane first, then close in X
         if (Math.abs(dy) > 6) {
-          this.y = clamp(this.y + Math.sign(dy) * st.spd * 0.8, LANE_TOP, LANE_BOT);
+          this.y = clamp(this.y + Math.sign(dy) * spd * 0.8, LANE_TOP, LANE_BOT);
         }
         const wantX = this.kind === 'gecko' ? st.range - 4 : st.range;
         if (Math.abs(dx) > wantX) {
-          this.x += Math.sign(dx) * st.spd;
+          this.x += Math.sign(dx) * spd;
         } else if (this.kind === 'coinsnek' && Math.abs(dx) < 56) {
-          this.x -= Math.sign(dx) * st.spd * 0.7; // keep spitting distance
+          this.x -= Math.sign(dx) * spd * 0.7; // keep spitting distance
         }
         this.x = clamp(this.x, g.camX - 30, g.camX + VW + 30);
         // hover bob for drone
@@ -386,19 +438,19 @@ export class Enemy {
           }
         } else if (isBrute(this.kind) && this.atkCd <= 0 && p.state !== 'dead' && this.grabCan(g)) {
           // brute picked up a trash can -> windup state set inside grabCan
-        } else if (this.kind === 'ninja' && this.atkCd <= 0 && chance(0.012)) {
+        } else if (this.kind === 'ninja' && this.atkCd <= 0 && g.rng.chance(0.012)) {
           // lane hop
           this.set('reposition');
-          this.vy = chance(0.5) ? 1 : -1;
+          this.vy = g.rng.chance(0.5) ? 1 : -1;
           this.vz = 2.6;
-        } else if (this.atkCd <= 0 && chance(0.004)) {
+        } else if (this.atkCd <= 0 && g.rng.chance(0.004)) {
           this.set('reposition');
-          this.vy = chance(0.5) ? 1 : -1;
+          this.vy = g.rng.chance(0.5) ? 1 : -1;
         }
         break;
       }
       case 'reposition': {
-        this.y = clamp(this.y + this.vy * st.spd * (this.kind === 'ninja' ? 1.7 : 1), LANE_TOP, LANE_BOT);
+        this.y = clamp(this.y + this.vy * spd * (this.kind === 'ninja' ? 1.7 : 1), LANE_TOP, LANE_BOT);
         if (this.kind === 'drone') {
           this.hoverPhase += 0.08;
           this.z = 24 + Math.sin(this.hoverPhase) * 5;
@@ -413,34 +465,34 @@ export class Enemy {
       }
       case 'attack': {
         if (this.kind === 'gecko') {
-          if (this.t >= 26) { this.set('recover'); this.atkCd = 40 + Math.random() * 30; }
+          if (this.t >= 26) { this.set('recover'); this.atkCd = 40 + g.rng.range(0, 30); }
         } else if (this.kind === 'snek') {
           // dash forward with blade
           if (this.t >= 8 && this.t <= 22) this.x += this.face * 4.6;
-          if (this.t >= 34) { this.set('recover'); this.atkCd = 50 + Math.random() * 40; }
+          if (this.t >= 34) { this.set('recover'); this.atkCd = 50 + g.rng.range(0, 40); }
         } else if (this.kind === 'ninja') {
           // dash + double hit (second window re-arms at t 15)
           if (this.t >= 6 && this.t <= 24) this.x += this.face * 4.4;
           if (this.t === 15) this.hitPlayer = false;
-          if (this.t >= 32) { this.set('recover'); this.atkCd = 36 + Math.random() * 26; }
+          if (this.t >= 32) { this.set('recover'); this.atkCd = 36 + g.rng.range(0, 26); }
         } else if (this.kind === 'coinsnek') {
           // spit a $GONNA coin
           if (this.t === 10) {
             g.spawnProj('coin', this.x + this.face * 16, this.y, this.face * 3.4);
             g.audio.swing();
           }
-          if (this.t >= 28) { this.set('recover'); this.atkCd = 80 + Math.random() * 50; }
+          if (this.t >= 28) { this.set('recover'); this.atkCd = 80 + g.rng.range(0, 50); }
         } else if (isBrute(this.kind)) {
           // charge
           if (this.t >= 24 && this.t <= 60) {
             this.x += this.face * (this.kind === 'bouncer' ? 4.2 : 3.2);
             if (this.t % 6 === 0) g.fx.ring(this.x, this.y, 10, '#8a8f9c');
           }
-          if (this.t >= 88) { this.set('recover'); this.atkCd = 70 + Math.random() * 40; }
+          if (this.t >= 88) { this.set('recover'); this.atkCd = 70 + g.rng.range(0, 40); }
         } else if (this.kind === 'moltov') {
           if (this.melee) {
             // desperate bite (frail in melee)
-            if (this.t >= 22) { this.set('recover'); this.atkCd = 70 + Math.random() * 30; }
+            if (this.t >= 22) { this.set('recover'); this.atkCd = 70 + g.rng.range(0, 30); }
           } else {
             // wind up, then lob the molotov at the player's position
             if (this.t < 16) this.flashT = (this.t & 4) < 2 ? 2 : 0;
@@ -449,7 +501,7 @@ export class Enemy {
               g.spawnProj('molotov', this.x + this.face * 10, this.y, 0, p.x, p.y);
               g.audio.molotov();
             }
-            if (this.t >= 34) { this.set('recover'); this.atkCd = 120 + Math.random() * 50; }
+            if (this.t >= 34) { this.set('recover'); this.atkCd = 120 + g.rng.range(0, 50); }
           }
         } else if (this.kind === 'bull') {
           // paw the ground (telegraph), then shield charge along the lane
@@ -462,7 +514,7 @@ export class Enemy {
             if (this.t % 6 === 0) g.fx.ring(this.x, this.y, 10, '#c8ccd4');
           } else if (this.t >= 84) {
             this.set('recover');
-            this.atkCd = 100 + Math.random() * 40;
+            this.atkCd = 100 + g.rng.range(0, 40);
           }
         } else if (this.kind === 'cultist') {
           // cast a slow FUD orb
@@ -470,7 +522,7 @@ export class Enemy {
             g.spawnProj('fudorb', this.x + this.face * 14, this.y, this.face * 1.7);
             g.audio.chant();
           }
-          if (this.t >= 26) { this.set('recover'); this.atkCd = 150 + Math.random() * 60; }
+          if (this.t >= 26) { this.set('recover'); this.atkCd = 150 + g.rng.range(0, 60); }
         } else {
           // drone dive
           if (this.t < 18) {
@@ -492,7 +544,7 @@ export class Enemy {
           } else {
             this.z = 0;
             this.set('recover');
-            this.atkCd = 60 + Math.random() * 40;
+            this.atkCd = 60 + g.rng.range(0, 40);
           }
         }
         break;
@@ -668,7 +720,7 @@ export class Enemy {
   private grabCan(g: GameCtx): boolean {
     for (const o of g.obstacles) {
       if (o.kind !== 'can' || o.mode !== 'idle' || o.removeMe) continue;
-      if (Math.abs(o.x - this.x) < 22 && Math.abs(o.y - this.y) < 12 && chance(0.04)) {
+      if (Math.abs(o.x - this.x) < 22 && Math.abs(o.y - this.y) < 12 && g.rng.chance(0.04)) {
         this.heldObj = o;
         o.mode = 'held';
         this.face = g.player.x >= this.x ? 1 : -1;
@@ -718,6 +770,10 @@ export class Enemy {
         if (this.state === 'channel') return a.cultist[2];
         if (this.state === 'attack' && this.t >= 4 && this.t <= 16) return a.cultist[2];
         return a.cultist[wk];
+      case 'carrier':
+        // v15: golden runaway — sprint frames while bolting
+        if (this.state === 'flee') return a.carrier[(this.animT >> 2) & 1];
+        return a.carrier[wk];
     }
   }
 
@@ -733,7 +789,7 @@ export class Enemy {
     // shadow
     ctx2d.globalAlpha = clamp(0.35 - this.z / 220, 0.06, 0.35) * alpha;
     ctx2d.fillStyle = '#000';
-    const shw = isBrute(this.kind) || this.kind === 'bull' ? 24 : this.kind === 'snek' || this.kind === 'coinsnek' || this.kind === 'moltov' ? 18 : 14;
+    const shw = isBrute(this.kind) || this.kind === 'bull' ? 24 : this.kind === 'snek' || this.kind === 'coinsnek' || this.kind === 'moltov' || this.kind === 'carrier' ? 18 : 14;
     ctx2d.beginPath();
     ctx2d.ellipse(sx, this.y + 2, shw, 4.5, 0, 0, Math.PI * 2);
     ctx2d.fill();
@@ -743,6 +799,8 @@ export class Enemy {
     const lying = (this.state === 'down' || this.state === 'dead' || this.state === 'thrown') && this.z <= 0 && this.t > 8;
     ctx2d.save();
     if (this.flashT > 0) ctx2d.filter = 'brightness(3)';
+    // v15: carrier escape shimmer — the last 2s STROBE gold (feel the clock)
+    else if (this.kind === 'carrier' && this.alive && this.escapeT < 120 && (this.animT & 4) !== 0) ctx2d.filter = 'brightness(1.7)';
     if (this.invuln > 0 && this.state === 'getup' && (this.animT & 4) !== 0) ctx2d.globalAlpha = 0.4 * alpha;
     if (lying) {
       ctx2d.translate(sx, this.y - 4);

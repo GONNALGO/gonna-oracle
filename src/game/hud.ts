@@ -61,7 +61,30 @@ export function drawHud(ctx: CanvasRenderingContext2D, g: GameCtx, score: number
     }
   }
   const t = Math.max(0, Math.ceil(timeLeft));
-  drawTextSh(ctx, 'TIME ' + String(t).padStart(3, '0'), VW - 66, 24, 1, t < 30 ? '#e23b3b' : '#c8ccd4', 'left');
+  const descent = g.descent; // v15
+  if (descent) {
+    // ---- v15: WAVE 07 — persistent, chunky gold arcade numerals ----
+    const wl = 'WAVE ' + String(Math.max(1, descent.wave)).padStart(2, '0');
+    drawTextSh(ctx, wl, VW - 8, 24, 2, '#f5c542', 'right');
+    // ---- v15: multiplier readout (x2 candle = fluo green) ----
+    const mult = g.killMult();
+    if (mult > 1) {
+      drawTextSh(ctx, 'X' + mult, VW / 2 + 44, 14, 1, descent.candleT > 0 ? '#39FF14' : '#f5c542', 'left');
+    }
+    // ---- v15: TARGET bar — the race against the creator's sealed score ----
+    if (descent.target > 0) {
+      const beaten = score >= descent.target;
+      drawText(ctx, beaten ? 'TARGET BEATEN' : 'TARGET ' + String(descent.target).padStart(8, '0'), VW / 2, 26, 1, beaten ? '#39FF14' : '#ffae2a', 'center');
+      // slim progress bar under the readout — the race at a glance
+      const frac = Math.min(1, score / descent.target);
+      ctx.fillStyle = '#101018';
+      ctx.fillRect(VW / 2 - 41, 32, 82, 5);
+      ctx.fillStyle = beaten ? '#39FF14' : '#b8860b';
+      ctx.fillRect(VW / 2 - 40, 33, Math.floor(80 * frac), 3);
+    }
+  } else {
+    drawTextSh(ctx, 'TIME ' + String(t).padStart(3, '0'), VW - 66, 24, 1, t < 30 ? '#e23b3b' : '#c8ccd4', 'left');
+  }
 
   // ---- boss HP bottom ----
   if (g.boss && g.boss.alive && g.boss.state !== 'intro') {
@@ -101,17 +124,20 @@ export function drawHud(ctx: CanvasRenderingContext2D, g: GameCtx, score: number
     const rank = comboRankName(comboUI.shown);
     let col = rankColor(rank);
     if (comboUI.flashT > 0 && (comboUI.flashT & 2) !== 0) col = '#ffffff';
+    // v15: COMBO FORGE — the meter burns amber while the decay is frozen
+    if (g.descent && g.descent.forgeT > 0) col = (animT & 4) !== 0 ? '#ffae2a' : '#ff8a3c';
+    const baseY = g.descent ? 66 : 40; // v15: clear of the WAVE cluster
     const pop = comboUI.popT < 6 ? 1 + (6 - comboUI.popT) * 0.12 : 1;
     const a = Math.min(1, comboUI.fade);
     const num = String(comboUI.shown);
     ctx.save();
     ctx.globalAlpha = a;
-    ctx.translate(VW - 12, 40);
+    ctx.translate(VW - 12, baseY);
     ctx.scale(pop, pop);
     drawTextSh(ctx, num, 0, 0, 3, col, 'right'); // big number, gold shadow accent
     ctx.restore();
     ctx.globalAlpha = a;
-    const labelY = 40 + Math.round(21 * pop) + 3;
+    const labelY = baseY + Math.round(21 * pop) + 3;
     drawTextSh(ctx, 'HITS', VW - 12, labelY, 1, '#c8ccd4', 'right');
     if (rank) drawTextSh(ctx, rank, VW - 12, labelY + 9, 1, col, 'right');
     ctx.globalAlpha = 1;

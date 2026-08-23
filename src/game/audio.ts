@@ -19,6 +19,7 @@
 // (combinable: 'kh' = kick+hat). '.' = silence.
 // ---------------------------------------------------------------------------
 
+import { visualRand } from './rng';
 export interface SeqEvent {
   step: number; // 16th-note index inside the loop
   midi: number;
@@ -612,7 +613,7 @@ export class AudioSys {
     const len = this.ctx.sampleRate;
     this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noiseBuf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    for (let i = 0; i < len; i++) d[i] = visualRand() * 2 - 1;
     this.nextT = this.ctx.currentTime + 0.06;
     // start sequencer clock
     this.timer = window.setInterval(() => this.schedule(), 40);

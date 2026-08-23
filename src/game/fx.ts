@@ -1,7 +1,7 @@
 // Pooled particles, damage popups, shockwave rings, screen shake. Zero per-frame alloc.
 
 interface Particle { on: boolean; x: number; y: number; vx: number; vy: number; life: number; max: number; c: string; s: number; grav: number; }
-interface Popup { on: boolean; x: number; y: number; vy: number; life: number; txt: string; c: string; }
+interface Popup { on: boolean; x: number; y: number; vy: number; life: number; txt: string; c: string; s: number; }
 interface Ring { on: boolean; x: number; y: number; r: number; max: number; life: number; c: string; }
 // v5: persistent molotov flames — lane hazards with damage-over-time (DoT tick
 // is game logic, handled by the engine; this is the pooled visual/state layer)
@@ -12,6 +12,7 @@ export const FLAME_RX = 26; // hazard ellipse half-width
 export const FLAME_RY = 9; // hazard ellipse half-height (lane tolerance)
 
 import { drawText } from './font';
+import { visualRand } from './rng';
 
 export class FX {
   private parts: Particle[] = [];
@@ -25,7 +26,7 @@ export class FX {
 
   constructor() {
     for (let i = 0; i < 220; i++) this.parts.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, c: '#fff', s: 2, grav: 0 });
-    for (let i = 0; i < 24; i++) this.pops.push({ on: false, x: 0, y: 0, vy: 0, life: 0, txt: '', c: '#fff' });
+    for (let i = 0; i < 24; i++) this.pops.push({ on: false, x: 0, y: 0, vy: 0, life: 0, txt: '', c: '#fff', s: 1 });
     for (let i = 0; i < 12; i++) this.rings.push({ on: false, x: 0, y: 0, r: 0, max: 40, life: 0, c: '#fff' });
     for (let i = 0; i < 12; i++) this.flames.push({ on: false, x: 0, y: 0, life: 0, max: FLAME_LIFE, tick: 0, seed: 0 });
   }
@@ -48,7 +49,7 @@ export class FX {
     f.y = y;
     f.max = f.life = FLAME_LIFE;
     f.tick = 0;
-    f.seed = Math.random() * 6.28;
+    f.seed = visualRand() * 6.28;
   }
 
   shake(m: number): void {
@@ -62,13 +63,13 @@ export class FX {
       if (!p) return;
       p.on = true;
       p.x = x; p.y = y;
-      const a = Math.random() * Math.PI * 2;
-      const sp = 1 + Math.random() * (big ? 3.4 : 2.2);
+      const a = visualRand() * Math.PI * 2;
+      const sp = 1 + visualRand() * (big ? 3.4 : 2.2);
       p.vx = Math.cos(a) * sp;
       p.vy = Math.sin(a) * sp - 0.6;
-      p.max = p.life = big ? 16 + Math.random() * 10 : 10 + Math.random() * 8;
-      p.c = Math.random() < 0.5 ? '#f5c542' : Math.random() < 0.5 ? '#fff6d8' : '#ff8a3c';
-      p.s = big ? 2 : 1 + (Math.random() < 0.3 ? 1 : 0);
+      p.max = p.life = big ? 16 + visualRand() * 10 : 10 + visualRand() * 8;
+      p.c = visualRand() < 0.5 ? '#f5c542' : visualRand() < 0.5 ? '#fff6d8' : '#ff8a3c';
+      p.s = big ? 2 : 1 + (visualRand() < 0.3 ? 1 : 0);
       p.grav = 0.12;
     }
   }
@@ -79,10 +80,10 @@ export class FX {
       if (!p) return;
       p.on = true;
       p.x = x; p.y = y;
-      p.vx = (Math.random() - 0.5) * 4;
-      p.vy = -1 - Math.random() * 3;
-      p.max = p.life = 30 + Math.random() * 20;
-      p.c = Math.random() < 0.5 ? c1 : c2;
+      p.vx = (visualRand() - 0.5) * 4;
+      p.vy = -1 - visualRand() * 3;
+      p.max = p.life = 30 + visualRand() * 20;
+      p.c = visualRand() < 0.5 ? c1 : c2;
       p.s = 2;
       p.grav = 0.22;
     }
@@ -94,18 +95,18 @@ export class FX {
       if (!p) return;
       p.on = true;
       p.x = x; p.y = y;
-      const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.2;
-      const sp = 2 + Math.random() * 3.5;
+      const a = -Math.PI / 2 + (visualRand() - 0.5) * 2.2;
+      const sp = 2 + visualRand() * 3.5;
       p.vx = Math.cos(a) * sp;
       p.vy = Math.sin(a) * sp;
-      p.max = p.life = 40 + Math.random() * 30;
-      p.c = Math.random() < 0.7 ? '#f5c542' : '#fff6d8';
+      p.max = p.life = 40 + visualRand() * 30;
+      p.c = visualRand() < 0.7 ? '#f5c542' : '#fff6d8';
       p.s = 2;
       p.grav = 0.18;
     }
   }
 
-  popup(x: number, y: number, txt: string, c = '#fff', life = 42): void {
+  popup(x: number, y: number, txt: string, c = '#fff', life = 42, s = 1): void {
     const p = this.pops.find((q) => !q.on);
     if (!p) return;
     p.on = true;
@@ -114,6 +115,7 @@ export class FX {
     p.life = life;
     p.txt = txt;
     p.c = c;
+    p.s = s; // v15: kill popups SCALE with the multiplier
   }
 
   ring(x: number, y: number, max: number, c = '#7fd858'): void {
@@ -155,10 +157,10 @@ export class FX {
           p.on = true;
           p.x = f.x + Math.sin(f.seed + f.life * 0.7) * 16;
           p.y = f.y - 3;
-          p.vx = (Math.random() - 0.5) * 0.4;
-          p.vy = -0.8 - Math.random() * 0.8;
-          p.max = p.life = 14 + Math.random() * 10;
-          p.c = Math.random() < 0.5 ? '#ff8a3c' : Math.random() < 0.5 ? '#f5c542' : '#e23b3b';
+          p.vx = (visualRand() - 0.5) * 0.4;
+          p.vy = -0.8 - visualRand() * 0.8;
+          p.max = p.life = 14 + visualRand() * 10;
+          p.c = visualRand() < 0.5 ? '#ff8a3c' : visualRand() < 0.5 ? '#f5c542' : '#e23b3b';
           p.s = 1;
           p.grav = -0.02;
         }
@@ -167,8 +169,8 @@ export class FX {
     if (this.shakeMag > 0) {
       this.shakeMag *= 0.85;
       if (this.shakeMag < 0.3) this.shakeMag = 0;
-      this.shakeX = (Math.random() - 0.5) * 2 * this.shakeMag;
-      this.shakeY = (Math.random() - 0.5) * 2 * this.shakeMag;
+      this.shakeX = (visualRand() - 0.5) * 2 * this.shakeMag;
+      this.shakeY = (visualRand() - 0.5) * 2 * this.shakeMag;
     } else {
       this.shakeX = 0;
       this.shakeY = 0;
@@ -230,8 +232,8 @@ export class FX {
     for (const p of this.pops) {
       if (!p.on) continue;
       ctx.globalAlpha = Math.min(1, p.life / 20);
-      drawText(ctx, p.txt, p.x - camX, p.y, 1, '#101018', 'center');
-      drawText(ctx, p.txt, p.x - camX - 1, p.y - 1, 1, p.c, 'center');
+      drawText(ctx, p.txt, p.x - camX, p.y, p.s, '#101018', 'center');
+      drawText(ctx, p.txt, p.x - camX - 1, p.y - 1, p.s, p.c, 'center');
     }
     ctx.globalAlpha = 1;
   }

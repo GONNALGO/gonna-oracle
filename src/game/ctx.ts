@@ -10,8 +10,16 @@ import type { BossLike } from './boss';
 import type { Item, ItemKind, Obstacle } from './items';
 import type { Proj, ProjKind } from './proj';
 import type { Facing } from './types';
+import type { Rng } from './rng';
+import type { DescentState } from './descent';
 
 export interface GameCtx {
+  // v15: seeded sim randomness (THE DESCENT determinism). NEVER Math.random.
+  rng: Rng;
+  // v15: THE DESCENT run state (null in the classic campaign / MINT)
+  descent: DescentState | null;
+  // v15: kill score multiplier (combo mult x candle) — 1 outside THE DESCENT
+  killMult(): number;
   audio: AudioSys;
   fx: FX;
   input: Input;

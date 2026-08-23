@@ -2,10 +2,13 @@
 import { clamp, GRAV, LANE_BOT, LANE_TOP } from './types';
 import type { Facing, HitInfo } from './types';
 import type { GameCtx } from './ctx';
+import { visualRand } from './rng';
 
 export type BState = 'intro' | 'idle' | 'swing' | 'flop' | 'summon' | 'stun' | 'dead';
 
-export type BossKind = 'whale' | 'darkgonna' | 'golem' | 'fud' | 'gonna404';
+// v15: whaleS / darkgonnaS are the MINOR variants — THE DESCENT bosses for the
+// two boss-less themes (Stage 1 / Stage 2)
+export type BossKind = 'whale' | 'darkgonna' | 'golem' | 'fud' | 'gonna404' | 'whaleS' | 'darkgonnaS';
 
 export interface BossAttack {
   x0: number;
@@ -68,10 +71,11 @@ export class Boss {
   alive = true;
   removeMe = false;
   readonly kind: BossKind = 'whale';
-  readonly name = 'THE WHALE OF WALL STREET';
-  readonly introLine = 'YOUR COINS. MY OCEAN.';
-  readonly deathLine = 'MARKET CAP REACHED!';
+  readonly name: string = 'THE WHALE OF WALL STREET';
+  readonly introLine: string = 'YOUR COINS. MY OCEAN.';
+  readonly deathLine: string = 'MARKET CAP REACHED!';
   readonly slowmo = 0;
+  protected summons = true; // v15: LIL WHALE (whaleS) fights alone
 
   constructor(x: number) {
     this.x = x;
@@ -145,10 +149,10 @@ export class Boss {
         if (Math.abs(dy) > 8) this.y = clamp(this.y + Math.sign(dy) * spd * 0.8, LANE_TOP, LANE_BOT);
         if (Math.abs(dx) > 60) this.x += Math.sign(dx) * spd;
         // summon punks at HP thresholds
-        if (!this.summoned66 && this.hp <= this.maxHp * 0.66) {
+        if (this.summons && !this.summoned66 && this.hp <= this.maxHp * 0.66) {
           this.summoned66 = true;
           this.set('summon');
-        } else if (!this.summoned33 && this.hp <= this.maxHp * 0.33) {
+        } else if (this.summons && !this.summoned33 && this.hp <= this.maxHp * 0.33) {
           this.summoned33 = true;
           this.set('summon');
         } else if (this.atkCd <= 0 && p.state !== 'dead') {
@@ -218,7 +222,7 @@ export class Boss {
       case 'dead': {
         if (this.t === 1) g.fx.coinsBurst(this.x, this.y - 40, 20);
         if (this.t % 14 === 0 && this.t < 120) {
-          g.fx.debris(this.x + (Math.random() - 0.5) * 80, this.y - Math.random() * 80, '#f5c542', '#3b6fd4', 6);
+          g.fx.debris(this.x + (visualRand() - 0.5) * 80, this.y - visualRand() * 80, '#f5c542', '#3b6fd4', 6);
           g.audio.punch();
         }
         if (this.t > 200) this.removeMe = true;
@@ -257,5 +261,21 @@ export class Boss {
     }
     ctx2d.restore();
     ctx2d.globalAlpha = 1;
+  }
+}
+
+// ---------------- v15: LIL WHALE (whaleS) — THE DESCENT, Stage 1 theme ----------------
+// The easy descent boss: same moveset as THE WHALE, 200 HP, NO summons.
+export class WhaleS extends Boss {
+  readonly kind: BossKind = 'whaleS';
+  readonly name: string = 'LIL WHALE OF WALL STREET';
+  readonly introLine: string = 'MY OCEAN. YOUR FIRST LESSON.';
+  readonly deathLine: string = 'MINNOW CAP REACHED!';
+  protected summons = false;
+
+  constructor(x: number) {
+    super(x);
+    this.hp = 200;
+    this.maxHp = 200;
   }
 }

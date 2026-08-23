@@ -205,6 +205,8 @@ interface SnekPal {
 const SNEK_PAL: SnekPal = { skin: PAL.green, skinD: PAL.greenD, blade: true };
 // COIN SNEK — solid gold, spits $GONNA coins
 const COIN_PAL: SnekPal = { skin: PAL.gold, skinD: PAL.goldD, blade: false };
+// v15 GOLDEN CARRIER — brighter than COIN SNEK: unmistakable bonus target
+const CARRIER_PAL: SnekPal = { skin: '#ffd94a', skinD: '#c9920b', blade: false };
 
 function paintSnek(frame: number, dash: boolean, pal: SnekPal = SNEK_PAL): HTMLCanvasElement {
   const [c, x] = mk(40, 26);
@@ -742,6 +744,7 @@ export interface Art {
   snek: HTMLCanvasElement[]; // walk1 walk2 dash
   ninja: HTMLCanvasElement[]; // walk1 walk2 dash (v3)
   coinsnek: HTMLCanvasElement[]; // walk1 walk2 spit (v3)
+  carrier: HTMLCanvasElement[]; // run1 run2 sprint (v15: THE DESCENT golden carrier)
   bouncer: HTMLCanvasElement[]; // walk1 walk2 charge block (v3)
   moltov: HTMLCanvasElement[]; // coil1 coil2 throw (v5)
   bull: HTMLCanvasElement[]; // walk1 walk2 charge (v5)
@@ -772,6 +775,7 @@ export function buildArt(): Art {
     snek: [paintSnek(0, false), paintSnek(1, false), paintSnek(0, true)],
     ninja: [paintGecko(0, false, NINJA_PAL), paintGecko(1, false, NINJA_PAL), paintGecko(0, true, NINJA_PAL)],
     coinsnek: [paintSnek(0, false, COIN_PAL), paintSnek(1, false, COIN_PAL), paintSnek(0, true, COIN_PAL)],
+    carrier: [paintSnek(0, false, CARRIER_PAL), paintSnek(1, false, CARRIER_PAL), paintSnek(0, true, CARRIER_PAL)],
     bouncer: [paintWhale(0, false, false, true), paintWhale(1, false, false, true), paintWhale(0, true, false, true), paintWhale(0, false, true, true)],
     moltov: [paintMoltov(0, false), paintMoltov(1, false), paintMoltov(0, true)],
     bull: [paintBull(0, false), paintBull(1, false), paintBull(0, true)],

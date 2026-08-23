@@ -1,20 +1,34 @@
 // v3 bosses: DARK GONNA (S4), SLOT GOLEM (S5), EMPEROR FUD (S6 final).
 // All follow the BossLike contract from boss.ts (HP bar w/ name, intro text,
 // arena cam lock, slow-mo death, phase summons).
-import { chance, clamp, GRAV, LANE_BOT, LANE_TOP, rand, VW } from './types';
+import { clamp, GRAV, LANE_BOT, LANE_TOP, VW } from './types';
+import { visualRand } from './rng';
+
+// visual-only scatter (death debris, coin rings) — never feeds the sim
+function vrange(lo: number, hi: number): number { return lo + visualRand() * (hi - lo); }
 import type { Facing, HitInfo } from './types';
 import type { GameCtx } from './ctx';
-import { Boss } from './boss';
+import { Boss, WhaleS } from './boss';
 import type { BossAttack, BossKind, BossLike } from './boss';
 
-export function makeBoss(kind: BossKind, x: number): BossLike {
+// v15: depthScale = 1 + 0.15k (THE DESCENT boss cadence 10+8k) — deeper
+// bosses are tankier. HP is integer-rounded at spawn like the wave ramp.
+export function makeBoss(kind: BossKind, x: number, depthScale = 1): BossLike {
+  let b: BossLike;
   switch (kind) {
-    case 'darkgonna': return new DarkGonna(x);
-    case 'golem': return new SlotGolem(x);
-    case 'fud': return new EmperorFud(x);
-    case 'gonna404': return new Gonna404(x);
-    default: return new Boss(x);
+    case 'darkgonna': b = new DarkGonna(x); break;
+    case 'golem': b = new SlotGolem(x); break;
+    case 'fud': b = new EmperorFud(x); break;
+    case 'gonna404': b = new Gonna404(x); break;
+    case 'whaleS': b = new WhaleS(x); break;
+    case 'darkgonnaS': b = new DarkGonnaS(x); break;
+    default: b = new Boss(x); break;
   }
+  if (depthScale !== 1) {
+    b.maxHp = Math.round(b.maxHp * depthScale);
+    b.hp = b.maxHp;
+  }
+  return b;
 }
 
 // shared damage intake (whale contract: flash, meter, hitStop, stagger, death fx)
@@ -77,9 +91,9 @@ export class DarkGonna implements BossLike {
   removeMe = false;
   dropped = false;
   readonly kind: BossKind = 'darkgonna';
-  readonly name = 'DARK GONNA';
-  readonly introLine = 'ONLY ONE LIZARD WEARS THE CROWN';
-  readonly deathLine = 'THE CROWN IS YOURS!';
+  readonly name: string = 'DARK GONNA';
+  readonly introLine: string = 'ONLY ONE LIZARD WEARS THE CROWN';
+  readonly deathLine: string = 'THE CROWN IS YOURS!';
   readonly slowmo = 50;
   private dark: Map<string, HTMLCanvasElement> | null = null;
 
@@ -144,14 +158,14 @@ export class DarkGonna implements BossLike {
           if (adx < 42 && ady < 14) {
             this.comboN = 1;
             this.queued = false;
-            this.set(chance(0.62) ? 'combo' : 'kick');
+            this.set(g.rng.chance(0.62) ? 'combo' : 'kick');
             this.swingId++;
             this.hitPlayer = false;
             g.audio.swing();
           } else if (this.slamCd <= 0 && adx > 60 && adx < 200) {
             this.set('slam');
             this.hitPlayer = false;
-          } else if (adx >= 44 && adx < 160 && chance(0.5)) {
+          } else if (adx >= 44 && adx < 160 && g.rng.chance(0.5)) {
             this.set('jumpkick');
             this.vz = 4.6;
             this.vx = clamp(dx / 30, -4.4, 4.4);
@@ -164,7 +178,7 @@ export class DarkGonna implements BossLike {
       }
       case 'combo': {
         // mirror of the player's 3-punch chain
-        if (this.t >= 5 && (this.rage || chance(0.06))) this.queued = true;
+        if (this.t >= 5 && (this.rage || g.rng.chance(0.06))) this.queued = true;
         if (this.t < 8) this.x += this.face * 1.4;
         if (this.t === 8) this.hitPlayer = false; // next punch can connect
         const dur = this.comboN === 3 ? 20 : 15;
@@ -250,7 +264,7 @@ export class DarkGonna implements BossLike {
       case 'dead': {
         // dissolves into green pixels
         if (this.t % 5 === 0 && this.t < 130) {
-          g.fx.debris(this.x + rand(-14, 14), this.y - rand(0, 60), '#3fae4a', '#7fd858', 4);
+          g.fx.debris(this.x + vrange(-14, 14), this.y - vrange(0, 60), '#3fae4a', '#7fd858', 4);
           if (this.t % 20 === 0) g.audio.punch();
         }
         if (this.t === 110 && !this.dropped) {
@@ -331,6 +345,22 @@ export class DarkGonna implements BossLike {
   }
 }
 
+// ---------------- v15: DARK GONNA JR (darkgonnaS) — THE DESCENT, Stage 2 theme ----------------
+// The doppelganger's little brother: same silhouette, softer hands (180 HP,
+// no rage pacing changes — the descent ramp does the scaling).
+export class DarkGonnaS extends DarkGonna {
+  readonly kind: BossKind = 'darkgonnaS';
+  readonly name: string = 'DARK GONNA JR';
+  readonly introLine: string = 'THE SHALLOW END OF EVIL';
+  readonly deathLine: string = 'THE CROWN STAYS PUT!';
+
+  constructor(x: number) {
+    super(x);
+    this.hp = 180;
+    this.maxHp = 180;
+  }
+}
+
 // ---------------- SLOT GOLEM — the house incarnate (Stage 5) ----------------
 type SGState = 'intro' | 'idle' | 'coins' | 'slots' | 'stomp' | 'stun' | 'dead';
 
@@ -356,9 +386,9 @@ export class SlotGolem implements BossLike {
   removeMe = false;
   rained = false;
   readonly kind: BossKind = 'golem';
-  readonly name = 'SLOT GOLEM';
-  readonly introLine = 'THE HOUSE ALWAYS WINS';
-  readonly deathLine = 'JACKPOT! THE HOUSE FALLS!';
+  readonly name: string = 'SLOT GOLEM';
+  readonly introLine: string = 'THE HOUSE ALWAYS WINS';
+  readonly deathLine: string = 'JACKPOT! THE HOUSE FALLS!';
   readonly slowmo = 60;
 
   constructor(x: number) {
@@ -443,7 +473,7 @@ export class SlotGolem implements BossLike {
           if (this.t % 12 === 0) g.audio.uiMove();
         } else if (this.t === 62) {
           this.flashT = 0;
-          if (chance(0.45)) {
+          if (g.rng.chance(0.45)) {
             // 7 7 7 — explosion telegraphed by the spin; dodge by moving away
             const ex = p.x;
             const ey = p.y;
@@ -497,10 +527,10 @@ export class SlotGolem implements BossLike {
         // explodes into a rain of collectible $GONNA coins
         if (this.t === 1) {
           g.fx.coinsBurst(this.x, this.y - 60, 30);
-          for (let i = 0; i < 14; i++) g.dropItem('coinG', this.x + rand(-70, 70), clamp(this.y + rand(-20, 20), LANE_TOP, LANE_BOT));
+          for (let i = 0; i < 14; i++) g.dropItem('coinG', this.x + g.rng.range(-70, 70), clamp(this.y + g.rng.range(-20, 20), LANE_TOP, LANE_BOT));
         }
         if (this.t % 12 === 0 && this.t < 130) {
-          g.fx.debris(this.x + rand(-40, 40), this.y - rand(0, 90), '#f5c542', '#7a1a2a', 6);
+          g.fx.debris(this.x + vrange(-40, 40), this.y - vrange(0, 90), '#f5c542', '#7a1a2a', 6);
           if (this.t % 24 === 0) g.audio.coin();
         }
         if (this.t === 60) g.fx.coinsBurst(this.x, this.y - 40, 20);
@@ -569,9 +599,9 @@ export class EmperorFud implements BossLike {
   alive = true;
   removeMe = false;
   readonly kind: BossKind = 'fud';
-  readonly name = 'EMPEROR FUD';
-  readonly introLine = 'BOW BEFORE EMPEROR FUD';
-  readonly deathLine = 'FUD ELIMINATED. TO THE MOON.';
+  readonly name: string = 'EMPEROR FUD';
+  readonly introLine: string = 'BOW BEFORE EMPEROR FUD';
+  readonly deathLine: string = 'FUD ELIMINATED. TO THE MOON.';
   readonly slowmo = 150;
 
   constructor(x: number) {
@@ -648,7 +678,7 @@ export class EmperorFud implements BossLike {
           if (ph === 2 && this.stormCd <= 0) {
             this.set('storm');
           } else if (ph === 3 && Math.abs(dx) > 90) {
-            this.set(chance(0.5) ? 'charge' : 'slam');
+            this.set(g.rng.chance(0.5) ? 'charge' : 'slam');
             this.hitPlayer = false;
           } else if (Math.abs(dx) < 100 && Math.abs(dy) < 24) {
             this.set('swing');
@@ -689,8 +719,8 @@ export class EmperorFud implements BossLike {
         }
         if (this.t > 10 && this.t < 140 && this.t % 22 === 0) {
           for (let i = 0; i < 4; i++) {
-            const tx = i < 2 ? p.x + rand(-50, 50) : g.camX + rand(40, VW - 40);
-            const ty = i < 2 ? p.y + rand(-18, 18) : rand(LANE_TOP + 4, LANE_BOT);
+            const tx = i < 2 ? p.x + g.rng.range(-50, 50) : g.camX + g.rng.range(40, VW - 40);
+            const ty = i < 2 ? p.y + g.rng.range(-18, 18) : g.rng.range(LANE_TOP + 4, LANE_BOT);
             g.spawnProj('fud', clamp(tx, g.camX + 20, g.camX + VW - 20), clamp(ty, LANE_TOP, LANE_BOT), 0);
           }
         }
@@ -767,8 +797,8 @@ export class EmperorFud implements BossLike {
           g.fx.popup(this.x, this.y - 170, this.deathLine, '#f5c542', 170);
         }
         if (this.t % 10 === 0 && this.t < 160) {
-          g.fx.debris(this.x + rand(-55, 55), this.y - rand(0, 130), '#f5c542', '#b8860b', 7);
-          g.fx.ring(this.x + rand(-40, 40), this.y - rand(0, 60), 40, '#f5c542');
+          g.fx.debris(this.x + vrange(-55, 55), this.y - vrange(0, 130), '#f5c542', '#b8860b', 7);
+          g.fx.ring(this.x + vrange(-40, 40), this.y - vrange(0, 60), 40, '#f5c542');
           if (this.t % 30 === 0) g.audio.explode();
         }
         if (this.t === 90) g.fx.coinsBurst(this.x, this.y - 60, 30);
@@ -863,9 +893,9 @@ export class Gonna404 implements BossLike {
   alive = true;
   removeMe = false;
   readonly kind: BossKind = 'gonna404';
-  readonly name = 'GONNA 404';
-  readonly introLine = 'THE SOVEREIGN ANSWERS';
-  readonly deathLine = '404: FOUND';
+  readonly name: string = 'GONNA 404';
+  readonly introLine: string = 'THE SOVEREIGN ANSWERS';
+  readonly deathLine: string = '404: FOUND';
   readonly slowmo = 50;
   private lastPhase = 1;
   private statueCv: HTMLCanvasElement | null = null;
@@ -1011,23 +1041,23 @@ export class Gonna404 implements BossLike {
           const adx = Math.abs(dx);
           const ady = Math.abs(dy);
           // glitch teleport: phase 2+, from mid-range, often in rage
-          if (this.phase >= 2 && this.tpCd <= 0 && adx > 50 && adx < 260 && chance(this.rage ? 0.8 : 0.45)) {
+          if (this.phase >= 2 && this.tpCd <= 0 && adx > 50 && adx < 260 && g.rng.chance(this.rage ? 0.8 : 0.45)) {
             this.set('teleport');
             g.audio.jump();
           } else if (adx < 42 && ady < 14) {
             this.comboN = 1;
             this.queued = false;
             // the signature 10-hit is rare in p1, common later
-            if (chance(this.phase === 1 ? 0.18 : 0.34)) {
+            if (g.rng.chance(this.phase === 1 ? 0.18 : 0.34)) {
               this.set('combo10');
               g.fx.popup(this.x, this.y - 112, '218,540!', '#f5c542', 60);
             } else {
-              this.set(chance(0.62) ? 'combo' : 'kick');
+              this.set(g.rng.chance(0.62) ? 'combo' : 'kick');
             }
             this.swingId++;
             this.hitPlayer = false;
             g.audio.swing();
-          } else if (adx >= 44 && adx < 160 && chance(0.5)) {
+          } else if (adx >= 44 && adx < 160 && g.rng.chance(0.5)) {
             this.set('jumpkick');
             this.vz = 4.6;
             this.vx = clamp(dx / 30, -4.4, 4.4);
@@ -1039,7 +1069,7 @@ export class Gonna404 implements BossLike {
         break;
       }
       case 'combo': {
-        if (this.t >= 5 && (this.rage || chance(0.06))) this.queued = true;
+        if (this.t >= 5 && (this.rage || g.rng.chance(0.06))) this.queued = true;
         if (this.t < 8) this.x += this.face * 1.4;
         if (this.t === 8) this.hitPlayer = false;
         const dur = this.comboN === 3 ? 20 : 15;
@@ -1099,7 +1129,7 @@ export class Gonna404 implements BossLike {
         if (this.t === 1) {
           g.fx.popup(this.x, this.y - 100, 'NOT FOUND', '#3cc9ff', 46);
           for (let i = 0; i < 6; i++) {
-            g.fx.debris(this.x + rand(-16, 16), this.y - rand(10, 80), G4_RAINBOW[i], '#101018', 3);
+            g.fx.debris(this.x + vrange(-16, 16), this.y - vrange(10, 80), G4_RAINBOW[i], '#101018', 3);
           }
           THRONE_FX.gasp = 40; // the crowd gasps at the glitch
         }
@@ -1107,11 +1137,11 @@ export class Gonna404 implements BossLike {
           // reappear BEHIND the player, already swinging
           const side = p.face === 1 ? -1 : 1;
           this.x = clamp(p.x + side * 44, g.camX + 20, g.camX + VW - 20);
-          this.y = clamp(p.y + rand(-8, 8), LANE_TOP, LANE_BOT);
+          this.y = clamp(p.y + g.rng.range(-8, 8), LANE_TOP, LANE_BOT);
           this.face = p.x >= this.x ? 1 : -1;
           g.audio.land();
           for (let i = 0; i < 6; i++) {
-            g.fx.debris(this.x + rand(-14, 14), this.y - rand(10, 80), G4_RAINBOW[5 - i], '#101018', 3);
+            g.fx.debris(this.x + vrange(-14, 14), this.y - vrange(10, 80), G4_RAINBOW[5 - i], '#101018', 3);
           }
           this.swingId++;
           this.hitPlayer = false;
@@ -1130,7 +1160,7 @@ export class Gonna404 implements BossLike {
         // dissolves into rainbow pixels while the crowd throws coins
         if (this.t % 4 === 0 && this.t < 120) {
           const col = G4_RAINBOW[(this.t >> 2) % G4_RAINBOW.length];
-          g.fx.debris(this.x + rand(-16, 16), this.y - rand(0, 70), col, '#f5d76e', 4);
+          g.fx.debris(this.x + vrange(-16, 16), this.y - vrange(0, 70), col, '#f5d76e', 4);
           if (this.t % 20 === 0) g.audio.punch();
         }
         if (this.t === 30 || this.t === 70 || this.t === 110) g.fx.coinsBurst(this.x, this.y - 60, 12);

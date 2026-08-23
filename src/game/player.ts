@@ -2,6 +2,7 @@
 import { clamp, comboRankTier, GRAV, LANE_BOT, LANE_TOP, VW } from './types';
 import type { Facing, HitInfo } from './types';
 import type { GameCtx } from './ctx';
+import { scoreMult } from './descent';
 import type { Enemy } from './enemies';
 import { blockObjects } from './items';
 import type { Obstacle } from './items';
@@ -103,12 +104,16 @@ export class Player {
     if (this.invuln > 0 || this.state === 'dead' || this.state === 'down' || this.state === 'getup' || this.state === 'victory') return false;
     if (this.state === 'grab' || this.state === 'knee') this.releaseHeld(g, false);
     if (this.carrying) this.setDown(g); // drop the object when hit
+    // v15 DESCENT: losing a live multiplier must be FELT (red pulse + popup)
+    if (g.descent && scoreMult(this.comboHits) > 1) g.descent.multLostT = 45;
     this.endCombo(g); // taking damage breaks the combo
     this.hp -= hit.dmg;
     this.flashT = 8;
     g.fx.spark(this.x, this.y - 40, true);
     g.fx.popup(this.x, this.y - 66, '-' + hit.dmg, '#ff6b6b');
     g.fx.shake(3);
+    // v15 DESCENT: near-death heartbeat — hits at <=25% HP rock the screen
+    if (g.descent && this.hp > 0 && this.hp <= this.maxHp * 0.25) g.fx.shake(6);
     g.hitStop(4);
     g.haptics.hurt(); // v6: 30ms buzz when the player takes a hit
     if (this.hp <= 0) {
@@ -228,7 +233,8 @@ export class Player {
     if (this.invuln > 0) this.invuln--;
     if (this.flashT > 0) this.flashT--;
     // chain window decay — combo drops when it runs out
-    if (this.chainT > 0) {
+    // v15: COMBO FORGE freezes the decay (the meter burns amber instead)
+    if (this.chainT > 0 && !(g.descent && g.descent.forgeT > 0)) {
       this.chainT--;
       if (this.chainT === 0) this.endCombo(g);
     }

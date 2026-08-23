@@ -39,7 +39,7 @@ const DIM = '#5a5f6c';
 const RED = '#e23b3b';
 const PQCYAN = '#57c8d8';
 
-export type ArenaAction = { act: 'none' } | { act: 'move' } | { act: 'title' } | { act: 'run'; stageMode: 'full' | 'stage'; stageIdx: number };
+export type ArenaAction = { act: 'none' } | { act: 'move' } | { act: 'title' } | { act: 'run'; stageMode: 'full' | 'stage'; stageIdx: number; seedTag?: string; target?: number };
 
 interface Hot {
   x: number;
@@ -94,6 +94,7 @@ export class ArenaUI {
   private sealBest = 0;
   private sealRuns = 0;
   private sealDraftId = ''; // creator pre-create payment ref
+  private nextIdHint: number | null = null; // v15: upcoming challenge id (DESCENT seed)
   private pendingRun = false; // set after a paid continue; engine polls it
   private continuePaying = false;
   private hots: Hot[] = [];
@@ -202,6 +203,14 @@ export class ArenaUI {
     void this.refreshBoard();
     void this.refreshHistory();
     this.buildFeed();
+    // v15: prefetch the upcoming challenge id — a creator's DESCENT run is
+    // seeded by it so the joiner fights the EXACT same waves (no contract change)
+    void this.adapter()
+      .peekNextId?.()
+      .then((n) => {
+        if (typeof n === 'number') this.nextIdHint = n;
+      })
+      .catch(() => undefined);
     // v10.4 deep-link: ?duel=<id> lands straight on the card detail
     if (deepDuel != null) {
       void this.adapter()
@@ -917,6 +926,8 @@ export class ArenaUI {
         act: 'run',
         stageMode: this.cfg.stageMode === 'full' ? 'full' : 'stage',
         stageIdx: this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0),
+        seedTag: this.descentSeedTag(),
+        target: 0,
       };
     }
     // v14.4: creator REPLAY — FREE. The card does not exist on-chain yet, so
@@ -938,6 +949,8 @@ export class ArenaUI {
         act: 'run',
         stageMode: this.cfg.stageMode === 'full' ? 'full' : 'stage',
         stageIdx: this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0),
+        seedTag: this.descentSeedTag(),
+        target: 0,
       };
     }
     // v12/v14.4: CONTINUE — JOINER ONLY (post-commitment). Pay 5 ALGO to the
@@ -993,6 +1006,8 @@ export class ArenaUI {
         act: 'run',
         stageMode: c.stageMode === 'full' ? 'full' : 'stage',
         stageIdx: c.stageMode === 'full' ? 0 : (c.stageIdx ?? 0),
+        seedTag: 'PIT-' + c.id, // v15: joiner fights the creator's exact waves
+        target: this.descentTarget(c), // v15: the TARGET bar race
       };
     }
     if (id === 'resolve') return this.doResolve();
@@ -1046,7 +1061,26 @@ export class ArenaUI {
     const stageIdx = this.sealRole === 'creator'
       ? (this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0))
       : (this.current?.stageMode === 'full' ? 0 : (this.current?.stageIdx ?? 0));
-    return { act: 'run', stageMode, stageIdx };
+    // v15: seed + TARGET for DESCENT runs (harmless on FULL RUN cards)
+    const seedTag = this.sealRole === 'creator'
+      ? this.descentSeedTag()
+      : 'PIT-' + (this.current?.id ?? 0);
+    const target = this.sealRole === 'creator' || !this.current ? 0 : this.descentTarget(this.current);
+    return { act: 'run', stageMode, stageIdx, seedTag, target };
+  }
+
+  // v15: a run of THE DESCENT is seeded by the challenge id — same card, same
+  // waves for creator & joiner. The creator's pre-create run uses the hinted id
+  // (falls back to the local draft ref if the counter is unreachable).
+  private descentSeedTag(): string {
+    if (!this.sealDraftId) this.sealDraftId = 'D' + Date.now().toString(36);
+    return this.nextIdHint !== null ? 'PIT-' + this.nextIdHint : 'DRAFT-' + this.sealDraftId;
+  }
+
+  // v15: the TARGET bar score for a joiner run — the creator's sealed score
+  private descentTarget(card: Challenge): number {
+    const creator = card.players.find((p) => p.address === card.creator);
+    return creator ? creator.score : 0;
   }
 
   private resetSeal(): void {
@@ -1092,6 +1126,7 @@ export class ArenaUI {
         this.verdict = false;
         this.rematchOf = null; // the rematch became its own card
         this.resetSeal(); // consumed — the score lives on-chain now
+        this.nextIdHint = c.id + 1; // v15: the NEXT card's DESCENT seed hint
         this.focus = 0;
         this.buildFeed();
       },
@@ -1450,7 +1485,7 @@ export class ArenaUI {
       const statusTxt = live ? '' : card.status.toUpperCase();
       const statusX = claimable ? VW - 102 : VW - 40;
       const maxChars = Math.max(8, Math.floor(((statusTxt ? statusX - textWidth(statusTxt, 1) - 10 : VW - 40) - tx) / 6));
-      const stage = card.stageMode === 'full' ? 'FULL RUN' : 'STAGE ' + (card.stageIdx !== null ? card.stageIdx + 1 : '?') + ' ' + STAGE_NAMES[card.stageIdx ?? 0];
+      const stage = card.stageMode === 'full' ? 'FULL RUN' : 'THE DESCENT - ' + STAGE_NAMES[card.stageIdx ?? 0];
       const byLine = stage + ' - BY ' + card.creatorName;
       drawText(c, byLine.length > maxChars ? byLine.slice(0, maxChars) : byLine, tx, y + 24, 1, DIM);
       if (statusTxt) {
@@ -1543,7 +1578,7 @@ export class ArenaUI {
   private stepBattle(c: CanvasRenderingContext2D, frame: number, art: Art): void {
     drawText(c, 'BATTLE', VW / 2, 40, 1, GRAY, 'center');
     this.btn(c, frame, { id: 'bat:full', x: 42, y: 50, w: 300, h: 20 }, 'FULL RUN - ALL 7 STAGES', { gold: this.cfg.stageMode === 'full' });
-    this.btn(c, frame, { id: 'bat:single', x: 42, y: 74, w: 300, h: 20 }, 'SINGLE STAGE - PICK YOUR GROUND', { gold: this.cfg.stageMode === 'single' });
+    this.btn(c, frame, { id: 'bat:single', x: 42, y: 74, w: 300, h: 20 }, 'THE DESCENT - INFINITE WAVES', { gold: this.cfg.stageMode === 'single' });
     this.btn(c, frame, { id: 'bat:random', x: 42, y: 98, w: 300, h: 20 }, 'RANDOM - TRUST THE SHUFFLE', { gold: this.cfg.stageMode === 'random' });
     if (this.cfg.stageMode === 'single') {
       for (let i = 0; i < 7; i++) {
@@ -1659,7 +1694,7 @@ export class ArenaUI {
     const lines: [string, string][] = [
       ['CARD', this.cfg.visibility === 'public' ? 'PUBLIC - THE PIT' : 'PRIVATE - LINK ONLY'],
       ['FORMAT', this.cfg.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN ' + this.cfg.seatsTotal + ' SEATS - ' + Math.round(this.cfg.durationSecs / 3600) + 'H'],
-      ['BATTLE', this.cfg.stageMode === 'full' ? 'FULL RUN - 7 STAGES' : 'STAGE ' + ((this.cfg.stageIdx ?? 0) + 1) + ' ' + STAGE_NAMES[this.cfg.stageIdx ?? 0]],
+      ['BATTLE', this.cfg.stageMode === 'full' ? 'FULL RUN - 7 STAGES' : 'THE DESCENT - ' + STAGE_NAMES[this.cfg.stageIdx ?? 0]],
       ['STAKE', fmtStake(this.cfg.stake) + ' $GONNA A SEAT'],
       ['FIGHTER', this.cfg.fighter.name],
     ];
@@ -1785,7 +1820,7 @@ export class ArenaUI {
     const seated = me !== null && card.players.some((p) => p.address === me);
     const live = card.status === 'open' || card.status === 'full';
     const title = fmtStake(card.stake) + (card.format === 'duel' ? ' DUEL' : ' OPEN TABLE');
-    const stage = card.stageMode === 'full' ? 'FULL RUN - ALL 7 STAGES' : 'STAGE ' + ((card.stageIdx ?? 0) + 1) + ' ' + STAGE_NAMES[card.stageIdx ?? 0];
+    const stage = card.stageMode === 'full' ? 'FULL RUN - ALL 7 STAGES' : 'THE DESCENT - ' + STAGE_NAMES[card.stageIdx ?? 0];
     this.drawHeader(c, title, stage);
     // v10.1: the PRIVATE tag lives bottom-left — never next to the card title
     if (card.visibility === 'private') drawText(c, 'PRIVATE - LINK ONLY', 10, VH - 11, 1, '#b45aff');
@@ -1942,7 +1977,7 @@ export class ArenaUI {
   // back (STATUS_REFUNDED on-chain). Render the truth, never the live duel.
   private drawClosedCard(c: CanvasRenderingContext2D, frame: number, card: Challenge): void {
     const title = fmtStake(card.stake) + (card.format === 'duel' ? ' DUEL' : ' OPEN TABLE');
-    const stage = card.stageMode === 'full' ? 'FULL RUN - ALL 7 STAGES' : 'STAGE ' + ((card.stageIdx ?? 0) + 1) + ' ' + STAGE_NAMES[card.stageIdx ?? 0];
+    const stage = card.stageMode === 'full' ? 'FULL RUN - ALL 7 STAGES' : 'THE DESCENT - ' + STAGE_NAMES[card.stageIdx ?? 0];
     this.drawHeader(c, title, stage);
     drawTextSh(c, 'CARD CLOSED - STAKE RETURNED', VW / 2, 48, 1, GOLD, 'center', '#4a3005');
     drawText(c, 'NO BATTLE WAS FOUGHT - EVERY PAYER REFUNDED IN FULL', VW / 2, 62, 1, GRAY, 'center');
@@ -2050,7 +2085,7 @@ export class ArenaUI {
 
   // ---------- HISTORY (v10.3) ----------
   private stageLabel(stageMode: string, stageIdx: number | null): string {
-    return stageMode === 'full' ? 'FULL RUN' : 'STAGE ' + ((stageIdx ?? 0) + 1) + ' ' + STAGE_NAMES[stageIdx ?? 0];
+    return stageMode === 'full' ? 'FULL RUN' : 'DESCENT - ' + STAGE_NAMES[stageIdx ?? 0];
   }
 
   // v14: the contract pays INSIDE resolve (winner + 5% treasury fee, one

@@ -6,6 +6,7 @@ import { fmtScore } from './board';
 import { drawCheck, drawIconTG, drawIconX, shareCheckRect, shareIconRect } from './shareicons';
 import { SHARE_GUIDE } from './share';
 import { drawSealedBg } from './sealanim';
+import { loadBestWave } from './descent';
 
 const FLUO = '#39FF14'; // v9.2 bullrun green
 
@@ -142,9 +143,24 @@ export function drawClear(ctx: CanvasRenderingContext2D, tally: Tally, score: nu
   if (tally.count >= 1) drawTextSh(ctx, 'PRESS ENTER', VW / 2, 170, 1, '#ffffff', 'center');
 }
 
-export function drawGameOver(ctx: CanvasRenderingContext2D, t: number): void {
+export function drawGameOver(ctx: CanvasRenderingContext2D, t: number, descent?: { wave: number; seedLabel: string } | null): void {
   ctx.fillStyle = 'rgba(10,4,4,' + Math.min(0.85, t / 60) + ')';
   ctx.fillRect(0, 0, VW, VH);
+  // v15: THE DESCENT death card — YOU DIED AT WAVE N (N huge gold), seed + best
+  if (descent) {
+    if (t > 20) drawTextSh(ctx, 'YOU DIED AT', VW / 2, 62, 2, '#e23b3b', 'center');
+    if (t > 30) {
+      const wl = 'WAVE ' + descent.wave;
+      drawTextSh(ctx, wl, VW / 2, 84, 5, '#f5c542', 'center');
+    }
+    if (t > 50) {
+      const best = loadBestWave();
+      if (best > 0) drawTextSh(ctx, 'BEST: WAVE ' + best, VW / 2, 138, 1, '#39FF14', 'center');
+      drawText(ctx, 'SEED ' + descent.seedLabel, VW / 2, 154, 1, '#8a8f9c', 'center');
+      drawText(ctx, 'ONE LIFE. THAT IS THE PIT.', VW / 2, 170, 1, '#5a5f6c', 'center');
+    }
+    return;
+  }
   if (t > 30) drawTextSh(ctx, 'GAME OVER', VW / 2, 100, 4, '#e23b3b', 'center');
 }
 

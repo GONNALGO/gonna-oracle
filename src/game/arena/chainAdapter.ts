@@ -110,6 +110,9 @@ export interface ArenaAdapter {
   legacyStats(address: string): Promise<LegacyStats>;
   // v10.4: deep-link lookup (?duel=<id>) — any visibility, live cards only
   getChallenge(id: number): Promise<Challenge | null>;
+  // v15: the id the NEXT create will get — a creator's DESCENT run is seeded
+  // by it, so the joiner later fights the exact same waves. Read-only.
+  peekNextId?(): Promise<number | null>;
 }
 
 // ---------- FEE ENGINE ----------
@@ -811,6 +814,15 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const [meta, players] = await Promise.all([kit.readMeta(id), kit.readPlayers(id)]);
     if (!meta) return null;
     return this.toChallenge(id, meta, players);
+  }
+
+  // v15: the on-chain counter = the id the next create will get (DESCENT seed)
+  async peekNextId(): Promise<number | null> {
+    try {
+      return await kit.nextChallengeId();
+    } catch {
+      return null; // offline/algorand hiccup — the run falls back to the draft ref
+    }
   }
 
   private async scan(): Promise<Challenge[]> {

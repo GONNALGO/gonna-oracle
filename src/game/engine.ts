@@ -16,9 +16,15 @@ import type { ProjKind } from './proj';
 import { buildMintStage, buildStage, MINT_FX, resetMintFx } from './stages';
 import type { StageDef } from './stages';
 import { drawMintHud, MINT_FLAWLESS_TIME, MINT_SECONDS, MintState } from './mint';
-import { clamp, comboRankName, LANE_BOT, LANE_TOP, rand, VH, VW } from './types';
+import { clamp, comboRankName, LANE_BOT, LANE_TOP, VH, VW } from './types';
 import type { Facing } from './types';
 import type { GameCtx } from './ctx';
+// ---- v15: THE DESCENT ----
+import { hashSeed, makeRng, mathRng, randomSeedLabel, setSeededSim } from './rng';
+import type { Rng } from './rng';
+import { aliveCap, bossBonus, buildDescentStage, composeWave, newDescent, rampHp, rampSpd, saveBestWave, scoreMult, themePool, waveClearBonus } from './descent';
+import type { DescentState } from './descent';
+import { drawBonusAuras, drawBonusPips, drawBossWarning, drawDescentGrade, drawMultJuice, drawWaveSlam } from './descentFX';
 import { drawHud } from './hud';
 import { drawTextSh, textWidth } from './font';
 import { Haptics, TouchControls } from './touch';
@@ -80,6 +86,9 @@ export class Game implements GameCtx {
   projs: Proj[] = [];
   camX = 0;
   stageLen = 1920;
+  // ---- v15: THE DESCENT ----
+  rng: Rng = makeRng(0x9e3779b9); // GameCtx: reseeded per stage/run
+  descent: DescentState | null = null; // GameCtx: non-null during THE DESCENT
 
   private ctx: CanvasRenderingContext2D;
   private scene: Scene = 'title';
@@ -481,18 +490,23 @@ export class Game implements GameCtx {
   // an abandoned run: nothing was signed, nothing to clean up.
   private arenaRun: { stageMode: 'full' | 'stage'; stageIdx: number } | null = null;
 
-  private startArenaRun(stageMode: 'full' | 'stage', stageIdx: number): void {
+  // v15: stage cards run THE DESCENT (seeded by the challenge id — same card,
+  // same waves for creator & joiner). seedTag/target come from the ARENA UI.
+  private startArenaRun(stageMode: 'full' | 'stage', stageIdx: number, opts?: { seedTag?: string; target?: number }): void {
     this.arenaRun = { stageMode, stageIdx };
     this.startNewGame(); // fresh run: score/lives/stage 0
     if (stageMode === 'stage') {
       this.stageIdx = stageIdx;
-      this.loadStage(stageIdx);
-      this.setScene('intro');
+      this.loadDescent(stageIdx, opts?.seedTag ?? randomSeedLabel(), opts?.target ?? 0);
     }
   }
 
   private finishArenaRun(): void {
     if (!this.arenaRun) return;
+    if (this.descent) {
+      saveBestWave(this.descent.wave, this.descent.seedLabel); // v15
+      this.descent = null; // the seal screen owns the score now
+    }
     this.arenaRun = null;
     this.arena.onRunFinished(this.score);
     this.setScene('arena');
@@ -533,7 +547,7 @@ export class Game implements GameCtx {
   private handleArenaAction(a: ArenaAction): void {
     if (a.act === 'move') this.audio.uiMove();
     else if (a.act === 'run') {
-      this.startArenaRun(a.stageMode, a.stageIdx);
+      this.startArenaRun(a.stageMode, a.stageIdx, { seedTag: a.seedTag, target: a.target });
       this.audio.uiSelect();
     } else if (a.act === 'title') {
       this.setScene('title');
@@ -1129,17 +1143,25 @@ export class Game implements GameCtx {
   addMeter(n: number): void {
     this.player.meter = Math.min(3, this.player.meter + n);
   }
+  // v15: kill score multiplier (DESCENT combo mult x GREEN CANDLE) — 1 elsewhere
+  killMult(): number {
+    const d = this.descent;
+    if (!d) return 1;
+    return d.candleT > 0 ? scoreMult(this.player.comboHits) * 2 : scoreMult(this.player.comboHits);
+  }
   spawnEnemy(kind: EnemyKind, side: Facing): void {
     const x = side === -1 ? this.camX - 24 : this.camX + VW + 24;
-    const y = rand(LANE_TOP + 6, 200);
-    this.enemies.push(new Enemy(kind, x, y, side === -1 ? 1 : -1));
+    const y = this.rng.range(LANE_TOP + 6, 200); // v15: seeded lane
+    const e = new Enemy(kind, x, y, side === -1 ? 1 : -1);
+    e.hoverPhase = this.rng.range(0, 6.28); // v15: seeded hover phase
+    this.enemies.push(e);
   }
   dropItem(kind: ItemKind, x: number, y: number): void {
-    this.items.push(new Item(kind, x, y, true));
+    this.items.push(new Item(kind, x, y, true, () => this.rng.next()));
   }
   dropCoins(x: number, y: number, n: number): void {
     for (let i = 0; i < n; i++) {
-      this.items.push(new Item('coinG', x + rand(-10, 10), clamp(y + rand(-6, 6), LANE_TOP, 205), true));
+      this.items.push(new Item('coinG', x + this.rng.range(-10, 10), clamp(y + this.rng.range(-6, 6), LANE_TOP, 205), true, () => this.rng.next()));
     }
   }
   spawnProj(kind: ProjKind, x: number, y: number, vx: number, tx = 0, ty = 0): void {
@@ -1514,6 +1536,105 @@ export class Game implements GameCtx {
     return this.arena.info;
   }
 
+  // ---- v15: THE DESCENT debug (window.__gonna) ----
+  // CI: free-play descent. seedLabel given => fully deterministic run.
+  debugDescent(themeIdx: number, seedLabel?: string, target = 0): void {
+    this.arenaRun = null; // practice: no arena seal on death
+    this.startNewGame();
+    this.stageIdx = themeIdx;
+    this.loadDescent(themeIdx, seedLabel ?? randomSeedLabel(), target);
+  }
+  get descentInfo(): {
+    active: boolean; wave: number; phase: string; seed: string; score: number; kos: number;
+    queue: number; enemies: number; carriersSpawned: number; carriersEscaped: number;
+    bonusDrops: number; boss: string | null; bossHp: number; mult: number; lives: number;
+    aT: number; candleT: number; forgeT: number; bulletT: number; items: string[];
+  } | null {
+    const d = this.descent;
+    if (!d) return null;
+    return {
+      active: true,
+      wave: d.wave,
+      phase: d.phase,
+      seed: d.seedLabel,
+      score: this.score,
+      kos: this.kos,
+      queue: d.queue.length,
+      enemies: this.enemies.filter((e) => e.alive).length,
+      carriersSpawned: d.carriersSpawned,
+      carriersEscaped: d.carriersEscaped,
+      bonusDrops: d.bonusDrops,
+      boss: this.boss ? this.boss.kind : null,
+      bossHp: this.boss ? Math.round(this.boss.hp) : -1,
+      mult: this.killMult(),
+      lives: this.player.lives,
+      aT: d.aT,
+      candleT: d.candleT,
+      forgeT: d.forgeT,
+      bulletT: d.bulletT,
+      items: this.items.map((i) => i.kind),
+    };
+  }
+  // FNV-1a over the whole sim-relevant snapshot — twin-run determinism hash
+  private simHash(): string {
+    let s = [
+      this.score, this.kos, this.descent?.wave ?? -1, this.descent?.phase ?? '-',
+      this.player.x.toFixed(3), this.player.y.toFixed(3), this.player.hp, this.player.comboHits,
+      this.boss ? this.boss.kind + ':' + this.boss.hp.toFixed(1) + ':' + this.boss.x.toFixed(2) : '-',
+    ].join('|');
+    for (const e of this.enemies) {
+      s += '|' + e.kind + ',' + e.x.toFixed(3) + ',' + e.y.toFixed(3) + ',' + e.hp + ',' + e.state;
+    }
+    for (const it of this.items) s += '|i' + it.kind + ',' + it.x.toFixed(2) + ',' + it.y.toFixed(2);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16).padStart(8, '0');
+  }
+  // CI: synchronous scripted run. tape events apply at exact frames BEFORE the
+  // step; hashes sampled every 60 frames. god = the player cannot die.
+  debugSim(opts: {
+    frames: number;
+    tape?: { f: number; down?: Record<string, boolean>; press?: string[]; cmd?: string }[];
+    god?: boolean;
+  }): { hashes: string[]; score: number; wave: number; kos: number; seed: string } {
+    if (this.scene === 'intro') this.setScene('play');
+    const tape = opts.tape ?? [];
+    let ti = 0;
+    const hashes: string[] = [];
+    for (let f = 0; f < opts.frames; f++) {
+      while (ti < tape.length && tape[ti].f <= f) {
+        const ev = tape[ti++];
+        if (ev.down) {
+          for (const k of Object.keys(ev.down)) {
+            (this.input.down as unknown as Record<string, boolean>)[k] = ev.down[k];
+          }
+        }
+        if (ev.press) {
+          for (const k of ev.press) (this.input.pressed as unknown as Record<string, boolean>)[k] = true;
+        }
+        if (ev.cmd === 'killEnemies') this.debugKillEnemies();
+        else if (ev.cmd === 'killNonCarrier') {
+          for (const e of this.enemies) {
+            if (e.alive && e.kind !== 'carrier') e.hurt({ dmg: 9999, kb: 1, down: true, dir: 1, pierce: true }, this);
+          }
+        } else if (ev.cmd === 'killBoss') this.debugHurtBoss(99999);
+      }
+      if (opts.god) {
+        this.player.hp = this.player.maxHp; // scripted survival
+        if (this.player.state === 'dead') {
+          this.player.state = 'getup';
+          this.player.t = 0;
+        }
+      }
+      this.step();
+      if ((f + 1) % 60 === 0) hashes.push(this.simHash());
+    }
+    return { hashes, score: this.score, wave: this.descent?.wave ?? -1, kos: this.kos, seed: this.descent?.seedLabel ?? '' };
+  }
+
   // CI: fighter-select / gate screen internals
   get gateInfo(): { scene: string; mode: string; cursor: number; rowCount: number; teaser: boolean; flashing: boolean; uiFighter: { skin: string; assetId: number | null; name: string } } {
     const f = this.gate.uiFighter;
@@ -1548,6 +1669,11 @@ export class Game implements GameCtx {
 
   private loadStage(idx: number): void {
     this.stage = buildStage(idx);
+    this.descent = null; // v15: classic campaign — THE DESCENT state dies here
+    // v15: campaign keeps the EXACT v14.4 Math.random stream (zero extra
+    // draws, visual noise included) — FULL RUN stays byte-equivalent.
+    this.rng = mathRng;
+    setSeededSim(false);
     if (idx === 6) void loadSkinFrames('rainbow'); // v9.5: GONNA 404 wears the REAL rainbow skin
     this.stageLen = this.stage.len;
     this.enemies = [];
@@ -1571,6 +1697,7 @@ export class Game implements GameCtx {
   // ---------- v9.4: THE MINTING (SF2-style bonus stage after Stage 3) ----------
   private loadMint(): void {
     this.stage = buildMintStage();
+    this.descent = null; // v15: safety — THE MINTING is not THE DESCENT
     this.stageLen = VW; // single-screen arena: camX never moves
     this.enemies = [];
     this.items = [];
@@ -1661,6 +1788,194 @@ export class Game implements GameCtx {
   }
 
   private mint: MintState | null = null; // v9.4: THE MINTING bonus stage state
+
+  // ---------- v15: THE DESCENT (infinite wave survival) ----------
+  // Arena-style single screen (MINT-style locked camera); the waves come to
+  // YOU. Seeded by the challenge id: same card = same waves for everyone.
+  private loadDescent(themeIdx: number, seedLabel: string, target: number): void {
+    const seed = hashSeed(seedLabel) >>> 0;
+    this.rng = makeRng(seed);
+    setSeededSim(true); // visual noise leaves Math.random alone in the sim
+    themePool(themeIdx); // pre-warm the weighted pool (build-time randomness stays OUT of the step)
+    this.stage = buildDescentStage(themeIdx);
+    this.stageLen = VW; // camera never moves
+    this.enemies = [];
+    this.items = [];
+    this.obstacles = this.stage.obstacles.map((o) => new Obstacle(o.kind, o.x, o.y, o.contains));
+    this.boss = null;
+    this.bossSpawned = false;
+    this.waveIdx = 0;
+    this.waveActive = false;
+    this.spawnQueue = [];
+    this.camX = 0;
+    this.camLock = 0;
+    this.timeLeft = 0; // no clock in THE DESCENT — the HUD shows the wave
+    this.stageScoreStart = this.score;
+    this.goArrow = false;
+    this.fx.reset();
+    for (const pr of this.projs) pr.on = false;
+    this.player.reset(VW / 2, 178);
+    this.player.hp = this.player.maxHp;
+    this.player.lives = 0; // ONE LIFE. Death seals the run.
+    this.mint = null;
+    this.descent = newDescent(themeIdx, seed, seedLabel, target);
+    this.setScene('intro'); // THE DESCENT - <theme> title card
+  }
+
+  private descentStartWave(w: number): void {
+    const d = this.descent;
+    if (!d || !this.stage) return;
+    const plan = composeWave(d.theme, w, this.rng);
+    d.wave = w;
+    this.waveIdx = w; // debug mirror (waveNo)
+    d.queue = plan.queue;
+    d.cap = aliveCap(w);
+    d.carrierBonus = plan.carrierBonus;
+    d.carrierOut = false;
+    d.stallT = 0;
+    d.phaseT = 0;
+    if (plan.boss && plan.bossKind) {
+      d.phase = 'boss';
+      d.bossKind = plan.bossKind;
+      d.bossK = plan.bossK;
+      this.boss = makeBoss(plan.bossKind, VW + 70, 1 + 0.15 * plan.bossK);
+      this.audio.playTrack(this.stage.bossTrack);
+      this.audio.gong();
+      this.fx.shake(5);
+    } else {
+      d.phase = 'announce';
+      d.bossKind = null;
+      this.audio.rankUp();
+    }
+  }
+
+  // throttled spawns: alive cap scales with the wave (3 / 4 / 5)
+  private descentSpawnTick(d: DescentState): void {
+    if (d.queue.length === 0) return;
+    let alive = 0;
+    for (const e of this.enemies) if (e.alive) alive++;
+    if (alive >= d.cap) return;
+    const kind = d.queue.shift()!;
+    const side: Facing = this.rng.chance(0.5) ? -1 : 1; // seeded side
+    const x = side === -1 ? this.camX - 24 : this.camX + VW + 24;
+    const y = this.rng.range(LANE_TOP + 6, 200); // seeded lane
+    const e = new Enemy(kind, x, y, side === -1 ? 1 : -1);
+    e.hoverPhase = this.rng.range(0, 6.28);
+    if (kind === 'carrier') {
+      // v15 founder #4: the cue — gold ring + popup, 15s escape clock
+      e.escapeT = 900;
+      e.bonusDrop = d.carrierBonus;
+      d.carrierOut = true;
+      d.carriersSpawned++;
+      this.fx.ring(clamp(x, 14, VW - 14), y - 8, 52, '#f5c542');
+      this.fx.ring(clamp(x, 14, VW - 14), y - 8, 30, '#39FF14');
+      this.fx.popup(clamp(x, 70, VW - 70), y - 84, 'BONUS CARRIER!', '#f5c542', 80);
+      this.audio.oneUp();
+    } else {
+      // integer-rounded ramp at spawn (LOCKED)
+      e.maxHp = Math.round(e.maxHp * rampHp(d.wave));
+      e.hp = e.maxHp;
+      e.spdMul = rampSpd(d.wave);
+    }
+    this.enemies.push(e);
+  }
+
+  private descentAlive(): number {
+    let alive = 0;
+    for (const e of this.enemies) if (e.alive) alive++;
+    return alive;
+  }
+
+  private descentWaveCleared(d: DescentState): void {
+    const bonus = waveClearBonus(d.wave);
+    this.addScore(bonus);
+    d.clearWave = d.wave;
+    d.clearBonus = bonus;
+    d.clearScore = this.score;
+    d.phase = 'clear';
+    d.phaseT = 0;
+    this.audio.rankUp();
+  }
+
+  // boss down: bonus 1000 x wave, then the BREATHE beat (5s of calm)
+  private descentBossDown(): void {
+    const d = this.descent;
+    if (!d) return;
+    const bonus = bossBonus(d.wave);
+    this.addScore(bonus);
+    this.fx.popup(this.player.x, this.player.y - 96, 'BOSS BONUS +' + bonus, '#f5c542', 90, 2);
+    this.boss = null;
+    this.haptics.ko();
+    d.phase = 'breathe';
+    d.phaseT = 0;
+    if (this.stage) this.audio.playTrack(this.stage.track); // pressure drops
+  }
+
+  private updateDescent(): void {
+    const d = this.descent;
+    if (!d) return;
+    d.phaseT++;
+    // ---- bonus timers ----
+    if (d.aT > 0) {
+      d.aT--;
+      this.player.invuln = Math.max(this.player.invuln, 2); // THE A: untouchable
+    }
+    if (d.candleT > 0) d.candleT--;
+    if (d.forgeT > 0) d.forgeT--;
+    // ---- multiplier juice (founder #2): up = amber popup, lost = red pulse ----
+    const mult = scoreMult(this.player.comboHits);
+    if (mult > d.lastMult) {
+      d.multUpT = 40;
+      this.audio.rankUp();
+    }
+    d.lastMult = mult;
+    if (d.multUpT > 0) d.multUpT--;
+    if (d.multLostT > 0) d.multLostT--;
+
+    switch (d.phase) {
+      case 'announce':
+        this.descentSpawnTick(d); // the wave flows in behind the slam-in
+        if (d.phaseT >= 90) {
+          d.phase = 'combat';
+          d.phaseT = 0;
+        }
+        break;
+      case 'combat':
+        this.descentSpawnTick(d);
+        break;
+      case 'boss':
+        this.descentSpawnTick(d); // seeded trickle under the boss
+        break;
+      case 'clear':
+        if (d.phaseT >= 100) this.descentStartWave(d.wave + 1);
+        break;
+      case 'breathe':
+        if (d.phaseT >= 300) this.descentStartWave(d.wave + 1); // 5s of calm
+        break;
+    }
+
+    // wave-clear + anti-trickle (founder #3: waves never trickle-die)
+    if (d.phase === 'announce' || d.phase === 'combat') {
+      const alive = this.descentAlive();
+      if (d.queue.length === 0 && alive === 0) {
+        this.descentWaveCleared(d);
+      } else if (d.queue.length === 0 && alive <= 2) {
+        d.stallT++;
+        if (d.stallT > 360) {
+          // stragglers had their chance — the NEXT wave lands on top of them
+          const bonus = waveClearBonus(d.wave);
+          this.addScore(bonus);
+          d.clearWave = d.wave;
+          d.clearBonus = bonus;
+          d.clearScore = this.score;
+          this.fx.popup(VW / 2, 60, 'NO MERCY +' + bonus, '#f5c542', 60);
+          this.descentStartWave(d.wave + 1);
+        }
+      } else {
+        d.stallT = 0;
+      }
+    }
+  }
 
   private setScene(s: Scene): void {
     this.scene = s;
@@ -1787,8 +2102,12 @@ export class Game implements GameCtx {
         this.sceneT++;
         this.fx.update();
         if (this.sceneT > 130) {
-          this.setScene('continue');
-          this.continueCount = 9;
+          if (this.descent) {
+            this.openSave(0); // v15: ONE LIFE — the DESCENT death seals directly
+          } else {
+            this.setScene('continue');
+            this.continueCount = 9;
+          }
         }
         break;
       }
@@ -1878,8 +2197,11 @@ export class Game implements GameCtx {
   // ---------- gameplay ----------
   private updatePlay(): void {
     this.totalFrames++;
-    this.timeLeft -= 1 / 60;
-    if (this.timeLeft < 0) this.timeLeft = 0;
+    const descent = this.descent;
+    if (!descent) {
+      this.timeLeft -= 1 / 60; // THE DESCENT has no clock — the wave is the HUD
+      if (this.timeLeft < 0) this.timeLeft = 0;
+    }
     // v9.2 note v2: best combo chain this run
     if (this.player.comboHits > this.maxCombo) this.maxCombo = this.player.comboHits;
 
@@ -1899,28 +2221,37 @@ export class Game implements GameCtx {
     }
 
     const p = this.player;
+    // v15: BULLET TIME — per-entity timescale. The PLAYER runs every frame;
+    // the WORLD (enemies/boss/items/obstacles/projs/flames) ticks at half rate.
+    let worldTick = true;
+    if (descent && descent.bulletT > 0) {
+      descent.bulletT--;
+      worldTick = (this.totalFrames & 1) === 0;
+    }
     p.update(this);
 
-    for (const e of this.enemies) e.update(this);
-    if (this.boss) this.boss.update(this);
-    for (const it of this.items) it.update();
-    for (const o of this.obstacles) o.update(this);
-    for (const pr of this.projs) pr.update(this);
+    if (worldTick) {
+      for (const e of this.enemies) e.update(this);
+      if (this.boss) this.boss.update(this);
+      for (const it of this.items) it.update();
+      for (const o of this.obstacles) o.update(this);
+      for (const pr of this.projs) pr.update(this);
 
-    // v5: molotov flames — damage over time while standing in the fire
-    for (const f of this.fx.flames) {
-      if (!f.on) continue;
-      if (f.tick > 0) f.tick--;
-      if (p.state === 'dead' || p.state === 'down' || p.state === 'getup' || p.state === 'victory') continue;
-      if (p.z > 6 || p.invuln > 0) continue;
-      if (Math.abs(p.x - f.x) < FLAME_RX - 4 && Math.abs(p.y - f.y) < FLAME_RY && f.tick <= 0) {
-        f.tick = 40; // ~1.5 dmg/sec worth of ticks
-        p.hp -= 3;
-        p.flashT = 5;
-        this.fx.popup(p.x, p.y - 66, '-3', '#ff8a3c');
-        this.fx.spark(p.x, p.y - 30, false);
-        this.audio.flameTick();
-        if (p.hp <= 0) p.hurt({ dmg: 1, kb: 0, down: false, dir: 1 }, this);
+      // v5: molotov flames — damage over time while standing in the fire
+      for (const f of this.fx.flames) {
+        if (!f.on) continue;
+        if (f.tick > 0) f.tick--;
+        if (p.state === 'dead' || p.state === 'down' || p.state === 'getup' || p.state === 'victory') continue;
+        if (p.z > 6 || p.invuln > 0) continue;
+        if (Math.abs(p.x - f.x) < FLAME_RX - 4 && Math.abs(p.y - f.y) < FLAME_RY && f.tick <= 0) {
+          f.tick = 40; // ~1.5 dmg/sec worth of ticks
+          p.hp -= 3;
+          p.flashT = 5;
+          this.fx.popup(p.x, p.y - 66, '-3', '#ff8a3c');
+          this.fx.spark(p.x, p.y - 30, false);
+          this.audio.flameTick();
+          if (p.hp <= 0) p.hurt({ dmg: 1, kb: 0, down: false, dir: 1 }, this);
+        }
       }
     }
 
@@ -1947,24 +2278,40 @@ export class Game implements GameCtx {
       if (e.state === 'dead' && e.t === 1) {
         this.kos++;
         this.haptics.ko(); // v6: 20ms KO buzz
-        this.dropCoins(e.x, e.y, e.kind === 'whale' || e.kind === 'bouncer' ? 5 : 2 + Math.floor(rand(0, 3)));
+        this.dropCoins(e.x, e.y, e.kind === 'whale' || e.kind === 'bouncer' ? 5 : 2 + Math.floor(this.rng.range(0, 3)));
         if (e.kind === 'snek') this.dropItem('knife', e.x, e.y);
+        else if (e.kind === 'carrier') {
+          // v15: GOLDEN CARRIER down — the seeded bonus drops (escape = nothing)
+          if (e.bonusDrop) {
+            this.dropItem(e.bonusDrop, e.x, e.y);
+            e.bonusDrop = null;
+            if (descent) descent.bonusDrops++;
+          }
+          if (descent) descent.carrierOut = false;
+        }
         else if (e.kind === 'coinsnek') {
           this.dropItem('coinG', e.x, e.y); // COIN SNEK leaves $GONNA
           this.dropCoins(e.x, e.y, 3);
-        } else if (Math.random() < 0.15) this.dropItem(Math.random() < 0.5 ? 'chicken' : 'coinA', e.x, e.y);
+        } else if (this.rng.chance(0.15)) this.dropItem(this.rng.chance(0.5) ? 'chicken' : 'coinA', e.x, e.y);
+      }
+      // v15: a carrier that slipped away — no drop, no score
+      if (e.escaped && descent) {
+        descent.carriersEscaped++;
+        descent.carrierOut = false;
       }
     }
     this.enemies = this.enemies.filter((e) => !e.removeMe);
 
     this.watchdog(); // v8: never leave a wave soft-locked
-    this.updateWaves();
+    if (descent) this.updateDescent();
+    else this.updateWaves();
     this.updateCamera();
 
     // player death
     if (p.state === 'dead' && p.t > 100) {
       p.lives--;
       this.deaths++; // v9.2 note v2 telemetry
+      if (descent) saveBestWave(descent.wave, descent.seedLabel); // v15: ONE LIFE
       if (p.lives >= 0) {
         p.hp = p.maxHp;
         p.state = 'getup';
@@ -1983,13 +2330,16 @@ export class Game implements GameCtx {
       }
     }
 
-    // stage end (non-boss)
-    if (this.stage && !this.stage.boss && this.waveIdx >= this.stage.waves.length && !this.waveActive && p.x >= this.stageLen - 26 && p.state !== 'dead') {
+    // stage end (non-boss) — never in THE DESCENT (infinite by design)
+    if (!descent && this.stage && !this.stage.boss && this.waveIdx >= this.stage.waves.length && !this.waveActive && p.x >= this.stageLen - 26 && p.state !== 'dead') {
       this.stageClear();
     }
 
     // boss defeat -> stage clear tally (final boss -> FINAL VICTORY)
-    if (this.boss && this.boss.removeMe) {
+    // v15 DESCENT: boss down -> 1000 x wave bonus + the BREATHE beat instead
+    if (this.boss && this.boss.removeMe && descent) {
+      this.descentBossDown();
+    } else if (this.boss && this.boss.removeMe) {
       // v9.5: FUD is no longer the end — beyond the launchpad waits THE THRONE ROOM
       const wasFinal = this.stage?.bossKind === 'gonna404';
       this.boss = null;
@@ -2205,7 +2555,7 @@ export class Game implements GameCtx {
       for (const e of this.enemies) if (e.alive) alive++;
       if (this.spawnQueue.length > 0 && alive < 3) {
         const kind = this.spawnQueue.shift()!;
-        const side: Facing = Math.random() < 0.5 ? -1 : 1;
+        const side: Facing = this.rng.chance(0.5) ? -1 : 1; // v15: seeded spawn side
         this.spawnEnemy(kind, side);
       } else if (this.spawnQueue.length === 0 && alive === 0) {
         this.waveActive = false;
@@ -2224,7 +2574,8 @@ export class Game implements GameCtx {
     const d = target - this.camX;
     if (Math.abs(d) < 0.5) this.camX = target;
     else this.camX += clamp(d, -2, 2);
-    this.goArrow = !this.waveActive && !(this.stage.boss && this.bossSpawned) && this.scene === 'play' && this.player.state !== 'dead';
+    // v15: no GO arrow in THE DESCENT — the camera never moves, waves come to you
+    this.goArrow = !this.descent && !this.waveActive && !(this.stage.boss && this.bossSpawned) && this.scene === 'play' && this.player.state !== 'dead';
   }
 
   // v6.1: set a game-view transform + clip; fill=true lays the black base inside the view
@@ -2401,49 +2752,54 @@ export class Game implements GameCtx {
     // ---- world (cropped in ZOOM) ----
     const shX = this.fx.shakeX;
     const shY = this.fx.shakeY;
-    c.save();
-    this.worldView(crop, true);
-    c.save();
-    c.translate(Math.round(shX), Math.round(shY));
-    c.drawImage(this.stage.far, Math.round(-this.camX * 0.25), 0);
-    c.drawImage(this.stage.mid, Math.round(-this.camX * 0.55), 0);
-    if (this.stage.back) this.stage.back(c, this.camX, this.frame); // v8: animated billboards/tickers/sea
-    c.drawImage(this.stage.ground, Math.round(this.camX), 0, VW, 84, 0, 140, VW, 84);
-    if (this.stage.props) this.stage.props(c, this.camX, this.frame); // v8: sidewalk props (world depth)
-
-    this.fx.drawFlames(c, this.camX); // v5: ground fire burns under the fighters
-
-    // z-sorted entities (lower Y drawn first)
-    const dl = this.drawList;
-    dl.length = 0;
-    for (const o of this.obstacles) dl.push(o);
-    for (const it of this.items) dl.push(it);
-    for (const e of this.enemies) dl.push(e);
-    for (const pr of this.projs) if (pr.on) dl.push(pr);
-    if (this.boss) dl.push(this.boss);
-    if (this.mint) dl.push(this.mint); // v9.4: the monument z-sorts with the player
-    dl.push(this.player);
-    dl.sort((a, b) => a.y - b.y);
-    for (const d of dl) d.draw(c, this);
-
-    this.fx.drawWorld(c, this.camX); // v9.0.1 BUG C: world coords -> screen
-    if (this.stage.front) this.stage.front(c, this.camX, this.frame); // v8: weather + foreground silhouettes
-    if (this.fx.flash > 0) {
-      c.globalAlpha = this.fx.flash / 10;
-      c.fillStyle = '#fff';
-      c.fillRect(-4, -4, VW + 8, VH + 8);
-      c.globalAlpha = 1;
+    const bullet = !!this.descent && this.descent.bulletT > 0;
+    if (bullet) {
+      // v15 BULLET TIME: world rendered offscreen -> desaturated composite,
+      // then the player AGAIN at full color (the world slows, GONNA doesn't)
+      const [oc, ox] = this.bulletOff();
+      ox.setTransform(1, 0, 0, 1, 0, 0);
+      ox.imageSmoothingEnabled = false;
+      ox.fillStyle = '#000';
+      ox.fillRect(0, 0, VW, VH);
+      ox.save();
+      ox.translate(Math.round(shX), Math.round(shY));
+      this.paintWorld(ox);
+      ox.restore();
+      c.save();
+      this.worldView(crop, true);
+      c.filter = 'saturate(0.22) brightness(0.92)';
+      c.drawImage(oc, 0, 0);
+      c.filter = 'none';
+      this.player.draw(c, this); // full color over the frozen world
+      c.restore();
+    } else {
+      c.save();
+      this.worldView(crop, true);
+      c.save();
+      c.translate(Math.round(shX), Math.round(shY));
+      this.paintWorld(c);
+      c.restore(); // shake
+      c.restore(); // world view
     }
-    c.restore(); // shake
-    c.restore(); // world view
 
     // ---- overlays (always the full uncropped view: HUD is never cut by ZOOM) ----
     c.save();
     this.fitView(false);
     drawHud(c, this, this.score, this.timeLeft, this.goArrow, this.frame, this.audio.muted);
+    if (this.descent) {
+      // v15: THE DESCENT overlay stack — near-death pulse + bullet vignette
+      // first (they hug the edges), then banners/popups above everything.
+      drawDescentGrade(c, this, this.descent, this.frame);
+      if (this.descent.phase === 'boss') drawBossWarning(c, this.descent, this.boss ? this.boss.name : '', this.frame);
+      drawWaveSlam(c, this.descent);
+      drawMultJuice(c, this.descent, this.player.comboHits);
+      drawBonusPips(c, this.descent);
+    }
     if (this.scene === 'mint' && this.mint) drawMintHud(c, this.mint, this.timeLeft, this.frame, this.touchActive); // v9.4
     if (this.scene === 'clear') drawClear(c, this.tally, this.score);
-    if (this.scene === 'gameover') drawGameOver(c, this.sceneT);
+    if (this.scene === 'gameover') {
+      drawGameOver(c, this.sceneT, this.descent ? { wave: this.descent.wave, seedLabel: this.descent.seedLabel } : null);
+    }
     if (this.scene === 'continue') drawContinue(c, this.continueCount, this.sceneT, this.continuesUsed, this.touchActive);
     if (this.boss && !this.boss.alive) drawMarketCap(c, this.boss.t, this.boss.deathLine);
 
@@ -2470,6 +2826,63 @@ export class Game implements GameCtx {
       c.fillRect(gx0 + 7, gy0 + 10, 5, 2); c.fillRect(gx0 + 10, gy0 + 7, 2, 5);
     }
     c.restore(); // overlay view
+  }
+
+  // v15: BULLET TIME offscreen (world desaturation pass)
+  private btCanvas: HTMLCanvasElement | null = null;
+  private btCtx: CanvasRenderingContext2D | null = null;
+  private bulletOff(): [HTMLCanvasElement, CanvasRenderingContext2D] {
+    if (!this.btCanvas) {
+      this.btCanvas = document.createElement('canvas');
+      this.btCanvas.width = VW;
+      this.btCanvas.height = VH;
+      this.btCtx = this.btCanvas.getContext('2d')!;
+    }
+    return [this.btCanvas, this.btCtx!];
+  }
+
+  // v15: the whole world pass, 1:1 game coords (caller sets transform + shake).
+  // THE DESCENT feeds the parallax a VIRTUAL scroll counter — the camera is
+  // locked but the stage keeps moving (CoD Zombies: the waves come to you).
+  private paintWorld(c: CanvasRenderingContext2D): void {
+    const stage = this.stage;
+    if (!stage) return;
+    const vcam = this.descent ? this.totalFrames * 0.45 : this.camX;
+    const farOff = -Math.round((vcam * 0.25) % stage.far.width);
+    c.drawImage(stage.far, farOff, 0);
+    if (farOff + stage.far.width < VW) c.drawImage(stage.far, farOff + stage.far.width, 0);
+    const midOff = -Math.round((vcam * 0.55) % stage.mid.width);
+    c.drawImage(stage.mid, midOff, 0);
+    if (midOff + stage.mid.width < VW) c.drawImage(stage.mid, midOff + stage.mid.width, 0);
+    if (stage.back) stage.back(c, vcam, this.frame); // v8: animated billboards/tickers/sea
+    const gx = this.descent ? Math.round(vcam * 0.8) % Math.max(1, stage.ground.width - VW) : Math.round(this.camX);
+    c.drawImage(stage.ground, gx, 0, VW, 84, 0, 140, VW, 84);
+    if (stage.props) stage.props(c, vcam, this.frame); // v8: sidewalk props (world depth)
+
+    this.fx.drawFlames(c, this.camX); // v5: ground fire burns under the fighters
+
+    // z-sorted entities (lower Y drawn first)
+    const dl = this.drawList;
+    dl.length = 0;
+    for (const o of this.obstacles) dl.push(o);
+    for (const it of this.items) dl.push(it);
+    for (const e of this.enemies) dl.push(e);
+    for (const pr of this.projs) if (pr.on) dl.push(pr);
+    if (this.boss) dl.push(this.boss);
+    if (this.mint) dl.push(this.mint); // v9.4: the monument z-sorts with the player
+    dl.push(this.player);
+    dl.sort((a, b) => a.y - b.y);
+    for (const d of dl) d.draw(c, this);
+
+    if (this.descent) drawBonusAuras(c, this, this.descent, this.frame); // v15
+    this.fx.drawWorld(c, this.camX); // v9.0.1 BUG C: world coords -> screen
+    if (stage.front) stage.front(c, vcam, this.frame); // v8: weather + foreground silhouettes
+    if (this.fx.flash > 0) {
+      c.globalAlpha = this.fx.flash / 10;
+      c.fillStyle = this.descent ? '#f5c542' : '#fff'; // v15: THE DESCENT flashes GOLD, never white
+      c.fillRect(-4, -4, VW + 8, VH + 8);
+      c.globalAlpha = 1;
+    }
   }
 
   // rendered after everything, every scene — cheap no-op on desktop

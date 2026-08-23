@@ -1,9 +1,13 @@
 // Pickups (pooled-ish, short lived) + interactive lane obstacles
 // (solid blockers: break them, lift & throw them, or avoid them).
-import { GRAV, LANE_BOT, LANE_TOP, rand } from './types';
+import { GRAV, LANE_BOT, LANE_TOP } from './types';
 import type { GameCtx } from './ctx';
+import { drawBonusIcon } from './descentFX';
+import type { BonusKind } from './descent';
 
-export type ItemKind = 'chicken' | 'coinG' | 'coinA' | 'liz' | 'knife' | 'chest';
+// v15: THE DESCENT bonus kinds — bonusA (THE A: invincibility), candle (GREEN
+// CANDLE: x2 points), forge (COMBO FORGE: no decay), bullet (BULLET TIME)
+export type ItemKind = 'chicken' | 'coinG' | 'coinA' | 'liz' | 'knife' | 'chest' | BonusKind;
 export type ObstacleKind = 'can' | 'barrel' | 'crate' | 'safe' | 'drum' | 'chips';
 export type ObstacleMode = 'idle' | 'held' | 'thrown';
 
@@ -109,14 +113,16 @@ export class Item {
   bounces = 0;
   removeMe = false;
 
-  constructor(kind: ItemKind, x: number, y: number, scatter: boolean) {
+  // v15: scatter velocity is sim-relevant (where the pickup lands) — the
+  // engine passes its seeded stream; Math.random is never called here.
+  constructor(kind: ItemKind, x: number, y: number, scatter: boolean, rnd: () => number) {
     this.kind = kind;
     this.x = x;
     this.y = y;
     this.z = scatter ? 10 : 0;
     if (scatter) {
-      this.vx = rand(-2, 2);
-      this.vz = rand(1.5, 3);
+      this.vx = -2 + rnd() * 4;
+      this.vz = 1.5 + rnd() * 1.5;
     }
   }
 
@@ -188,6 +194,11 @@ export class Item {
     ctx2d.ellipse(sx, this.y + 2, 8, 3, 0, 0, Math.PI * 2);
     ctx2d.fill();
     ctx2d.globalAlpha = 1;
+    // v15: DESCENT bonus icons are pure pixel art (no art-table entry)
+    if (this.kind === 'bonusA' || this.kind === 'candle' || this.kind === 'forge' || this.kind === 'bullet') {
+      drawBonusIcon(ctx2d, this.kind, sx, sy);
+      return;
+    }
     const img = g.art[this.kind];
     ctx2d.drawImage(img, sx - (img.width >> 1), sy - img.height);
   }
@@ -251,7 +262,7 @@ export class Obstacle {
   private dropLoot(g: GameCtx): void {
     let drop = this.contains;
     if (drop === 'random') {
-      const r = Math.random();
+      const r = g.rng.next(); // v15: seeded obstacle contents
       drop = r < 0.3 ? 'chicken' : r < 0.55 ? 'coinA' : r < 0.8 ? 'coinG' : r < 0.92 ? 'chest' : 'liz';
     }
     if (drop !== 'none') g.dropItem(drop, this.x, this.y);
