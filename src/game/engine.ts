@@ -22,7 +22,7 @@ import type { GameCtx } from './ctx';
 // ---- v15: THE DESCENT ----
 import { hashSeed, makeRng, mathRng, randomSeedLabel, setSeededSim } from './rng';
 import type { Rng } from './rng';
-import { aliveCap, bossBonus, buildDescentStage, composeWave, newDescent, rampHp, rampSpd, saveBestWave, scoreMult, themePool, waveClearBonus } from './descent';
+import { aliveCap, bossBonus, buildDescentStage, composeWave, newDescent, rampHp, rampSpd, saveBestWave, scoreMult, themePool, waveClearBonus, ZONE_ADV } from './descent';
 import type { DescentState } from './descent';
 import { drawBonusAuras, drawBonusPips, drawBossWarning, drawDescentGrade, drawMultJuice, drawWaveSlam } from './descentFX';
 import { drawHud } from './hud';
@@ -1549,6 +1549,7 @@ export class Game implements GameCtx {
     queue: number; enemies: number; carriersSpawned: number; carriersEscaped: number;
     bonusDrops: number; boss: string | null; bossHp: number; mult: number; lives: number;
     aT: number; candleT: number; forgeT: number; bulletT: number; items: string[];
+    dist: number; camX: number; nextTriggerX: number; goArrow: boolean;
   } | null {
     const d = this.descent;
     if (!d) return null;
@@ -1573,6 +1574,10 @@ export class Game implements GameCtx {
       forgeT: d.forgeT,
       bulletT: d.bulletT,
       items: this.items.map((i) => i.kind),
+      dist: Math.round(d.dist),
+      camX: Math.round(this.camX),
+      nextTriggerX: Math.round(d.nextTriggerX),
+      goArrow: this.goArrow,
     };
   }
   // FNV-1a over the whole sim-relevant snapshot — twin-run determinism hash
@@ -1789,19 +1794,22 @@ export class Game implements GameCtx {
 
   private mint: MintState | null = null; // v9.4: THE MINTING bonus stage state
 
-  // ---------- v15: THE DESCENT (infinite wave survival) ----------
-  // Arena-style single screen (MINT-style locked camera); the waves come to
-  // YOU. Seeded by the challenge id: same card = same waves for everyone.
+  // ---------- v15.1: THE DESCENT (endless-scroll wave survival) ----------
+  // Infinite forward walk through looping theme visuals; each wave owns a
+  // forward zone. Seeded by the challenge id: same card = same waves for all.
+  private obstacleK = 0; // descent: highest obstacle loop spawned so far
   private loadDescent(themeIdx: number, seedLabel: string, target: number): void {
     const seed = hashSeed(seedLabel) >>> 0;
     this.rng = makeRng(seed);
     setSeededSim(true); // visual noise leaves Math.random alone in the sim
     themePool(themeIdx); // pre-warm the weighted pool (build-time randomness stays OUT of the step)
     this.stage = buildDescentStage(themeIdx);
-    this.stageLen = VW; // camera never moves
+    this.stageLen = 1e9; // endless — the world loops, the camera never stops
     this.enemies = [];
     this.items = [];
-    this.obstacles = this.stage.obstacles.map((o) => new Obstacle(o.kind, o.x, o.y, o.contains));
+    this.obstacleK = 0;
+    this.obstacles = [];
+    this.descentObstacleTick(); // furnish the first street loops
     this.boss = null;
     this.bossSpawned = false;
     this.waveIdx = 0;
@@ -1822,6 +1830,24 @@ export class Game implements GameCtx {
     this.setScene('intro'); // THE DESCENT - <theme> title card
   }
 
+  // the theme's street furniture repeats every loop L, offset k*L — visual
+  // variety, sim-deterministic (same offsets for creator & joiner)
+  private descentObstacleTick(): void {
+    const stage = this.stage;
+    if (!stage || !this.descent) return;
+    const L = stage.len;
+    const needK = Math.floor((this.camX + VW * 2) / L);
+    while (this.obstacleK <= needK) {
+      const off = this.obstacleK * L;
+      for (const o of stage.obstacles) this.obstacles.push(new Obstacle(o.kind, o.x + off, o.y, o.contains));
+      this.obstacleK++;
+    }
+    // prune what's far behind (never the one being carried/thrown)
+    if (this.obstacles.length > 40) {
+      this.obstacles = this.obstacles.filter((o) => o.mode !== 'idle' || o.x > this.camX - 160);
+    }
+  }
+
   private descentStartWave(w: number): void {
     const d = this.descent;
     if (!d || !this.stage) return;
@@ -1834,11 +1860,12 @@ export class Game implements GameCtx {
     d.carrierOut = false;
     d.stallT = 0;
     d.phaseT = 0;
+    this.camLock = this.camX; // the zone's arena: camera locks until it's cleared
     if (plan.boss && plan.bossKind) {
       d.phase = 'boss';
       d.bossKind = plan.bossKind;
       d.bossK = plan.bossK;
-      this.boss = makeBoss(plan.bossKind, VW + 70, 1 + 0.15 * plan.bossK);
+      this.boss = makeBoss(plan.bossKind, this.camX + VW + 70, 1 + 0.15 * plan.bossK);
       this.audio.playTrack(this.stage.bossTrack);
       this.audio.gong();
       this.fx.shake(5);
@@ -1867,9 +1894,9 @@ export class Game implements GameCtx {
       e.bonusDrop = d.carrierBonus;
       d.carrierOut = true;
       d.carriersSpawned++;
-      this.fx.ring(clamp(x, 14, VW - 14), y - 8, 52, '#f5c542');
-      this.fx.ring(clamp(x, 14, VW - 14), y - 8, 30, '#39FF14');
-      this.fx.popup(clamp(x, 70, VW - 70), y - 84, 'BONUS CARRIER!', '#f5c542', 80);
+      this.fx.ring(clamp(x, this.camX + 14, this.camX + VW - 14), y - 8, 52, '#f5c542');
+      this.fx.ring(clamp(x, this.camX + 14, this.camX + VW - 14), y - 8, 30, '#39FF14');
+      this.fx.popup(clamp(x, this.camX + 70, this.camX + VW - 70), y - 84, 'BONUS CARRIER!', '#f5c542', 80);
       this.audio.oneUp();
     } else {
       // integer-rounded ramp at spawn (LOCKED)
@@ -1894,6 +1921,7 @@ export class Game implements GameCtx {
     d.clearScore = this.score;
     d.phase = 'clear';
     d.phaseT = 0;
+    d.nextTriggerX = this.camX + ZONE_ADV; // GO — walk into the next zone
     this.audio.rankUp();
   }
 
@@ -1908,6 +1936,7 @@ export class Game implements GameCtx {
     this.haptics.ko();
     d.phase = 'breathe';
     d.phaseT = 0;
+    d.nextTriggerX = this.camX + ZONE_ADV; // then GO forward again
     if (this.stage) this.audio.playTrack(this.stage.track); // pressure drops
   }
 
@@ -1947,12 +1976,18 @@ export class Game implements GameCtx {
         this.descentSpawnTick(d); // seeded trickle under the boss
         break;
       case 'clear':
-        if (d.phaseT >= 100) this.descentStartWave(d.wave + 1);
+      case 'breathe': {
+        // GO forward: the next wave starts when the walk reaches its zone.
+        // Idling is legal — no forced scroll, the calm just holds.
+        const minBeat = d.phase === 'clear' ? 40 : 240;
+        if (d.phaseT >= minBeat && this.camX >= d.nextTriggerX) this.descentStartWave(d.wave + 1);
         break;
-      case 'breathe':
-        if (d.phaseT >= 300) this.descentStartWave(d.wave + 1); // 5s of calm
-        break;
+      }
     }
+
+    // v15.1: depth + street furniture housekeeping
+    if (this.camX > d.dist) d.dist = this.camX;
+    this.descentObstacleTick();
 
     // wave-clear + anti-trickle (founder #3: waves never trickle-die)
     if (d.phase === 'announce' || d.phase === 'combat') {
@@ -1968,7 +2003,7 @@ export class Game implements GameCtx {
           d.clearWave = d.wave;
           d.clearBonus = bonus;
           d.clearScore = this.score;
-          this.fx.popup(VW / 2, 60, 'NO MERCY +' + bonus, '#f5c542', 60);
+          this.fx.popup(this.camX + VW / 2, 60, 'NO MERCY +' + bonus, '#f5c542', 60);
           this.descentStartWave(d.wave + 1);
         }
       } else {
@@ -2567,15 +2602,25 @@ export class Game implements GameCtx {
 
   private updateCamera(): void {
     if (!this.stage) return;
+    const dsc = this.descent;
     let maxCam = this.stageLen - VW;
-    if (this.waveActive) maxCam = Math.min(maxCam, this.camLock);
-    if (this.stage.boss && this.bossSpawned) maxCam = Math.min(maxCam, this.stage.arenaX);
+    if (dsc) {
+      // v15.1: combat/announce/boss = the zone's arena (camera locked);
+      // clear/breathe = GO forward, camera follows the walk.
+      if (dsc.phase !== 'clear' && dsc.phase !== 'breathe') maxCam = Math.min(maxCam, this.camLock);
+    } else {
+      if (this.waveActive) maxCam = Math.min(maxCam, this.camLock);
+      if (this.stage.boss && this.bossSpawned) maxCam = Math.min(maxCam, this.stage.arenaX);
+    }
     const target = clamp(this.player.x - 150, 0, maxCam);
     const d = target - this.camX;
     if (Math.abs(d) < 0.5) this.camX = target;
     else this.camX += clamp(d, -2, 2);
-    // v15: no GO arrow in THE DESCENT — the camera never moves, waves come to you
-    this.goArrow = !this.descent && !this.waveActive && !(this.stage.boss && this.bossSpawned) && this.scene === 'play' && this.player.state !== 'dead';
+    // v15.1: the GO arrow is BACK in THE DESCENT — it marks the open road
+    // between zones (clear/breathe), exactly like the campaign between waves.
+    this.goArrow = dsc
+      ? (dsc.phase === 'clear' || dsc.phase === 'breathe') && this.scene === 'play' && this.player.state !== 'dead'
+      : !this.waveActive && !(this.stage.boss && this.bossSpawned) && this.scene === 'play' && this.player.state !== 'dead';
   }
 
   // v6.1: set a game-view transform + clip; fill=true lays the black base inside the view
@@ -2841,23 +2886,91 @@ export class Game implements GameCtx {
     return [this.btCanvas, this.btCtx!];
   }
 
-  // v15: the whole world pass, 1:1 game coords (caller sets transform + shake).
-  // THE DESCENT feeds the parallax a VIRTUAL scroll counter — the camera is
-  // locked but the stage keeps moving (CoD Zombies: the waves come to you).
+  // v15.1: tiles a layer canvas across the view at scroll offset `off` (px in
+  // canvas space). At every wrap joint inside the view, the incoming tile's
+  // head is alpha-blended over the outgoing tail — the loop has NO seam.
+  private tileH(c: CanvasRenderingContext2D, img: HTMLCanvasElement, off: number, band: number): void {
+    const W = img.width;
+    for (let x = -off; x < VW; x += W) c.drawImage(img, Math.round(x), 0);
+    for (let jx = -off + W; jx < VW + band; jx += W) {
+      for (let i = 0; i < band; i += 2) {
+        c.globalAlpha = (i + 2) / band;
+        c.drawImage(img, i, 0, 2, img.height, Math.round(jx - band + i), 0, 2, img.height);
+      }
+    }
+    c.globalAlpha = 1;
+  }
+
+  // descent: the animated billboard layer (back) loops with the mid domain's
+  // parallax period; the whole layer crossfades at the boundary so mixed
+  // parallax extras (sun/sea/windows) never pop. Rendered offscreen (cached).
+  private backOff: [HTMLCanvasElement, CanvasRenderingContext2D] | null = null;
+  private paintBackLooped(c: CanvasRenderingContext2D, stage: StageDef, vcam: number): void {
+    if (!stage.back) return;
+    if (!this.backOff) {
+      const cv = document.createElement('canvas');
+      cv.width = VW;
+      cv.height = VH;
+      this.backOff = [cv, cv.getContext('2d')!];
+    }
+    const [bc, bx] = this.backOff;
+    bx.clearRect(0, 0, VW, VH);
+    const Pm = stage.mid.width / 0.55; // mid-domain wrap period in camX units
+    const v = ((vcam % Pm) + Pm) % Pm;
+    stage.back(bx, v, this.frame);
+    const edge = Math.min(v, Pm - v); // px to the nearest loop boundary
+    const a = Math.min(1, edge / 200);
+    if (a >= 1) c.drawImage(bc, 0, 0);
+    else {
+      c.save();
+      c.globalAlpha = a;
+      c.drawImage(bc, 0, 0);
+      c.restore();
+    }
+  }
+
+  // v15.1: the whole world pass, 1:1 game coords (caller sets transform +
+  // shake). THE DESCENT rides the REAL camera now: the theme's layers loop
+  // seamlessly (crossfaded joints), street props repeat every loop L.
   private paintWorld(c: CanvasRenderingContext2D): void {
     const stage = this.stage;
     if (!stage) return;
-    const vcam = this.descent ? this.totalFrames * 0.45 : this.camX;
-    const farOff = -Math.round((vcam * 0.25) % stage.far.width);
-    c.drawImage(stage.far, farOff, 0);
-    if (farOff + stage.far.width < VW) c.drawImage(stage.far, farOff + stage.far.width, 0);
-    const midOff = -Math.round((vcam * 0.55) % stage.mid.width);
-    c.drawImage(stage.mid, midOff, 0);
-    if (midOff + stage.mid.width < VW) c.drawImage(stage.mid, midOff + stage.mid.width, 0);
-    if (stage.back) stage.back(c, vcam, this.frame); // v8: animated billboards/tickers/sea
-    const gx = this.descent ? Math.round(vcam * 0.8) % Math.max(1, stage.ground.width - VW) : Math.round(this.camX);
-    c.drawImage(stage.ground, gx, 0, VW, 84, 0, 140, VW, 84);
-    if (stage.props) stage.props(c, vcam, this.frame); // v8: sidewalk props (world depth)
+    const dsc = this.descent;
+    const vcam = this.camX;
+    if (dsc) {
+      const Wf = stage.far.width, Wm = stage.mid.width;
+      this.tileH(c, stage.far, Math.round((vcam * 0.25) % Wf), 48);
+      this.tileH(c, stage.mid, Math.round((vcam * 0.55) % Wm), 48);
+      this.paintBackLooped(c, stage, vcam);
+      // ground slice with wrap at the loop period L (+ crossfaded joint)
+      const L = stage.len;
+      const off = Math.round(vcam % L);
+      const w1 = Math.min(VW, L - off);
+      c.drawImage(stage.ground, off, 0, w1, 84, 0, 140, w1, 84);
+      if (w1 < VW) c.drawImage(stage.ground, 0, 0, VW - w1, 84, w1, 140, VW - w1, 84);
+      if (w1 < VW + 40) {
+        for (let i = 0; i < 40; i += 2) {
+          c.globalAlpha = (i + 2) / 40;
+          c.drawImage(stage.ground, i, 0, 2, 84, Math.round(w1 - 40 + i), 140, 2, 84);
+        }
+        c.globalAlpha = 1;
+      }
+      // street-level props are all world-depth (factor 1.0): loop exactly
+      if (stage.props) {
+        stage.props(c, off, this.frame);
+        stage.props(c, off - L, this.frame); // fill the post-joint band
+      }
+    } else {
+      const farOff = -Math.round((vcam * 0.25) % stage.far.width);
+      c.drawImage(stage.far, farOff, 0);
+      if (farOff + stage.far.width < VW) c.drawImage(stage.far, farOff + stage.far.width, 0);
+      const midOff = -Math.round((vcam * 0.55) % stage.mid.width);
+      c.drawImage(stage.mid, midOff, 0);
+      if (midOff + stage.mid.width < VW) c.drawImage(stage.mid, midOff + stage.mid.width, 0);
+      if (stage.back) stage.back(c, vcam, this.frame); // v8: animated billboards/tickers/sea
+      c.drawImage(stage.ground, Math.round(vcam), 0, VW, 84, 0, 140, VW, 84);
+      if (stage.props) stage.props(c, vcam, this.frame); // v8: sidewalk props (world depth)
+    }
 
     this.fx.drawFlames(c, this.camX); // v5: ground fire burns under the fighters
 

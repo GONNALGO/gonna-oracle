@@ -1,6 +1,7 @@
-// v15: THE DESCENT — infinite wave survival. Arena-style single screen
-// (MINT-style locked camera): the waves come to YOU. Seeded composition so a
-// challenge id reproduces the exact same descent for creator & joiner.
+// v15.1: THE DESCENT — infinite wave survival on an ENDLESS forward scroll.
+// Each wave owns a forward zone; clearing it releases the GO arrow and the
+// player walks into the next zone. Seeded composition so a challenge id
+// reproduces the exact same descent for creator & joiner.
 import { VW } from './types';
 import { buildStage } from './stages';
 import type { StageDef } from './stages';
@@ -49,7 +50,15 @@ export interface DescentState {
   clearWave: number; // wave number of the last clear (WAVE CLEARED banner)
   clearBonus: number; // bonus scored on the last clear
   clearScore: number; // score right after the clear (TARGET race readout)
+  // ---- v15.1 endless scroll ----
+  nextTriggerX: number; // camX that starts the next wave (walking into its zone)
+  dist: number; // virtual depth: farthest camX reached (px, never ends)
 }
+
+// v15.1: the walk between wave zones — 1.5 screens of forward brawling space
+export const ZONE_ADV = Math.round(VW * 1.5);
+// boot: the first zone starts almost immediately (title card -> short walk)
+export const BOOT_TRIGGER_X = 200;
 
 export function newDescent(theme: number, seed: number, seedLabel: string, target: number): DescentState {
   return {
@@ -63,6 +72,7 @@ export function newDescent(theme: number, seed: number, seedLabel: string, targe
     aT: 0, candleT: 0, forgeT: 0, bulletT: 0,
     lastMult: 1, multUpT: 0, multLostT: 0,
     clearWave: 0, clearBonus: 0, clearScore: 0,
+    nextTriggerX: BOOT_TRIGGER_X, dist: 0,
   };
 }
 
@@ -177,7 +187,10 @@ export function composeWave(theme: number, w: number, rng: Rng): WavePlan {
   return { queue, carrierBonus, boss: false, bossKind: null, bossK: -1 };
 }
 
-// ---- arena stage: the theme's visuals, one locked screen ----
+// ---- v15.1 endless stage: the theme's full visuals as a seamless LOOP ----
+// len stays the theme's loop period L; the engine tiles far/mid/ground with
+// crossfaded joints and wraps the street-level props every L px, so the world
+// never ends and never shows a seam.
 export function buildDescentStage(theme: number): StageDef {
   const t = Math.max(0, Math.min(6, theme));
   const base = buildStage(t);
@@ -185,14 +198,12 @@ export function buildDescentStage(theme: number): StageDef {
     ...base,
     name: 'THE DESCENT',
     sub: base.name + ' - ' + base.sub,
-    len: VW, // camera never moves
     waves: [], // the director composes waves live
-    obstacles: base.obstacles
-      .filter((_, i) => i % 2 === 0) // thin the set for one screen
-      .map((o) => ({ ...o, x: 40 + Math.round((o.x / base.len) * (VW - 80)) })),
+    // thinned street set: the run must stay readable (founder: "troppo
+    // affollato") — every second prop survives, same order, all loops equal
+    obstacles: base.obstacles.filter((_, i) => i % 2 === 0),
     boss: false,
     bossKind: null,
-    arenaX: VW,
   };
 }
 

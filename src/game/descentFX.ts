@@ -135,9 +135,11 @@ export function drawWaveSlam(ctx: CanvasRenderingContext2D, d: DescentState): vo
     return;
   }
   if (d.phase === 'breathe') {
-    // 5s of calm after a boss kill — pressure drop
+    // 5s of calm after a boss kill — pressure drop. v15.1: the walk forward
+    // can outlast the beat — fade the caption out after it.
     ctx.save();
-    ctx.globalAlpha = Math.min(0.8, d.phaseT / 30);
+    const fade = d.phaseT <= 300 ? 1 : Math.max(0, 1 - (d.phaseT - 300) / 60);
+    ctx.globalAlpha = Math.min(0.8, d.phaseT / 30) * fade;
     drawText(ctx, 'BREATHE.', VW / 2, 60, 1, DIM, 'center');
     ctx.restore();
   }
