@@ -13,6 +13,7 @@
 import { drawText, drawTextSh, textWidth } from '../font';
 import { hasDevOracle } from './devOracle';
 import { mosaicBorder, drawCrown } from '../screens';
+import { drawVerBadge } from '../ver';
 import { VH, VW, clamp } from '../types';
 import type { ViewFit } from '../fit';
 import type { Input } from '../input';
@@ -1523,6 +1524,9 @@ export class ArenaUI {
     this.btn(c, frame, { id: 'history', x: 116, y: 198, w: 80, h: 14 }, 'HISTORY');
     this.btn(c, frame, { id: 'legacy', x: 204, y: 198, w: 80, h: 14 }, 'MY LEGACY');
     this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
+    // v15.1.1: build version badge — bottom-right, in the free strip between
+    // the footer buttons (end y=212) and the mosaic border (y=220)
+    drawVerBadge(c, 213, DIM);
   }
 
   // ---------- CREATE CARD ----------

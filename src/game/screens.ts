@@ -7,6 +7,7 @@ import { drawCheck, drawIconTG, drawIconX, shareCheckRect, shareIconRect } from 
 import { SHARE_GUIDE } from './share';
 import { drawSealedBg } from './sealanim';
 import { loadBestWave } from './descent';
+import { drawVerBadge } from './ver';
 
 const FLUO = '#39FF14'; // v9.2 bullrun green
 
@@ -109,6 +110,9 @@ export function drawTitle(
   ctx.restore();
   drawText(ctx, 'V9.5.4 THRONE ROOM', VW - textWidth('V9.5.4 THRONE ROOM', 1) - 8, VH - 14, 1, '#5a5f6c');
   drawText(ctx, '(C) GONNA + THE BYZANTINES', 8, VH - 14, 1, '#5a5f6c');
+  // v15.1.1: build version badge, stacked just above the THRONE ROOM line
+  // (clears the centered THE PIT button at 192..206 — no hotspot overlap)
+  drawVerBadge(ctx, VH - 23);
 }
 
 export function drawIntro(ctx: CanvasRenderingContext2D, name: string, sub: string, t: number): void {

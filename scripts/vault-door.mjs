@@ -116,7 +116,11 @@ writeFileSync('dist/sw.js', sw);
 writeFileSync(`dist/sw-${VER}.js`, sw);
 
 // 3) index.html: entry script tag → SW bootstrap (OPTIMISTIC BOOT)
-const boot = `<script>
+// v15.1.1: expose the build VER at runtime so the in-game version badge
+// (title screen + THE PIT board) always shows which build is running.
+const boot = `<script>window.__GONNA_VER = '${VER}';</script>
+    <meta name="gonna-ver" content="${VER}">
+    <script>
       /* THE VAULT DOOR (${VER}) — OPTIMISTIC BOOT.
          The entry module is injected IMMEDIATELY: with an armed worker at the
          door it is minted in-flight and the game appears with ZERO waiting.
