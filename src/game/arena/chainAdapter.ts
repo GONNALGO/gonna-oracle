@@ -87,6 +87,7 @@ export interface LegacyStats {
   played: number;
   wins: number;
   losses: number;
+  open: number; // seated/created but not yet settled (live cards)
   winRate: number; // 0-100
   won: number; // $GONNA taken home
   lost: number; // $GONNA staked into losing matches
@@ -140,12 +141,34 @@ export function fmtGonna(n: number): string {
   return Math.floor(Math.max(0, n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-// degen relative time: "2H AGO" / "3D AGO" (font has no em dash, use '-')
+// clean $GONNA amount: degen tiers (10M/1B) for big stacks, trimmed
+// decimals (max 4, trailing zeros off) for dust — never "0.0526315789"
+export function fmtAmount(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  if (Math.abs(n) >= 1000) return fmtStake(n);
+  const s = n.toFixed(4);
+  return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
+}
+
+// settlement math (the contract takes the 5% treasury fee INSIDE resolve):
+// pool = stake x seats taken, fee = 5% of the pool, winner takes the rest.
+// `pot` from older records may only carry the creator stake — the pool is
+// never smaller than stake x seats actually taken.
+export function splitPot(stake: number, pot: number, seatsTaken: number): { pool: number; fee: number; takes: number } {
+  const pool = Math.max(pot, stake * Math.max(1, seatsTaken));
+  const fee = pool * 0.05;
+  return { pool, fee, takes: pool - fee };
+}
+
+// degen relative time: "57M AGO" / "1H 02M AGO" / "3D AGO"
+// (font has no em dash, use '-')
 export function fmtAgo(ts: number, now = Date.now()): string {
   const s = Math.max(0, Math.floor((now - ts) / 1000));
-  if (s < 3600) return Math.max(1, Math.floor(s / 60)) + 'M AGO';
-  if (s < 86400) return Math.floor(s / 3600) + 'H AGO';
-  return Math.floor(s / 86400) + 'D AGO';
+  const mins = Math.floor(s / 60);
+  if (mins < 60) return Math.max(1, mins) + 'M AGO';
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'H ' + String(mins - hrs * 60).padStart(2, '0') + 'M AGO';
+  return Math.floor(hrs / 24) + 'D AGO';
 }
 
 // countdown "11:42:33" from a ms deadline (clamped at 0)
@@ -524,22 +547,32 @@ export class MockArenaAdapter implements ArenaAdapter {
     let won = 0;
     let lost = 0;
     let bestWin = 0;
+    let open = 0;
     for (const h of s.history!) {
       if (!h.players.some((p) => p.address === address)) continue;
       if (h.winner === address) {
         wins++;
-        won += h.pot;
-        if (h.pot > bestWin) bestWin = h.pot;
+        const takes = splitPot(h.stake, h.pot, h.players.length).takes;
+        won += takes;
+        if (takes > bestWin) bestWin = takes;
       } else {
         losses++;
         lost += h.stake;
       }
     }
+    // OPEN: live cards where I'm seated (or the creator) — not settled yet
+    for (const c of s.challenges) {
+      this.refresh(c);
+      if (c.status === 'closed') continue; // sealed before the fight = no battle
+      if (c.creator === address || c.players.some((p) => p.address === address)) open++;
+    }
+    lsSave(s);
     const played = wins + losses;
     return {
       played,
       wins,
       losses,
+      open,
       winRate: played > 0 ? Math.round((wins / played) * 100) : 0,
       won,
       lost,
@@ -747,6 +780,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       winner: a.encodeAddress(best.addr),
     });
     kit.recordTxid(id, await kit.signSend(me.sign, txns));
+    kit.recordResolveAt(id, Date.now()); // honest "x AGO" for the HISTORY
     const ch = await this.getChallenge(id);
     // NEVER synthesize a verdict: the UI may only crown a winner the CHAIN
     // has confirmed (status RESOLVED + winner read from the box).
@@ -805,7 +839,11 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       winner: c.winner ?? '',
       winnerName: c.winner ? shortAddr(c.winner) : '???',
       players: c.players.map((p) => ({ address: p.address, name: p.name, score: p.score })),
-      resolvedAt: c.deadline, // no on-chain timestamp; deadline is the closest
+      // no on-chain timestamp: if WE resolved it the real time is remembered
+      // locally (recordResolveAt); else the deadline is the closest truth,
+      // clamped to now so a card resolved early never shows "1M AGO" from a
+      // FUTURE deadline
+      resolvedAt: kit.getResolveAt(c.id) ?? Math.min(c.deadline, Date.now()),
       claimed: c.status === 'claimed',
     }));
   }
@@ -821,15 +859,19 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       if (!h.players.some((p) => p.address === address)) continue;
       if (h.winner === address) {
         wins++;
-        won += h.pot;
-        if (h.pot > bestWin) bestWin = h.pot;
+        const takes = splitPot(h.stake, h.pot, h.players.length).takes;
+        won += takes;
+        if (takes > bestWin) bestWin = takes;
       } else {
         losses++;
         lost += h.stake;
       }
     }
+    // OPEN: live cards where I'm seated (or the creator) — not settled yet
+    const mine = await this.myChallenges(address);
+    const open = mine.filter((c) => c.status === 'open' || c.status === 'full' || c.status === 'expired').length;
     const played = wins + losses;
-    return { played, wins, losses, winRate: played > 0 ? Math.round((wins / played) * 100) : 0, won, lost, net: won - lost, bestWin };
+    return { played, wins, losses, open, winRate: played > 0 ? Math.round((wins / played) * 100) : 0, won, lost, net: won - lost, bestWin };
   }
 }
 

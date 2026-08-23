@@ -126,7 +126,7 @@ export function renderShareCard(ch: Challenge, fighterImg: CanvasImageSource | n
   // RIGHT: the challenge, in hierarchy (centered on cx)
   const cx = 810;
   drawTextSh(c, 'GONNA FIGHT', cx, 62, 7, GOLD, 'center', GOLD_DK);
-  drawText(c, 'THE ARENA', cx, 130, 4, FLUO, 'center');
+  drawText(c, 'THE PIT', cx, 130, 4, FLUO, 'center');
   c.fillStyle = GOLD_DK;
   c.fillRect(cx - 260, 168, 520, 3);
   // the stake, ENORMOUS gold

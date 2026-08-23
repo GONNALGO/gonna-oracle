@@ -20,7 +20,7 @@ import type { Art } from '../sprites';
 import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait } from '../skins';
 import type { SkinId } from '../skins';
-import { getArenaAdapter, arenaMode, feeLine, fmtAgo, fmtCountdown, fmtGonna, fmtStake } from './chainAdapter';
+import { getArenaAdapter, arenaMode, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtStake, splitPot } from './chainAdapter';
 import { explorerTxUrl, getTxid } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
 import { qaActive, qaScore } from './qaSigner';
@@ -269,7 +269,7 @@ export class ArenaUI {
     for (const c of this.cards.slice(0, 4)) {
       lines.push(c.creatorName + ' POSTED ' + fmtStake(c.stake) + ' - ' + c.seatsTotal + ' SEATS');
     }
-    lines.push('SILVIO WATCHES. THE BOARD PROVIDES.');
+    lines.push('SILVIO WATCHES. THE PIT PROVIDES.');
     this.feedLines = lines;
     this.feedT = 0;
   }
@@ -487,7 +487,7 @@ export class ArenaUI {
     void (async () => {
       try {
         const blob = await shareCardBlob(renderShareCard(ch, this.fighterImage(ch)));
-        const file = new File([blob], 'gonna-arena-card-' + ch.id + '.png', { type: 'image/png' });
+        const file = new File([blob], 'gonna-pit-card-' + ch.id + '.png', { type: 'image/png' });
         const nav = navigator as Navigator & {
           canShare?: (d: { files: File[] }) => boolean;
           share?: (d: { files?: File[]; text?: string }) => Promise<void>;
@@ -521,7 +521,7 @@ export class ArenaUI {
         const img = document.createElement('img');
         img.id = 'arena-showcard-img';
         img.src = url;
-        img.alt = 'GONNA FIGHT - ARENA challenge card';
+        img.alt = 'GONNA FIGHT - THE PIT challenge card';
         img.style.cssText =
           'max-width:92vw;max-height:70vh;object-fit:contain;image-rendering:pixelated;' +
           'border:2px solid #b8860b;box-shadow:0 0 24px rgba(245,197,66,0.25);';
@@ -757,7 +757,7 @@ export class ArenaUI {
           const blob = await shareCardBlob(renderShareCard(ch, this.fighterImage(ch)));
           const a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
-          a.download = 'gonna-arena-card-' + ch.id + '.png';
+          a.download = 'gonna-pit-card-' + ch.id + '.png';
           a.click();
           setTimeout(() => URL.revokeObjectURL(a.href), 5000);
           this.shareMsg = 'CARD SAVED - 1200X630 OG QUALITY';
@@ -1208,15 +1208,16 @@ export class ArenaUI {
     if (this.focus >= this.hots.length) this.focus = 0;
   }
 
-  private btn(c: CanvasRenderingContext2D, frame: number, h: Omit<Hot, 'id'> & { id: string }, label: string, opts: { gold?: boolean; green?: boolean; dim?: boolean; small?: boolean } = {}): void {
-    const lit = this.hots.length === this.focus;
-    this.hots.push(h);
-    c.fillStyle = opts.gold ? '#14100a' : opts.green ? '#0f2408' : PANEL;
+  private btn(c: CanvasRenderingContext2D, frame: number, h: Omit<Hot, 'id'> & { id: string }, label: string, opts: { gold?: boolean; green?: boolean; dim?: boolean; small?: boolean; disabled?: boolean } = {}): void {
+    // disabled: drawn but NEVER focusable/tappable (no hotspot registered)
+    const lit = !opts.disabled && this.hots.length === this.focus;
+    if (!opts.disabled) this.hots.push(h);
+    c.fillStyle = opts.disabled ? '#0a0c12' : opts.gold ? '#14100a' : opts.green ? '#0f2408' : PANEL;
     c.fillRect(h.x, h.y, h.w, h.h);
-    c.strokeStyle = lit ? '#ffffff' : opts.gold ? ((frame & 16) !== 0 ? GOLD : GOLD_DK) : opts.green ? ((frame & 16) !== 0 ? GREEN : '#3fae4a') : '#3a3f4c';
+    c.strokeStyle = opts.disabled ? '#232838' : lit ? '#ffffff' : opts.gold ? ((frame & 16) !== 0 ? GOLD : GOLD_DK) : opts.green ? ((frame & 16) !== 0 ? GREEN : '#3fae4a') : '#3a3f4c';
     c.lineWidth = 1;
     c.strokeRect(h.x + 0.5, h.y + 0.5, h.w - 1, h.h - 1);
-    const color = opts.dim ? DIM : opts.gold ? GOLD : opts.green ? GREEN : '#c8ccd4';
+    const color = opts.disabled ? DIM : opts.dim ? DIM : opts.gold ? GOLD : opts.green ? GREEN : '#c8ccd4';
     drawTextSh(c, label, h.x + h.w / 2, h.y + Math.floor((h.h - 7) / 2), 1, lit ? '#ffffff' : color, 'center');
     if (lit && (frame & 16) !== 0) drawText(c, '>', h.x + 3, h.y + Math.floor((h.h - 7) / 2), 1, GREEN);
   }
@@ -1281,8 +1282,8 @@ export class ArenaUI {
   private drawBoard(c: CanvasRenderingContext2D, frame: number): void {
     // v10.1: no-overlap vertical rhythm — title block (10..24), subtitle (30),
     // LIVE feed on its OWN dedicated strip (44..55), cards start at y=60
-    drawTextSh(c, 'THE BOARD', VW / 2, 10, 2, GOLD, 'center', GOLD_DK);
-    drawText(c, 'THE STAKING PIAZZA', VW / 2, 30, 1, DIM, 'center');
+    drawTextSh(c, 'THE PIT', VW / 2, 10, 2, GOLD, 'center', GOLD_DK);
+    drawText(c, 'THE STAKING PIT', VW / 2, 30, 1, DIM, 'center');
     // v11: testnet mode tag + wallet connect (real Pera, chainId 416002)
     if (arenaMode() === 'testnet') {
       drawTextSh(c, 'TESTNET', 10, 4, 1, FLUO, 'left', '#0a3d00');
@@ -1298,7 +1299,7 @@ export class ArenaUI {
     }
     c.fillStyle = '#04140a';
     c.fillRect(4, 44, VW - 8, 11);
-    const line = this.feedLines.length > 0 ? this.feedLines[0] : 'THE BOARD IS LISTENING';
+    const line = this.feedLines.length > 0 ? this.feedLines[0] : 'THE PIT IS LISTENING';
     drawText(c, 'LIVE> ' + line, 10, 46, 1, FLUO);
 
     // v13: MY OPEN CARDS — compact chips strip under the feed (mobile-first:
@@ -1418,7 +1419,7 @@ export class ArenaUI {
 
   private stepVisibility(c: CanvasRenderingContext2D, frame: number): void {
     drawText(c, 'VISIBILITY', VW / 2, 48, 1, GRAY, 'center');
-    this.btn(c, frame, { id: 'vis:public', x: 52, y: 66, w: 280, h: 28 }, 'PUBLIC - THE BOARD', { green: true });
+    this.btn(c, frame, { id: 'vis:public', x: 52, y: 66, w: 280, h: 28 }, 'PUBLIC - THE PIT', { green: true });
     drawText(c, 'EVERY DEGEN SEES IT ON THE SQUARE', VW / 2, 98, 1, DIM, 'center');
     this.btn(c, frame, { id: 'vis:private', x: 52, y: 116, w: 280, h: 28 }, 'PRIVATE - LINK ONLY', { gold: true });
     drawText(c, 'SEALED. ONLY WHO HOLDS THE LINK', VW / 2, 148, 1, DIM, 'center');
@@ -1560,7 +1561,7 @@ export class ArenaUI {
     c.strokeRect(x + 0.5, 42.5, w - 1, 115);
     // v10.1: no crown here — it crowded the STEP label (clean 8px header gap)
     const lines: [string, string][] = [
-      ['CARD', this.cfg.visibility === 'public' ? 'PUBLIC - THE BOARD' : 'PRIVATE - LINK ONLY'],
+      ['CARD', this.cfg.visibility === 'public' ? 'PUBLIC - THE PIT' : 'PRIVATE - LINK ONLY'],
       ['FORMAT', this.cfg.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN ' + this.cfg.seatsTotal + ' SEATS - ' + Math.round(this.cfg.durationSecs / 3600) + 'H'],
       ['BATTLE', this.cfg.stageMode === 'full' ? 'FULL RUN - 7 STAGES' : 'STAGE ' + ((this.cfg.stageIdx ?? 0) + 1) + ' ' + STAGE_NAMES[this.cfg.stageIdx ?? 0]],
       ['STAKE', fmtStake(this.cfg.stake) + ' $GONNA A SEAT'],
@@ -1741,9 +1742,29 @@ export class ArenaUI {
         ay += 24;
       } else if (live && seated && (testnet ? iOweScore : card.players.some((p) => p.score === 0))) {
         drawText(c, 'NETWORK FEE: ' + feeLine('submit', acct, testnet), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
-        ay += 12;
-        this.btn(c, frame, { id: 'submit', x: 92, y: ay, w: 200, h: 20 }, 'SUBMIT SCORE', { green: true });
-        ay += 24;
+        ay += 10;
+        this.btn(c, frame, { id: 'submit', x: 92, y: ay, w: 200, h: 18 }, 'SUBMIT SCORE', { green: true });
+        ay += 20;
+        // v14: seated but NO SCORE SEALED — the refund path must be visible.
+        // The contract pays the stake back via claim() once the deadline
+        // passes on an unresolved match; until then the button stays locked
+        // (drawn dim, no hotspot) with a live countdown on the label.
+        if (iOweScore) {
+          const dl = new Date(card.deadline).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+          drawText(c, 'NO SCORE SEALED - CLAIMABLE AT ' + dl, VW / 2, ay, 1, '#ff8a3c', 'center');
+          ay += 10;
+          const claimOpen = Date.now() >= card.deadline;
+          this.btn(
+            c,
+            frame,
+            { id: 'vclaim', x: 92, y: ay, w: 200, h: 12 },
+            claimOpen ? 'CLAIM STAKE BACK' : 'CLAIM STAKE BACK ' + fmtCountdown(card.deadline),
+            claimOpen ? { gold: true } : { disabled: true },
+          );
+          ay += 16;
+        } else {
+          ay += 4;
+        }
       } else if ((live && seated && canResolve) || (card.status === 'expired' && seated && joinerSigned)) {
         this.btn(c, frame, { id: 'resolve', x: 92, y: ay, w: 200, h: 20 }, 'RESOLVE THE BATTLE', { gold: true });
         ay += 24;
@@ -1804,7 +1825,7 @@ export class ArenaUI {
     drawText(c, 'THE VOID ATE THIS CARD', VW / 2, 128, 1, GRAY, 'center');
     drawText(c, 'SILVIO DOES NOT REMEMBER THIS DUEL', VW / 2, 140, 1, DIM, 'center');
     if ((frame & 16) !== 0) this.pixelCoin(c, VW / 2 - 3, 156, frame);
-    this.btn(c, frame, { id: 'back', x: 92, y: 172, w: 200, h: 18 }, 'BACK TO THE BOARD', { gold: true });
+    this.btn(c, frame, { id: 'back', x: 92, y: 172, w: 200, h: 18 }, 'BACK TO THE PIT', { gold: true });
   }
 
   // verdict: black veil + gold coin rain (the rain is drawn over everything
@@ -1849,6 +1870,15 @@ export class ArenaUI {
     return stageMode === 'full' ? 'FULL RUN' : 'STAGE ' + ((stageIdx ?? 0) + 1) + ' ' + STAGE_NAMES[stageIdx ?? 0];
   }
 
+  // v14: the contract pays INSIDE resolve (winner + 5% treasury fee, one
+  // atomic group) — a settled match is a PAID match. UNCLAIMED may only mark
+  // genuinely claimable states (mock pots awaiting claim; nothing on-chain).
+  private histPaid(h: HistoryEntry): boolean {
+    if (h.claimed) return true;
+    if (this.adapter().mode === 'testnet') return true;
+    return getTxid(h.id) !== null; // local record of the resolve tx
+  }
+
   private drawHistory(c: CanvasRenderingContext2D, frame: number): void {
     this.drawHeader(c, 'HISTORY', 'EVERY BATTLE LEAVES A SCAR');
     const ROW_H = 30;
@@ -1868,9 +1898,11 @@ export class ArenaUI {
       c.lineWidth = 1;
       c.strokeRect(8.5, y + 0.5, VW - 17, ROW_H - 5);
       this.coinPile(c, 14, y + 16, h.stake, frame + i * 5);
-      const head = (h.winnerName + ' TOOK ' + fmtStake(h.pot)).slice(0, 34);
+      const takes = splitPot(h.stake, h.pot, h.players.length).takes;
+      const head = (h.winnerName + ' TOOK ' + fmtAmount(takes)).slice(0, 34);
       drawText(c, head, 40, y + 4, 1, GOLD);
-      if (!h.claimed && (frame & 16) !== 0) drawText(c, 'UNCLAIMED', VW - 14, y + 4, 1, '#ff8a3c', 'right');
+      if (this.histPaid(h)) drawText(c, 'PAID ⚛', VW - 14, y + 4, 1, GOLD, 'right');
+      else if ((frame & 16) !== 0) drawText(c, 'UNCLAIMED', VW - 14, y + 4, 1, '#ff8a3c', 'right');
       const sub = (h.format === 'duel' ? 'DUEL' : 'OPEN ' + h.seats) + ' - ' + this.stageLabel(h.stageMode, h.stageIdx) + ' - ' + fmtAgo(h.resolvedAt);
       drawText(c, sub.slice(0, 40), 40, y + 15, 1, DIM);
       // v13: history rows are tappable — tap opens the battle detail
@@ -1890,36 +1922,40 @@ export class ArenaUI {
     this.drawHeader(c, 'BATTLE #' + h.id, h.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN TABLE - ' + h.seats + ' SEATS');
     let y = 44;
     drawTextSh(c, h.winnerName + ' TOOK THE POT', VW / 2, y, 1, GOLD, 'center', '#4a3005');
-    y += 14;
+    y += 12;
     // contenders + scores
     for (const p of h.players.slice(0, 4)) {
       const win = p.address === h.winner;
       drawText(c, (p.name || 'DEGEN').slice(0, 16), 24, y, 1, win ? GOLD : '#c8ccd4');
       drawText(c, String(p.score).padStart(7, '0'), VW - 24, y, 1, win ? GOLD : GRAY, 'right');
       if (win) drawText(c, 'W', VW - 24 - textWidth('0000000', 1) - 10, y, 1, FLUO);
-      y += 12;
+      y += 10;
     }
-    y += 6;
-    const fee = h.pot * (5 / 95); // pot paid = 95% of the pool
+    y += 4;
+    // v14: honest settlement math — pool = stake x seats taken, the contract
+    // keeps 5% (treasury fee) inside resolve, the winner takes the rest
+    const sp = splitPot(h.stake, h.pot, h.players.length);
     const lines: [string, string][] = [
       ['STAGE', this.stageLabel(h.stageMode, h.stageIdx)],
-      ['STAKE', fmtStake(h.stake) + ' $GONNA A SEAT'],
-      ['POT', fmtStake(h.pot) + ' $GONNA'],
-      ['FEE', fmtStake(fee) + ' $GONNA (5%)'],
+      ['STAKE', fmtAmount(h.stake) + ' $GONNA A SEAT'],
+      ['POT', fmtAmount(sp.pool) + ' $GONNA'],
+      ['FEE', fmtAmount(sp.fee) + ' $GONNA (5%)'],
+      ['WINNER TAKES', fmtAmount(sp.takes) + ' $GONNA'],
       ['SETTLED', new Date(h.resolvedAt).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'],
     ];
     for (const [k, v] of lines) {
       drawText(c, k, 24, y, 1, DIM);
-      drawText(c, v, VW - 24, y, 1, '#c8ccd4', 'right');
-      y += 12;
+      drawText(c, v, VW - 24, y, 1, k === 'WINNER TAKES' ? GOLD : '#c8ccd4', 'right');
+      y += 11;
     }
-    if (!h.claimed) drawText(c, 'POT STILL UNCLAIMED', VW / 2, y + 2, 1, '#ff8a3c', 'center');
+    const paid = this.histPaid(h);
+    drawText(c, paid ? 'POT PAID ON-CHAIN ⚛' : 'POT STILL UNCLAIMED', VW / 2, y + 2, 1, paid ? GOLD : '#ff8a3c', 'center');
     // VIEW ON CHAIN only when we actually remember the resolve txid
     let txid: string | null = null;
     try {
       txid = (JSON.parse(window.localStorage.getItem('gonna.arena.txids') ?? '{}') as Record<string, string>)[String(h.id)] ?? null;
     } catch { /* no storage */ }
-    if (txid) this.btn(c, frame, { id: 'hview', x: 92, y: 176, w: 200, h: 16 }, 'VIEW ON CHAIN', { gold: true });
+    if (txid) this.btn(c, frame, { id: 'hview', x: 92, y: 180, w: 200, h: 14 }, 'VIEW ON CHAIN', { gold: true });
     this.btn(c, frame, { id: 'back', x: 147, y: 198, w: 90, h: 14 }, 'BACK');
   }
 
@@ -1931,6 +1967,7 @@ export class ArenaUI {
       ['MATCHES PLAYED', s ? String(s.played) : '-', '#c8ccd4'],
       ['WINS', s ? String(s.wins) : '-', GREEN],
       ['LOSSES', s ? String(s.losses) : '-', RED],
+      ['OPEN', s ? String(s.open) : '-', '#ff8a3c'],
       ['WIN RATE', s ? s.winRate + '%' : '-', '#c8ccd4'],
       ['$GONNA WON', s ? fmtGonna(s.won) : '-', GOLD],
       ['$GONNA LOST', s ? fmtGonna(s.lost) : '-', RED],
@@ -1938,7 +1975,7 @@ export class ArenaUI {
       ['BEST WIN', s ? fmtGonna(s.bestWin) : '-', GOLD],
     ];
     for (let i = 0; i < rows.length; i++) {
-      const y = 46 + i * 15;
+      const y = 42 + i * 14;
       drawText(c, rows[i][0], 70, y, 1, DIM);
       drawText(c, rows[i][1], 314, y, 1, rows[i][2], 'right');
     }

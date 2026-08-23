@@ -420,6 +420,27 @@ export function getTxid(cid: number): string | null {
     return null;
   }
 }
+
+// per-challenge RESOLVE-TIME memory: the box carries no timestamp, so the
+// HISTORY "x AGO" line is only honest for matches WE resolved from this
+// browser (everyone else falls back to the deadline, clamped to now)
+const RES_KEY = 'gonna.arena.resolved';
+export function recordResolveAt(cid: number, at: number): void {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(RES_KEY) ?? '{}') as Record<string, number>;
+    m[String(cid)] = at;
+    window.localStorage.setItem(RES_KEY, JSON.stringify(m));
+  } catch { /* no storage */ }
+}
+export function getResolveAt(cid: number): number | null {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(RES_KEY) ?? '{}') as Record<string, number>;
+    const v = m[String(cid)];
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
 export function explorerTxUrl(txid: string): string {
   return 'https://testnet.explorer.perawallet.app/tx/' + txid;
 }

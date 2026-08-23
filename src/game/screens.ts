@@ -92,8 +92,9 @@ export function drawTitle(
   drawTitleBtn(ctx, TITLE_BOARD_BTN, 'ARENA', t, '#7fd858', true);
   drawTitleBtn(ctx, TITLE_CONNECT_BTN, connectLabel || (touch ? 'CONNECT' : 'C CONNECT'), t, connectColor);
   drawTitleBtn(ctx, TITLE_FIGHTER_BTN, touch ? 'FIGHTER' : 'T FIGHTER', t);
-  // v10: THE ARENA — gold piazza entry under the button row (same on touch + desktop)
-  drawTitleBtn(ctx, TITLE_ARENA_BTN, 'THE ARENA', t, '#f5c542', true);
+  // v10/v14: THE PIT (ex THE ARENA) — gold staking entry under the button
+  // row (same on touch + desktop); TITLE_ARENA_BTN keeps its internal name
+  drawTitleBtn(ctx, TITLE_ARENA_BTN, 'THE PIT', t, '#f5c542', true);
   // controls
   drawText(ctx, 'ARROWS/WASD MOVE  SPACE JUMP  C SPECIAL', VW / 2, 172, 1, '#8a8f9c', 'center');
   drawText(ctx, touch ? 'Z PUNCH  X KICK  P PAUSE  M MUTE' : 'Z PUNCH  X KICK  P PAUSE  M MUTE  L ARENA', VW / 2, 184, 1, '#8a8f9c', 'center');
