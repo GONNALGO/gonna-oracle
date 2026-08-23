@@ -650,19 +650,26 @@ export class ArenaUI {
       this.sealRole = 'creator';
       return { act: 'move' };
     }
-    if (id.startsWith('card:')) {
-      const c = this.cards.find((x) => x.id === Number(id.slice(5)));
+    if (id.startsWith('card:') || id.startsWith('chip:')) {
+      // v14.4: chips navigate BY CHALLENGE ID, never by list index — a chip
+      // labeled N opens challenge N even when the board rows are ordered
+      // differently or the card lives only in MY list (private/unlisted).
+      const cid = Number(id.slice(5));
+      const c = this.cards.find((x) => x.id === cid) ?? this.mine.find((x) => x.id === cid) ?? null;
       if (c) {
-        this.current = c;
-        this.screen = 'versus';
-        this.verdict = false;
-        this.coinRain = [];
-        this.focus = 0;
-        this.myScore = this.bestScore();
-        this.resetSeal();
+        this.openCard(c);
         return { act: 'move' };
       }
-      return { act: 'none' };
+      // last resort: the chip outlived the local lists (closed mid-refresh)
+      // — fetch the card straight from the adapter, NEVER dead-end a tap
+      void this.run(
+        () => this.adapter().getChallenge(cid),
+        (ch) => {
+          if (ch) this.openCard(ch);
+          else this.screen = 'notfound';
+        },
+      );
+      return { act: 'move' };
     }
     // v14.2: MY CARDS cycling — hop between my open cards straight from the
     // card detail (arrows are hotspots, so keyboard focus+START works too)
@@ -912,12 +919,34 @@ export class ArenaUI {
         stageIdx: this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0),
       };
     }
-    // v12: CONTINUE — pay 5 ALGO to the treasury, replay the SAME run, seal
-    // the best of the two. One per player per match.
+    // v14.4: creator REPLAY — FREE. The card does not exist on-chain yet, so
+    // nothing is at stake: start a fresh run of the same stage/draft; when it
+    // seals, the draft score is simply REPLACED (no payment, no oracle
+    // continue receipt, no best-of-2 bookkeeping).
+    if (id === 'replay') {
+      if (this.sealRole !== 'creator') return { act: 'none' }; // joiners pay
+      this.sealedScore = null;
+      this.sealBest = 0;
+      this.sealRuns = 0;
+      this.pendingRun = false;
+      this.continuePaying = false;
+      if (qaActive()) {
+        this.onRunFinished(qaScore());
+        return { act: 'move' };
+      }
+      return {
+        act: 'run',
+        stageMode: this.cfg.stageMode === 'full' ? 'full' : 'stage',
+        stageIdx: this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0),
+      };
+    }
+    // v12/v14.4: CONTINUE — JOINER ONLY (post-commitment). Pay 5 ALGO to the
+    // treasury, replay the SAME run, seal the best of the two. Single use.
     if (id === 'continue') {
+      if (this.sealRole !== 'joiner') return { act: 'none' }; // creators replay FREE
       if (this.sealRuns !== 1) return this.fail('CONTINUE ALREADY USED');
       if (this.continuePaying) return { act: 'none' };
-      const refId = this.sealRole === 'creator' ? this.sealDraftId : String(this.current?.id ?? 0);
+      const refId = String(this.current?.id ?? 0); // joiner: the receipt is bound to the card id
       if (this.adapter().mode === 'testnet') {
         this.continuePaying = true;
         console.debug('[arena] CONTINUE — 5 ALGO payment start (ref ' + refId + ')');
@@ -1028,6 +1057,19 @@ export class ArenaUI {
     this.continuePaying = false;
   }
 
+  // v14.4: single by-id entry point into the card detail — chips and board
+  // rows BOTH land here, so a tap can never open a different card than the
+  // one it was labeled with
+  private openCard(c: Challenge): void {
+    this.current = c;
+    this.screen = 'versus';
+    this.verdict = false;
+    this.coinRain = [];
+    this.focus = 0;
+    this.myScore = this.bestScore();
+    this.resetSeal();
+  }
+
   private doSign(): ArenaAction {
     const cfg: ChallengeConfig = { ...this.cfg };
     if (cfg.stageMode === 'random' && this.shuffleT >= 0) cfg.stageIdx = this.shuffleTarget;
@@ -1035,10 +1077,11 @@ export class ArenaUI {
     if (this.adapter().mode === 'testnet' && !qaActive() && this.sealedScore === null) {
       return this.fail('PLAY YOUR RUN FIRST');
     }
-    // v12: sign the BEST of the runs; a 2nd run carries the payment ref
+    // v14.4: creator replays are FREE pre-commitment — the sealed draft is
+    // just the latest run. No continue receipt ever rides a create (the 5
+    // ALGO oracle-verified CONTINUE is joiner-only now, see doSubmit).
     const best = this.sealBest > 0 ? this.sealBest : this.sealedScore;
     if (best !== null) cfg.sealedScore = best;
-    if (this.sealRuns >= 2) cfg.continueRefId = this.sealDraftId;
     const player = arenaPlayer(cfg.fighter);
     console.debug('[arena] SIGN & STAKE — create start (score ' + (cfg.sealedScore ?? 'none') + ')');
     void this.run(
@@ -1100,6 +1143,7 @@ export class ArenaUI {
       (nc) => {
         this.current = nc;
         this.startVerdict(nc);
+        void this.refreshBoard(); // resolved cards leave MY OPEN CARDS at once
       },
     );
     return { act: 'move' };
@@ -1131,6 +1175,10 @@ export class ArenaUI {
       () => this.adapter().earlyClose(c.id, me),
       (nc) => {
         this.current = nc;
+        // v14.4: a closed card leaves MY OPEN CARDS the moment it closes —
+        // no zombie chip waiting for the next manual board visit
+        void this.refreshBoard();
+        void this.refreshHistory();
       },
     );
     return { act: 'move' };
@@ -1357,7 +1405,7 @@ export class ArenaUI {
           cx = 10; // wrap to the second chip row
           cy = 72;
         }
-        this.btn(c, frame, { id: 'card:' + mc.id, x: cx, y: cy, w: cw, h: 12 }, label, { small: true, gold: true });
+        this.btn(c, frame, { id: 'chip:' + mc.id, x: cx, y: cy, w: cw, h: 12 }, label, { small: true, gold: true });
         cx += cw + 6;
         shown++;
       }
@@ -1646,10 +1694,17 @@ export class ArenaUI {
     this.drawHeader(c, title, joiner && ch ? 'CARD #' + ch.id : this.cfg.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN TABLE');
     const score = this.sealBest > 0 ? this.sealBest : (this.sealedScore ?? 0);
     drawTextSh(c, String(score).padStart(7, '0'), VW / 2, 62, 2, GOLD, 'center', '#4a3005');
-    if (this.sealRuns >= 2) {
-      drawTextSh(c, 'BEST OF 2 - CONTINUE USED', VW / 2, 90, 1, '#ff8a3c', 'center', '#2a1503');
+    if (joiner && this.sealRuns >= 2) {
+      drawTextSh(c, 'BEST OF 2 - CONTINUE USED', VW / 2, 88, 1, '#ff8a3c', 'center', '#2a1503');
     } else if ((frame & 16) !== 0) {
-      drawTextSh(c, 'SCORE SEALED BY ORACLE', VW / 2, 90, 1, FLUO, 'center', '#0a3d00');
+      drawTextSh(c, 'SCORE SEALED BY ORACLE', VW / 2, 88, 1, FLUO, 'center', '#0a3d00');
+    }
+    // v14.4 founder ruling: before a card exists on-chain NOTHING is at
+    // stake, so the CREATOR replays for free (the draft score is simply
+    // replaced). The 5 ALGO CONTINUE is joiner-only (post-commitment).
+    if (!joiner) {
+      drawText(c, 'FREE REPLAYS UNTIL YOU STAKE', VW / 2, 98, 1, GOLD, 'center');
+      drawText(c, 'ONCE SIGNED, THE SCORE IS LAW', VW / 2, 107, 1, DIM, 'center');
     }
     const x = 22, w = VW - 44;
     const stake = joiner && ch ? ch.stake : this.cfg.stake;
@@ -1660,15 +1715,25 @@ export class ArenaUI {
       ['FEE', feeLine(joiner ? 'submit' : 'create', arenaSession().accountType, this.adapter().mode === 'testnet')],
       ['FIGHTER', this.cfg.fighter.name],
     ];
+    const ly = joiner ? 104 : 116; // creator: two rule lines eat 12px
     for (let i = 0; i < lines.length; i++) {
-      drawText(c, lines[i][0], x + 10, 104 + i * 12, 1, DIM);
-      drawText(c, lines[i][1], x + w - 10, 104 + i * 12, 1, i <= 1 ? GOLD : '#c8ccd4', 'right');
+      drawText(c, lines[i][0], x + 10, ly + i * 11, 1, DIM);
+      drawText(c, lines[i][1], x + w - 10, ly + i * 11, 1, i <= 1 ? GOLD : '#c8ccd4', 'right');
     }
-    this.btn(c, frame, { id: 'sign', x: 92, y: 156, w: 200, h: 20 }, this.busy ? 'SIGNING...' : joiner ? 'SIGN SCORE' : 'SIGN & STAKE', { gold: true });
-    if (this.sealRuns < 2) {
-      this.btn(c, frame, { id: 'continue', x: 92, y: 180, w: 200, h: 14 }, this.continuePaying ? 'PAYING 5 ALGO...' : 'CONTINUE - 5 ALGO - BEST OF 2', { green: true });
+    if (joiner) {
+      this.btn(c, frame, { id: 'sign', x: 92, y: 156, w: 200, h: 20 }, this.busy ? 'SIGNING...' : 'SIGN SCORE', { gold: true });
+      // joiner is STAKED — the retry costs 5 ALGO, best-of-2, single use
+      if (this.sealRuns < 2) {
+        this.btn(c, frame, { id: 'continue', x: 92, y: 180, w: 200, h: 14 }, this.continuePaying ? 'PAYING 5 ALGO...' : 'CONTINUE - 5 ALGO - BEST OF 2', { green: true });
+      }
+      this.btn(c, frame, { id: 'seal:discard', x: 122, y: 200, w: 140, h: 12 }, 'DISCARD - NO TX SENT', { dim: true });
+    } else {
+      this.btn(c, frame, { id: 'sign', x: 92, y: 164, w: 200, h: 18 }, this.busy ? 'SIGNING...' : 'SIGN & STAKE', { gold: true });
+      // free do-over: fresh run of the SAME stage/draft, no payment, no
+      // oracle continue receipt — the new seal simply REPLACES the draft
+      this.btn(c, frame, { id: 'replay', x: 92, y: 186, w: 200, h: 12 }, 'REPLAY - FREE', { green: true });
+      this.btn(c, frame, { id: 'seal:discard', x: 122, y: 204, w: 140, h: 11 }, 'DISCARD - NO TX SENT', { dim: true });
     }
-    this.btn(c, frame, { id: 'seal:discard', x: 122, y: 200, w: 140, h: 12 }, 'DISCARD - NO TX SENT', { dim: true });
   }
 
   // v10.4: aspect-preserving blit — a sprite inside a seal is FIT, never squashed
@@ -1707,6 +1772,13 @@ export class ArenaUI {
     const card = this.current;
     if (!card) {
       this.screen = 'board';
+      return;
+    }
+    // v14.4: a closed/refunded card is TERMINAL — never the live duel layout
+    // with an "OPEN SEAT ???" zombie seat. Stakes went back on-chain; say so.
+    if (card.status === 'closed') {
+      this.drawClosedCard(c, frame, card);
+      void art;
       return;
     }
     const me = arenaAddress();
@@ -1832,6 +1904,17 @@ export class ArenaUI {
       } else if (card.status === 'expired' && seated) {
         this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM YOUR STAKE BACK', { gold: true });
         ay += 24;
+      } else if (card.status === 'resolved' || card.status === 'claimed') {
+        // v14.4: reopened after settlement — say what happened on-chain
+        // instead of dropping the degen into a dead action zone
+        drawTextSh(c, 'SETTLED - POT PAID ON-CHAIN', VW / 2, ay + 4, 1, GOLD, 'center', '#4a3005');
+        const wname = card.players.find((p) => p.address === card.winner)?.name ?? '???';
+        drawText(c, wname + ' TOOK ' + fmtStake(card.pot) + ' $GONNA', VW / 2, ay + 16, 1, GRAY, 'center');
+        ay += 28;
+        if (getTxid(card.id)) {
+          this.btn(c, frame, { id: 'viewchain', x: 92, y: Math.min(ay, 182), w: 200, h: 12 }, 'VIEW ON CHAIN', { gold: true });
+          ay += 16;
+        }
       }
       // creator emergency brake on an open card
       if (live && card.creator === me) {
@@ -1852,6 +1935,51 @@ export class ArenaUI {
     }
     this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
     void art;
+  }
+
+  // ---------- v14.4: CLOSED card terminal state ---------------------------
+  // Early-closed / expired-claimed / refunded: the contract sent every stake
+  // back (STATUS_REFUNDED on-chain). Render the truth, never the live duel.
+  private drawClosedCard(c: CanvasRenderingContext2D, frame: number, card: Challenge): void {
+    const title = fmtStake(card.stake) + (card.format === 'duel' ? ' DUEL' : ' OPEN TABLE');
+    const stage = card.stageMode === 'full' ? 'FULL RUN - ALL 7 STAGES' : 'STAGE ' + ((card.stageIdx ?? 0) + 1) + ' ' + STAGE_NAMES[card.stageIdx ?? 0];
+    this.drawHeader(c, title, stage);
+    drawTextSh(c, 'CARD CLOSED - STAKE RETURNED', VW / 2, 48, 1, GOLD, 'center', '#4a3005');
+    drawText(c, 'NO BATTLE WAS FOUGHT - EVERY PAYER REFUNDED IN FULL', VW / 2, 62, 1, GRAY, 'center');
+    // contenders + sealed scores (the record stands even without a fight)
+    let y = 78;
+    drawText(c, 'CONTENDERS', 24, y, 1, DIM);
+    y += 11;
+    for (const p of card.players.slice(0, 3)) {
+      drawText(c, (p.name || 'DEGEN').slice(0, 16), 24, y, 1, '#c8ccd4');
+      drawText(c, p.score > 0 ? String(p.score).padStart(7, '0') : 'NO SCORE', VW - 24, y, 1, GRAY, 'right');
+      y += 10;
+    }
+    if (card.players.length > 3) {
+      drawText(c, '+' + (card.players.length - 3) + ' MORE', 24, y, 1, DIM);
+      y += 10;
+    }
+    y += 4;
+    const lines: [string, string][] = [
+      ['STAKE', fmtStake(card.stake) + ' $GONNA A SEAT - RETURNED'],
+      ['SEATS', card.players.length + '/' + card.seatsTotal + ' TAKEN'],
+      ['POT', '0 $GONNA - NOTHING TO PAY OUT'],
+    ];
+    for (const [k, v] of lines) {
+      drawText(c, k, 24, y, 1, DIM);
+      drawText(c, v, VW - 24, y, 1, '#c8ccd4', 'right');
+      y += 11;
+    }
+    const me = arenaAddress();
+    if (me !== null && (card.creator === me || card.players.some((p) => p.address === me))) {
+      if ((frame & 16) !== 0) drawTextSh(c, 'YOUR STAKE IS BACK IN YOUR WALLET', VW / 2, y + 2, 1, FLUO, 'center', '#0a3d00');
+      y += 12;
+    }
+    // the early-close / refund tx is the proof — link it when we know it
+    if (getTxid(card.id)) {
+      this.btn(c, frame, { id: 'viewchain', x: 92, y: Math.min(y + 4, 180), w: 200, h: 14 }, 'VIEW ON CHAIN', { gold: true });
+    }
+    this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
   }
 
   // ---------- SHARE SHEET (v10.4) ----------
@@ -2055,6 +2183,8 @@ export class ArenaUI {
     cfg: ChallengeConfig;
     shuffle: { active: boolean; t: number; target: number };
     current: { id: number; status: string; players: number; winner: string | null; pot: number } | null;
+    mine: { id: number; status: string; visibility: Visibility }[];
+    seal: { role: 'creator' | 'joiner'; runs: number; sealed: number | null; continuePaying: boolean };
     verdict: boolean;
     coins: number;
     feed: string[];
@@ -2087,6 +2217,20 @@ export class ArenaUI {
       coins: this.coinRain.length,
       feed: [...this.feedLines],
       hots: this.hots.map((h) => ({ ...h })),
+      mine: this.mine.map((m) => ({ id: m.id, status: m.status, visibility: m.visibility })),
+      seal: { role: this.sealRole, runs: this.sealRuns, sealed: this.sealedScore, continuePaying: this.continuePaying },
     };
+  }
+
+  // CI: land on the SEAL screen with a fake sealed run (mock QA only — no
+  // chain writes, no oracle; used by the headless regression harness)
+  debugSeal(role: 'creator' | 'joiner', score: number): void {
+    this.resetSeal();
+    this.sealRole = role;
+    this.sealedScore = Math.max(0, Math.floor(score));
+    this.sealBest = this.sealedScore;
+    this.sealRuns = 1;
+    this.screen = 'seal';
+    this.focus = 0;
   }
 }

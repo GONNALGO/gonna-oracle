@@ -29,7 +29,8 @@ export interface ChallengeConfig {
   stake: number; // $GONNA display units per seat
   fighter: FighterPick;
   sealedScore?: number; // v11: the run score sealed BEFORE signing (testnet)
-  continueRefId?: string; // v12: draft id when the sealed score is a 2nd run
+  // v14.4: no continueRefId here — creator replays are FREE pre-commitment;
+  // the 5 ALGO continue receipt exists ONLY on the joiner submitScore path
 }
 
 export interface ChallengePlayer {
@@ -652,10 +653,13 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const seatsTaken = Number(meta.seatsTaken);
     const seatsTotal = Number(meta.seatsTotal) + 1; // + creator seat (UI convention)
     // contract: 0 OPEN · 1 CLOSED (table full) · 2 RESOLVED · 3 REFUNDED
+    // v14.4: REFUNDED (early-close / claim / sweep / catastrophe) maps to
+    // 'closed' — stakes went BACK, no pot was ever paid. 'claimed' stays a
+    // mock-only "winner took the pot" state; testnet pays inside resolve.
     const statusCode = Number(meta.status);
     const expired = (statusCode === 0 || statusCode === 1) && Number(meta.deadline) <= nowSec;
     const status: ChallengeStatus =
-      statusCode === 3 ? 'claimed' : statusCode === 2 ? 'resolved' : expired ? 'expired' : statusCode === 1 || seatsTaken >= seatsTotal ? 'full' : 'open';
+      statusCode === 3 ? 'closed' : statusCode === 2 ? 'resolved' : expired ? 'expired' : statusCode === 1 || seatsTaken >= seatsTotal ? 'full' : 'open';
     const creator = encOpt(meta.creator);
     return {
       id: cid,
@@ -697,12 +701,10 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     // v11: the creator's score is the SEALED RUN score (PLAY -> SEAL -> SIGN);
     // qaScore() remains the deterministic fallback for the QA harness
     const score = cfg.sealedScore ?? qaScore();
-    // v12: creator CONTINUE — the 2nd-run score needs the receipt (draft id,
-    // the challenge does not exist yet)
-    const sig = await devOracleSignScore(
-      kit.scoreMsg(cid, 0, a.decodeAddress(me.address).publicKey, score),
-      cfg.continueRefId ? { refId: cfg.continueRefId, addr: me.address } : undefined,
-    );
+    // v14.4: creator replays are FREE pre-commitment — a create NEVER
+    // carries a continue receipt. The payment-verified devOracle continue
+    // path is JOINER-ONLY now (submitScore below).
+    const sig = await devOracleSignScore(kit.scoreMsg(cid, 0, a.decodeAddress(me.address).publicKey, score));
     const txns = await kit.buildCreateGroup({
       creator: me.address,
       cid,

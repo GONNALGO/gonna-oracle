@@ -20,6 +20,7 @@ const STALE_ENTRIES = [
   'index-DVM2qo6Z.js', 'index-CnvMRE8Y.js', 'index-BiwnS_wV.js',
   'index-D1VfMD4K.js', 'index-DlbDmeEe.js', 'index-DDi_h0ej.js',
   'index-BgMMFtZV.js', 'index-D2kYOzbo.js', 'index-Dg-hq2nS.js',
+  'index-Bz7Cf7Kg.js', // v14.3 (THE PIT, chips/pagination) — retired by v14.4
 ];
 const KEY = [0x47,0x4f,0x4e,0x4e,0x41,0x56,0x45,0x52,0x53,0x45,0x21,0x42,0x59,0x5a,0x41,0x4e,0x54,0x49,0x4e,0x45]; // GONNAVERSE!BYZANTINE
 

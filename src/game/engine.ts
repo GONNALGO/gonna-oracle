@@ -1505,6 +1505,11 @@ export class Game implements GameCtx {
   debugOpenArena(): void {
     this.openArena();
   }
+  // CI: jump to the ARENA seal screen without a live run (mock QA)
+  debugArenaSeal(role: 'creator' | 'joiner', score: number): void {
+    this.arena.debugSeal(role, score);
+    this.setScene('arena');
+  }
   get arenaInfo(): ArenaUI['info'] {
     return this.arena.info;
   }
