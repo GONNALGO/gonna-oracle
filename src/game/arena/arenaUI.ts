@@ -1601,7 +1601,7 @@ export class ArenaUI {
     if (this.sealRuns >= 2) {
       drawTextSh(c, 'BEST OF 2 - CONTINUE USED', VW / 2, 90, 1, '#ff8a3c', 'center', '#2a1503');
     } else if ((frame & 16) !== 0) {
-      drawTextSh(c, 'SCORE SEALED BY ORACLE ⚛', VW / 2, 90, 1, FLUO, 'center', '#0a3d00');
+      drawTextSh(c, 'SCORE SEALED BY ORACLE', VW / 2, 90, 1, FLUO, 'center', '#0a3d00');
     }
     const x = 22, w = VW - 44;
     const stake = joiner && ch ? ch.stake : this.cfg.stake;
@@ -1901,7 +1901,7 @@ export class ArenaUI {
       const takes = splitPot(h.stake, h.pot, h.players.length).takes;
       const head = (h.winnerName + ' TOOK ' + fmtAmount(takes)).slice(0, 34);
       drawText(c, head, 40, y + 4, 1, GOLD);
-      if (this.histPaid(h)) drawText(c, 'PAID ⚛', VW - 14, y + 4, 1, GOLD, 'right');
+      if (this.histPaid(h)) drawText(c, 'PAID', VW - 14, y + 4, 1, GOLD, 'right');
       else if ((frame & 16) !== 0) drawText(c, 'UNCLAIMED', VW - 14, y + 4, 1, '#ff8a3c', 'right');
       const sub = (h.format === 'duel' ? 'DUEL' : 'OPEN ' + h.seats) + ' - ' + this.stageLabel(h.stageMode, h.stageIdx) + ' - ' + fmtAgo(h.resolvedAt);
       drawText(c, sub.slice(0, 40), 40, y + 15, 1, DIM);
@@ -1949,7 +1949,7 @@ export class ArenaUI {
       y += 11;
     }
     const paid = this.histPaid(h);
-    drawText(c, paid ? 'POT PAID ON-CHAIN ⚛' : 'POT STILL UNCLAIMED', VW / 2, y + 2, 1, paid ? GOLD : '#ff8a3c', 'center');
+    drawText(c, paid ? 'POT PAID ON-CHAIN' : 'POT STILL UNCLAIMED', VW / 2, y + 2, 1, paid ? GOLD : '#ff8a3c', 'center');
     // VIEW ON CHAIN only when we actually remember the resolve txid
     let txid: string | null = null;
     try {
