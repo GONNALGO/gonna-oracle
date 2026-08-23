@@ -50,8 +50,13 @@ ORACLE_SIG_SCHEME_ED25519 = 1  # v1 (this contract)
 ORACLE_SIG_SCHEME_FALCON1024 = 2  # v2 reserved (AVM v12 falcon_verify)
 ORACLE_SIG_SCHEME = ORACLE_SIG_SCHEME_ED25519  # active scheme
 
+# Contract version (v2: seat clock + claim_forfeit, MBR refunds on every
+# close path, permissionless spawn_rumble, box growth). Also stored in
+# global state at create time.
+VERSION = 2
+
 # Economics (all amounts in base units)
-FEE_BPS = 500  # 5% protocol fee on resolved pots
+FEE_BPS = 500  # 5% protocol fee on resolved pots and forfeit claims
 BPS_BASE = 10_000
 EARLY_CLOSE_FEE = 1_000_000  # 1 ALGO, in microAlgos
 
@@ -59,6 +64,9 @@ EARLY_CLOSE_FEE = 1_000_000  # 1 ALGO, in microAlgos
 DUEL_DURATION = 24 * 3600  # duels are always 24h
 JOIN_CUTOFF = 600  # no joins in the last 10 min before deadline
 CATASTROPHE_WINDOW = 7 * 24 * 3600  # 7 days after deadline
+SEAT_TTL = 3600  # duel seat clock: forfeit claimable after 1h of silence
+RUMBLE_HOUR_UTC = 21  # self-spawned rumbles resolve at the next 21:00 UTC
+RUMBLE_MIN_HORIZON = 4 * 3600  # ...guaranteeing at least 4h to participate
 
 # Seats = number of JOINER seats; the creator always occupies seat 0.
 SEATS_DUEL = 1
@@ -74,15 +82,23 @@ STATUS_OPEN = 0
 STATUS_CLOSED = 1  # table full, no more joins
 STATUS_RESOLVED = 2  # terminal, payouts executed
 STATUS_REFUNDED = 3  # terminal, stakes returned
+STATUS_FORFEIT = 4  # terminal, duel seat forfeited (v2)
 
 # Stage modes
 MODE_FULL = 0  # highest total score wins
 MODE_STAGE_IDX = 1  # verdict binds a stage index
 MODE_RANDOM_RESOLVED = 2  # oracle reveals committed seed
 
-# Box minimum-balance requirement charged at CREATE (microAlgos).
-# meta box ~59k + players box (13 entries) ~226k -> rounded up with margin.
-CHALLENGE_MBR = 350_000
+# Box minimum-balance requirement charged at CREATE (microAlgos), v2.
+# Real on-chain box MBR = 2500 + 400 * (key_len + value_len) per box
+# (2500 flat per box + 400 per byte of key+value).
+#   meta box "m":    key 9, value 148              -> 2500 + 400*157 =  65_300
+#   players box "p": key 9, value 2 + 13*55 = 717  -> 2500 + 400*726 = 292_900
+# (players box sized for the worst case: MAX_PLAYERS = 13 entries of
+# 55 bytes each; v2 entries grew by 8 bytes for seated_at, meta by 8
+# bytes for mbr_paid). The exact amount paid is recorded in the box
+# (mbr_paid) and returned in full on EVERY close path.
+CHALLENGE_MBR = 358_200
 # Minimum ALGO the app account must receive at bootstrap (asset opt-in MBR
 # 0.1 ALGO + headroom for inner txn fees via fee pooling is paid by callers).
 BOOTSTRAP_MIN = 200_000
@@ -113,10 +129,11 @@ class ChallengeMeta(Struct):
     deadline: UInt64  # unix timestamp
     stage_mode: UInt64  # MODE_*
     seed_commitment: Bytes  # 32 bytes, sha256(reveal) for MODE_RANDOM_RESOLVED
-    creator_score: UInt64  # oracle-signed at creation
+    creator_score: UInt64  # oracle-signed at creation (0 for self-spawned rumbles)
     status: UInt64  # STATUS_*
     winner: Bytes  # 32-byte winner pk, zero until resolved (zero => tie)
     paid_total: UInt64  # total $GONNA actually escrowed for this challenge
+    mbr_paid: UInt64  # exact ALGO MBR paid at create, refunded on close (v2)
 
 
 class PlayerEntry(Struct):
@@ -125,6 +142,7 @@ class PlayerEntry(Struct):
     addr: Bytes  # 32-byte public key
     score: UInt64  # oracle-signed score (0 until submitted)
     signed: bool  # True once the oracle-signed score proof is accepted
+    seated_at: UInt64  # seat timestamp: create for seat 0, join otherwise (v2)
 
 
 class ChallengeCreated(arc4.Struct):
@@ -158,6 +176,13 @@ class ChallengeResolved(arc4.Struct):
 class ChallengeRefunded(arc4.Struct):
     challenge_id: arc4.UInt64
     reason: arc4.UInt64  # 1 claim, 2 early-close, 3 tie, 4 catastrophe
+
+
+class ChallengeForfeited(arc4.Struct):
+    challenge_id: arc4.UInt64
+    winner: arc4.Address  # the opponent who claimed the forfeit
+    payout: arc4.UInt64  # winner's share of the forfeited stake (95%)
+    fee: arc4.UInt64  # treasury share of the forfeited stake (5%)
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +227,34 @@ def build_score_msg(app_id: UInt64, cid: UInt64, seat: UInt64, addr: Bytes, scor
     )
 
 
+@subroutine
+def protocol_fee(amount: UInt64) -> UInt64:
+    """Exact floor(amount * FEE_BPS / BPS_BASE), overflow-safe for any uint64.
+
+    amount * FEE_BPS overflows uint64 for amount >= 2**64 / 500 (~3.7e16).
+    With amount = q*BPS_BASE + r the identity
+    floor(a*f/b) == q*f + floor(r*f/b) holds exactly (same rounding), and
+    every intermediate stays below 2**64 (q*f <= (2**64-1)/20, r*f < 5e6).
+    """
+    return (amount // BPS_BASE) * FEE_BPS + (amount % BPS_BASE) * FEE_BPS // BPS_BASE
+
+
+@subroutine
+def next_rumble_deadline(now: UInt64) -> UInt64:
+    """Next 21:00 UTC; if it is less than 4h away, take the following day's.
+
+    Guarantees every self-spawned rumble a minimum participation window of
+    RUMBLE_MIN_HORIZON (well above JOIN_CUTOFF).
+    """
+    day_start = now // UInt64(86_400) * UInt64(86_400)
+    candidate = day_start + UInt64(RUMBLE_HOUR_UTC * 3600)
+    if candidate <= now:
+        candidate += UInt64(86_400)
+    if candidate - now < UInt64(RUMBLE_MIN_HORIZON):
+        candidate += UInt64(86_400)
+    return candidate
+
+
 # ---------------------------------------------------------------------------
 # Contract
 # ---------------------------------------------------------------------------
@@ -217,6 +270,7 @@ class QuantumArena(ARC4Contract):
         self.gonna_asset_id = GlobalState(UInt64)
         self.bootstrapped = GlobalState(bool)
         self.next_challenge_id = GlobalState(UInt64)
+        self.version = GlobalState(UInt64)  # VERSION, immutable after create
         # Per-challenge boxes.
         self.challenges = BoxMap(UInt64, ChallengeMeta, key_prefix=b"m")
         self.players = BoxMap(UInt64, Array[PlayerEntry], key_prefix=b"p")
@@ -226,6 +280,7 @@ class QuantumArena(ARC4Contract):
     @arc4.abimethod(create="require")
     def create(self, treasury: Bytes, oracle_pub_key: Bytes, gonna: Asset) -> None:
         """Deploy. `treasury` should be a Falcon-1024 (PQ) account address."""
+        assert_no_rekey_app_call()
         assert treasury.length == 32, "invalid treasury"
         assert oracle_pub_key.length == 32, "v1 oracle key must be ed25519 (32 bytes)"
         self.treasury.value = treasury
@@ -233,6 +288,7 @@ class QuantumArena(ARC4Contract):
         self.gonna_asset_id.value = gonna.id
         self.bootstrapped.value = False
         self.next_challenge_id.value = UInt64(0)
+        self.version.value = UInt64(VERSION)
 
     @arc4.abimethod
     def bootstrap(self, funding: gtxn.PaymentTransaction) -> None:
@@ -247,6 +303,14 @@ class QuantumArena(ARC4Contract):
         assert funding.sender == Txn.sender, "funding sender mismatch"
         assert funding.receiver == Global.current_application_address, "funding receiver"
         assert funding.amount >= BOOTSTRAP_MIN, "funding too small"
+
+        # Liveness gate: the treasury collects protocol fees and receives
+        # redirected unpayable balances; if it is not opted into $GONNA
+        # those axfers would fail on-chain. Verified once, here.
+        treasury_balance, treasury_opted = op.AssetHoldingGet.asset_balance(
+            Account(self.treasury.value), Asset(self.gonna_asset_id.value)
+        )
+        assert treasury_opted, "treasury not opted into $GONNA"
 
         self.bootstrapped.value = True
         itxn.AssetTransfer(
@@ -340,9 +404,112 @@ class QuantumArena(ARC4Contract):
             status=UInt64(STATUS_OPEN),
             winner=Bytes(b""),
             paid_total=stake,
+            mbr_paid=mbr_payment.amount,
         ).copy()
         roster = Array[PlayerEntry]()
-        roster.append(PlayerEntry(addr=Txn.sender.bytes, score=creator_score, signed=True))
+        roster.append(
+            PlayerEntry(
+                addr=Txn.sender.bytes,
+                score=creator_score,
+                signed=True,
+                seated_at=Global.latest_timestamp,
+            )
+        )
+        self.players[cid] = roster.copy()
+
+        self.next_challenge_id.value = cid + 1
+
+        arc4.emit(
+            ChallengeCreated(
+                challenge_id=arc4.UInt64(cid),
+                creator=arc4.Address(Txn.sender.bytes),
+                stake=arc4.UInt64(stake),
+                seats_total=arc4.UInt64(seats_total),
+                deadline=arc4.UInt64(deadline),
+            )
+        )
+        return cid
+
+    @arc4.abimethod
+    def spawn_rumble(
+        self,
+        mbr_payment: gtxn.PaymentTransaction,
+        stake_payment: gtxn.AssetTransferTransaction,
+        fee_payment: gtxn.PaymentTransaction,
+        stake: UInt64,
+        seats_total: UInt64,
+        stage_mode: UInt64,
+        seed_commitment: Bytes,
+    ) -> UInt64:
+        """Permissionless rumble self-spawn. Anyone can call this.
+
+        Group: [mbr pay, $GONNA stake axfer, 1 ALGO fee pay, app call].
+        The caller becomes the creator (seat 0) and enters UNSIGNED (no
+        oracle gate): they may submit a signed score later like any other
+        player, otherwise they forfeit into the pot at resolve. Deadline is
+        automatic: the next 21:00 UTC, pushed one day forward if less than
+        4h away. From there ALL v1 rumble rules apply unchanged.
+        """
+        assert_no_rekey_app_call()
+        assert self.bootstrapped.value, "app not bootstrapped"
+
+        # --- parameter validation (duels stay on create_challenge)
+        assert stake > 0, "stake must be positive"
+        assert (
+            seats_total == SEATS_SMALL
+            or seats_total == SEATS_MEDIUM
+            or seats_total == SEATS_LARGE
+        ), "invalid seats"
+        assert stage_mode <= MODE_RANDOM_RESOLVED, "invalid stage mode"
+        assert seed_commitment.length == 32, "seed commitment must be 32 bytes"
+
+        # --- atomic funding validation (checks before effects)
+        assert_clean_payment(mbr_payment)
+        assert mbr_payment.sender == Txn.sender, "mbr sender mismatch"
+        assert mbr_payment.receiver == Global.current_application_address, "mbr receiver"
+        assert mbr_payment.amount >= CHALLENGE_MBR, "mbr too small"
+
+        assert_clean_axfer(stake_payment)
+        assert stake_payment.sender == Txn.sender, "stake sender mismatch"
+        assert stake_payment.xfer_asset.id == self.gonna_asset_id.value, "wrong asset"
+        assert stake_payment.asset_amount == stake, "stake amount mismatch"
+        assert (
+            stake_payment.asset_receiver == Global.current_application_address
+        ), "stake receiver"
+
+        # anti-spam fee, same convention as early_close
+        assert_clean_payment(fee_payment)
+        assert fee_payment.sender == Txn.sender, "fee sender mismatch"
+        assert fee_payment.receiver.bytes == self.treasury.value, "fee receiver"
+        assert fee_payment.amount == EARLY_CLOSE_FEE, "fee must be 1 ALGO"
+
+        cid = self.next_challenge_id.value
+
+        # --- effects (state first, no inner txns in this method)
+        deadline = next_rumble_deadline(Global.latest_timestamp)
+        self.challenges[cid] = ChallengeMeta(
+            creator=Txn.sender.bytes,
+            stake=stake,
+            seats_total=seats_total,
+            seats_taken=UInt64(0),
+            deadline=deadline,
+            stage_mode=stage_mode,
+            seed_commitment=seed_commitment,
+            creator_score=UInt64(0),  # unsigned at spawn, no oracle gate
+            status=UInt64(STATUS_OPEN),
+            winner=Bytes(b""),
+            paid_total=stake,
+            mbr_paid=mbr_payment.amount,
+        ).copy()
+        roster = Array[PlayerEntry]()
+        roster.append(
+            PlayerEntry(
+                addr=Txn.sender.bytes,
+                score=UInt64(0),
+                signed=False,
+                seated_at=Global.latest_timestamp,
+            )
+        )
         self.players[cid] = roster.copy()
 
         self.next_challenge_id.value = cid + 1
@@ -389,7 +556,14 @@ class QuantumArena(ARC4Contract):
         ), "stake receiver"
 
         # --- effects
-        roster.append(PlayerEntry(addr=Txn.sender.bytes, score=UInt64(0), signed=False))
+        roster.append(
+            PlayerEntry(
+                addr=Txn.sender.bytes,
+                score=UInt64(0),
+                signed=False,
+                seated_at=Global.latest_timestamp,
+            )
+        )
         meta.seats_taken += 1
         meta.paid_total += meta.stake
         if meta.seats_taken == meta.seats_total:
@@ -559,14 +733,15 @@ class QuantumArena(ARC4Contract):
             tie = best_count > 1
 
         # --- effects BEFORE any inner transaction (checks-effects)
+        # v2: terminal state transition deletes BOTH boxes; the exact MBR
+        # paid at create goes back to the payer (creator). The terminal
+        # status (RESOLVED / REFUNDED-on-tie) is observable via the emitted
+        # events — no storage is left behind, no MBR stays locked.
         pot = meta.paid_total
-        if tie:
-            meta.status = UInt64(STATUS_REFUNDED)
-            meta.winner = Bytes(b"")
-        else:
-            meta.status = UInt64(STATUS_RESOLVED)
-            meta.winner = winner
-        self.challenges[challenge_id] = meta.copy()
+        mbr_paid = meta.mbr_paid
+        creator = Account(meta.creator)
+        del self.challenges[challenge_id]
+        del self.players[challenge_id]
 
         # --- interactions
         if tie:
@@ -574,12 +749,12 @@ class QuantumArena(ARC4Contract):
             # forfeits are refunded too (simplest anti-dispute rule).
             for i in urange(n):
                 entry = roster[i].copy()
-                itxn.AssetTransfer(
-                    xfer_asset=Asset(self.gonna_asset_id.value),
-                    asset_amount=meta.stake,
-                    asset_receiver=Account(entry.addr),
-                    fee=UInt64(0),
-                ).submit()
+                self._pay_gonna(entry.addr, meta.stake)
+            itxn.Payment(
+                receiver=creator,
+                amount=mbr_paid,
+                fee=UInt64(0),
+            ).submit()
             arc4.emit(
                 ChallengeResolved(
                     challenge_id=arc4.UInt64(challenge_id),
@@ -593,14 +768,9 @@ class QuantumArena(ARC4Contract):
             )
             return Bytes(b"")
         else:
-            fee = pot * FEE_BPS // BPS_BASE
+            fee = protocol_fee(pot)
             payout = pot - fee
-            itxn.AssetTransfer(
-                xfer_asset=Asset(self.gonna_asset_id.value),
-                asset_amount=payout,
-                asset_receiver=Account(winner),
-                fee=UInt64(0),
-            ).submit()
+            self._pay_gonna(winner, payout)
             if fee > 0:
                 itxn.AssetTransfer(
                     xfer_asset=Asset(self.gonna_asset_id.value),
@@ -608,6 +778,11 @@ class QuantumArena(ARC4Contract):
                     asset_receiver=Account(self.treasury.value),
                     fee=UInt64(0),
                 ).submit()
+            itxn.Payment(
+                receiver=creator,
+                amount=mbr_paid,
+                fee=UInt64(0),
+            ).submit()
             arc4.emit(
                 ChallengeResolved(
                     challenge_id=arc4.UInt64(challenge_id),
@@ -652,6 +827,76 @@ class QuantumArena(ARC4Contract):
             Global.latest_timestamp >= meta.deadline + CATASTROPHE_WINDOW
         ), "sweep window not reached"
         self._refund_all(challenge_id, meta, roster, arc4.UInt64(1))
+
+    @arc4.abimethod
+    def claim_forfeit(self, challenge_id: UInt64, seat: UInt64) -> None:
+        """Duel-only seat clock: claim the stake of a silent opponent (v2).
+
+        The target seat must be occupied and UNSIGNED, and its clock
+        (seated_at + SEAT_TTL) must have expired — strict >. The caller
+        must be the opponent (the other seat) and must hold a signed score
+        on this challenge. Effect: the forfeited stake goes 95% to the
+        caller, 5% to the treasury (same rounding as resolve); the caller's
+        own signed stake is returned in full. Both boxes are deleted and
+        the exact MBR paid at create goes back to the payer (creator).
+        If NEITHER side has signed, this path is unavailable (the caller
+        cannot be signed) and the v1 paths (early_close / catastrophe)
+        apply instead.
+        """
+        assert_no_rekey_app_call()
+        assert challenge_id in self.challenges, "challenge not found"
+        meta = self.challenges[challenge_id].copy()
+        assert meta.status == STATUS_OPEN or meta.status == STATUS_CLOSED, "not active"
+        assert meta.seats_total == SEATS_DUEL, "forfeit claims are duel-only"
+        assert challenge_id in self.players, "roster missing"
+        roster = self.players[challenge_id].copy()
+        assert meta.seats_taken == 1, "opponent seat empty"
+        assert seat <= 1, "invalid seat"
+
+        target = roster[seat].copy()
+        caller = roster[1 - seat].copy()  # a duel has exactly seats 0 and 1
+        assert caller.addr == Txn.sender.bytes, "only the opponent can claim"
+        assert caller.signed, "caller must have a signed score"
+        assert not target.signed, "target has a signed score"
+        assert (
+            Global.latest_timestamp > target.seated_at + SEAT_TTL
+        ), "seat clock not expired"
+
+        # --- effects BEFORE any inner transaction (checks-effects)
+        fee = protocol_fee(meta.stake)  # 5% of the forfeited stake
+        winner_share = meta.stake - fee
+        own_stake = meta.stake
+        mbr_paid = meta.mbr_paid
+        winner_addr = caller.addr
+        creator = Account(meta.creator)
+        # single claim possible: the challenge is gone after this
+        del self.challenges[challenge_id]
+        del self.players[challenge_id]
+
+        # --- interactions
+        self._pay_gonna(winner_addr, own_stake)  # caller's own stake, in full
+        self._pay_gonna(winner_addr, winner_share)  # 95% of the forfeited stake
+        if fee > 0:
+            itxn.AssetTransfer(
+                xfer_asset=Asset(self.gonna_asset_id.value),
+                asset_amount=fee,
+                asset_receiver=Account(self.treasury.value),
+                fee=UInt64(0),
+            ).submit()
+        itxn.Payment(  # exact MBR paid at create, back to the payer
+            receiver=creator,
+            amount=mbr_paid,
+            fee=UInt64(0),
+        ).submit()
+
+        arc4.emit(
+            ChallengeForfeited(
+                challenge_id=arc4.UInt64(challenge_id),
+                winner=arc4.Address(winner_addr),
+                payout=arc4.UInt64(winner_share),
+                fee=arc4.UInt64(fee),
+            )
+        )
 
     @arc4.abimethod
     def early_close(
@@ -709,6 +954,35 @@ class QuantumArena(ARC4Contract):
         return op.ed25519verify_bare(msg, sig, self.oracle_pub_key.value)
 
     @subroutine
+    def _gonna_dest(self, addr: Bytes) -> Bytes:
+        """Where a $GONNA payment to `addr` can actually land (FIX-1).
+
+        On-chain, an axfer to an account that closed its ASA opt-in fails
+        the WHOLE group — that would lock the escrow forever on any close
+        path. If `addr` does not currently hold $GONNA, the amount is
+        redirected to the treasury instead (documented behavior: unpayable
+        balances go to the treasury). No close path can ever fail because
+        of receiver state.
+        """
+        holding_balance, opted = op.AssetHoldingGet.asset_balance(
+            Account(addr), Asset(self.gonna_asset_id.value)
+        )
+        if opted:
+            return addr
+        return self.treasury.value
+
+    @subroutine
+    def _pay_gonna(self, addr: Bytes, amount: UInt64) -> None:
+        """Send `amount` of $GONNA to `addr`, or to the treasury if `addr`
+        is not opted in (see _gonna_dest)."""
+        itxn.AssetTransfer(
+            xfer_asset=Asset(self.gonna_asset_id.value),
+            asset_amount=amount,
+            asset_receiver=Account(self._gonna_dest(addr)),
+            fee=UInt64(0),
+        ).submit()
+
+    @subroutine
     def _refund_all(
         self,
         challenge_id: UInt64,
@@ -716,20 +990,26 @@ class QuantumArena(ARC4Contract):
         roster: Array[PlayerEntry],
         reason: arc4.UInt64,
     ) -> None:
-        """Refund every payer in full, zero fee. State first, then itxns."""
+        """Refund every payer in full, zero fee. State first, then itxns.
+
+        v2: the terminal REFUNDED transition deletes BOTH boxes and the
+        exact MBR paid at create (mbr_paid) goes back to the payer
+        (creator) — no funds stay locked.
+        """
         # --- effects
-        meta.status = UInt64(STATUS_REFUNDED)
-        meta.winner = Bytes(b"")
-        self.challenges[challenge_id] = meta.copy()
+        creator = Account(meta.creator)
+        mbr_paid = meta.mbr_paid
+        del self.challenges[challenge_id]
+        del self.players[challenge_id]
 
         # --- interactions
         for i in urange(roster.length):
             entry = roster[i].copy()
-            itxn.AssetTransfer(
-                xfer_asset=Asset(self.gonna_asset_id.value),
-                asset_amount=meta.stake,
-                asset_receiver=Account(entry.addr),
-                fee=UInt64(0),
-            ).submit()
+            self._pay_gonna(entry.addr, meta.stake)
+        itxn.Payment(
+            receiver=creator,
+            amount=mbr_paid,
+            fee=UInt64(0),
+        ).submit()
 
         arc4.emit(ChallengeRefunded(challenge_id=arc4.UInt64(challenge_id), reason=reason))
