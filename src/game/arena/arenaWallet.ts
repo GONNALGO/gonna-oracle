@@ -96,14 +96,20 @@ setTestnetIdentityProvider(async () => {
     // 1) arena-side Pera instance — only with a verified live session
     const arenaSign = await liveTestnetSignFn(target);
     if (arenaSign) {
+      console.debug('[arena] signer chosen: arena Pera (live session)');
       try {
         return await arenaSign(groups);
-      } catch { /* session died mid-flow: fall through to the gate */ }
+      } catch (e) {
+        // session died mid-flow: fall through to the gate
+        console.debug('[arena] arena Pera signer threw, trying gate fallback:', e);
+      }
     }
     // 2) main-gate session (same WC storage; the gate speaks testnet here)
     if (gateAddr === target && wallet.isConnected()) {
+      console.debug('[arena] signer chosen: gate session fallback');
       return wallet.signTransactions(groups);
     }
+    console.debug('[arena] NO live signer — WALLET NOT CONNECTED');
     throw new Error('WALLET NOT CONNECTED - TAP CONNECT');
   };
   return { address: target, sign };

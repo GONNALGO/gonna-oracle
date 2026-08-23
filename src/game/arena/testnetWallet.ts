@@ -4,7 +4,12 @@
 // ARENA speaks testnet until the mainnet deploy is approved by the Prince.
 // Mobile: Pera wallet app -> developer settings -> TESTNET mode.
 // ============================================================================
+import { withTimeout } from './testnetKit';
 import type { TxSignFn } from './testnetKit';
+
+// v14.2: a stale WC session can hang reconnectSession() too — probe with a
+// deadline so a dead session never freezes CONNECT or the signer chain.
+const PROBE_TIMEOUT_MS = 12_000;
 
 type PeraWalletConnectT = import('@perawallet/connect').PeraWalletConnect;
 
@@ -52,9 +57,9 @@ export async function connectTestnetPera(): Promise<string> {
   // v11 RECONNECT-FIRST: reuse a live WalletConnect session — connect() on
   // top of it throws "Session currently connected" (Prince's staging bug)
   try {
-    const existing = await p.reconnectSession();
+    const existing = await withTimeout(p.reconnectSession(), PROBE_TIMEOUT_MS, 'reconnect probe timeout');
     if (existing && existing.length > 0) return store(existing[0]);
-  } catch { /* no live session */ }
+  } catch { /* no live session (or a hung one) — fall through to connect() */ }
   try {
     const accounts = await p.connect();
     return store(accounts[0]);
@@ -93,10 +98,17 @@ export async function reconnectTestnetPera(): Promise<string | null> {
 export async function liveTestnetSignFn(address: string): Promise<TxSignFn | null> {
   try {
     const p = await peraInstance();
-    const accounts = await p.reconnectSession();
-    if (!accounts.includes(address)) return null;
+    // v14.2: hang-proof probe — a stale session must NOT freeze the signer
+    // chain (the fallback to the gate session has to get its chance)
+    const accounts = await withTimeout(p.reconnectSession(), PROBE_TIMEOUT_MS, 'reconnect probe timeout');
+    if (!accounts.includes(address)) {
+      console.debug('[arena] arena Pera session dead/mismatched — no live signer here');
+      return null;
+    }
+    console.debug('[arena] arena Pera session LIVE for ' + address.slice(0, 6) + '..');
     return peraSignFn(address);
-  } catch {
+  } catch (e) {
+    console.debug('[arena] arena Pera probe failed:', e);
     return null;
   }
 }
@@ -114,7 +126,9 @@ export async function disconnectTestnetPera(): Promise<void> {
 export async function peraSignFn(address: string): Promise<TxSignFn> {
   const p = await peraInstance();
   return async (groups) => {
+    console.debug('[arena] pera.signTransaction → ' + groups.length + ' group(s) for ' + address.slice(0, 6) + '..');
     const signed = await p.signTransaction(groups.map((g) => g.map((w) => ({ txn: w.txn, signers: [address] }))));
+    console.debug('[arena] pera.signTransaction ✓ ' + signed.length + ' signed');
     return signed as Uint8Array[];
   };
 }

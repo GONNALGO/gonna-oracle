@@ -393,12 +393,42 @@ export async function buildEarlyCloseGroup(o: { caller: string; cid: number }): 
 
 // sign as one atomic group (Pera-style {txn, signers} groups) and broadcast
 export type TxSignFn = (groups: { txn: Txn; signers: string[] }[][]) => Promise<Uint8Array[]>;
+
+// v14.2: a stale/dead WalletConnect session can make pera.signTransaction
+// hang FOREVER — no modal, no rejection, a silently dead SIGN & STAKE (the
+// Prince's v14.1 bug). Every wallet sign call gets a HARD timeout so the UI
+// always comes back with a visible error instead of sitting on SIGNING...
+export const SIGN_TIMEOUT_MS = 90_000;
+export const SIGN_TIMEOUT_MSG = 'WALLET NOT RESPONDING - RECONNECT AND RETRY';
+export function withTimeout<T>(p: Promise<T>, ms: number, timeoutMsg: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(timeoutMsg)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
 export async function signSend(sign: TxSignFn, txns: Txn[]): Promise<string> {
   const a = await sdk();
   const algod = await algodClient();
   a.assignGroupID(txns);
-  const signed = await sign([txns.map((txn) => ({ txn, signers: [txn.sender.toString()] }))]);
+  console.debug('[arena] sign start — atomic group of ' + txns.length + ' txn(s)');
+  const signed = await withTimeout(
+    sign([txns.map((txn) => ({ txn, signers: [txn.sender.toString()] }))]),
+    SIGN_TIMEOUT_MS,
+    SIGN_TIMEOUT_MSG,
+  );
+  console.debug('[arena] wallet response — ' + signed.length + ' signed txn(s)');
   const res = (await algod.sendRawTransaction(signed).do()) as { txid: string };
+  console.debug('[arena] tx sent: ' + res.txid + ' — waiting for confirmation');
   await a.waitForConfirmation(algod, res.txid, 10);
   return res.txid;
 }

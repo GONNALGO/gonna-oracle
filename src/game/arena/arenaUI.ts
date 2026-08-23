@@ -118,6 +118,8 @@ export class ArenaUI {
   // v11: wallet connect feedback (board header)
   private walletMsg = '';
   private walletMsgT = 0;
+  // v14.2: board status line (RUN DISCARDED etc.) — heads the LIVE feed
+  private notice = '';
   private framesRef: Map<string, HTMLImageElement> | null = null;
   // v10.5: SHOW CARD — DOM overlay with a REAL <img> (native context menu)
   private showOverlay: HTMLDivElement | null = null;
@@ -196,6 +198,7 @@ export class ArenaUI {
     this.histPage = 0;
     this.fighterOpts = this.fighterShelf();
     this.shareMsg = '';
+    this.notice = '';
     void this.refreshBoard();
     void this.refreshHistory();
     this.buildFeed();
@@ -270,6 +273,7 @@ export class ArenaUI {
       lines.push(c.creatorName + ' POSTED ' + fmtStake(c.stake) + ' - ' + c.seatsTotal + ' SEATS');
     }
     lines.push('SILVIO WATCHES. THE PIT PROVIDES.');
+    if (this.notice) lines.unshift(this.notice); // v14.2: status wins the head
     this.feedLines = lines;
     this.feedT = 0;
   }
@@ -356,11 +360,13 @@ export class ArenaUI {
       return { act: 'move' };
     }
     if (this.screen === 'seal') {
-      // discard the sealed score — no tx was ever sent, nothing to clean up
-      this.sealedScore = null;
-      this.screen = 'create';
-      this.step = 'confirm';
+      // v14.2: DISCARD abandons EVERYTHING — no tx was ever sent, nothing to
+      // clean up; back to THE PIT board with a status line, NOT the wizard.
+      this.resetSeal();
+      this.screen = 'board';
       this.focus = 0;
+      this.notice = 'RUN DISCARDED - NO TX SENT';
+      void this.refreshBoard();
       return { act: 'move' };
     }
     if (this.screen === 'share') {
@@ -372,8 +378,11 @@ export class ArenaUI {
   }
 
   private fail(msg: string): ArenaAction {
-    this.err = msg.toUpperCase().slice(0, 40);
-    this.errT = 180;
+    // v14.2: 44 chars fit the toast (44x6px < VW-80) — 'WALLET NOT
+    // RESPONDING - RECONNECT AND RETRY' must survive untruncated.
+    this.err = msg.toUpperCase().slice(0, 44);
+    this.errT = 240; // 4s — a wallet error must be READABLE, not a blink
+    console.debug('[arena] UI error:', this.err);
     return { act: 'none' };
   }
 
@@ -635,6 +644,7 @@ export class ArenaUI {
       this.step = 'visibility';
       this.focus = 0;
       this.err = '';
+      this.notice = '';
       this.resetSeal(); // fresh card, fresh runs
       this.sealDraftId = 'D' + Date.now().toString(36);
       this.sealRole = 'creator';
@@ -653,6 +663,20 @@ export class ArenaUI {
         return { act: 'move' };
       }
       return { act: 'none' };
+    }
+    // v14.2: MY CARDS cycling — hop between my open cards straight from the
+    // card detail (arrows are hotspots, so keyboard focus+START works too)
+    if (id === 'mine:prev' || id === 'mine:next') {
+      const mi = this.current ? this.mine.findIndex((m) => m.id === this.current!.id) : -1;
+      if (mi < 0 || this.mine.length < 2) return { act: 'none' };
+      const ni = (mi + (id === 'mine:next' ? 1 : this.mine.length - 1)) % this.mine.length;
+      this.current = this.mine[ni];
+      this.verdict = false;
+      this.coinRain = [];
+      this.focus = 0;
+      this.myScore = this.bestScore();
+      this.resetSeal();
+      return { act: 'move' };
     }
     if (id === 'page:prev') {
       this.page = Math.max(0, this.page - 1);
@@ -704,6 +728,7 @@ export class ArenaUI {
     if (id === 'wallet') {
       // testnet: real Pera connect (chainId 416002); mock: mainnet gate wallet
       this.walletMsgT = 0;
+      console.debug('[arena] CONNECT — wallet connect start');
       void this.run(
         () => connectArenaWallet('pera'),
         (addr) => {
@@ -893,6 +918,7 @@ export class ArenaUI {
       const refId = this.sealRole === 'creator' ? this.sealDraftId : String(this.current?.id ?? 0);
       if (this.adapter().mode === 'testnet') {
         this.continuePaying = true;
+        console.debug('[arena] CONTINUE — 5 ALGO payment start (ref ' + refId + ')');
         void this.run(
           async () => {
             const kit = await import('./testnetKit');
@@ -950,9 +976,11 @@ export class ArenaUI {
     try {
       ok(await job());
     } catch (e) {
+      // v14.2: EVERY failure is visible — console breadcrumb + red UI line
+      console.debug('[arena] op failed:', e);
       this.fail(e instanceof Error ? e.message : 'REKT - TRY AGAIN');
     } finally {
-      this.busy = false;
+      this.busy = false; // the button ALWAYS comes back (timeout included)
     }
   }
 
@@ -1010,6 +1038,7 @@ export class ArenaUI {
     if (best !== null) cfg.sealedScore = best;
     if (this.sealRuns >= 2) cfg.continueRefId = this.sealDraftId;
     const player = arenaPlayer(cfg.fighter);
+    console.debug('[arena] SIGN & STAKE — create start (score ' + (cfg.sealedScore ?? 'none') + ')');
     void this.run(
       () => this.adapter().createChallenge(cfg, player),
       (c) => {
@@ -1029,6 +1058,7 @@ export class ArenaUI {
     const c = this.current;
     if (!c) return { act: 'none' };
     const player = arenaPlayer({ skin: 'gonna', assetId: null, name: 'GONNA' });
+    console.debug('[arena] ACCEPT & STAKE — join start (card #' + c.id + ')');
     void this.run(
       () => this.adapter().join(c.id, player),
       (nc) => {
@@ -1047,6 +1077,7 @@ export class ArenaUI {
     // QA mode plays a DETERMINISTIC score so E2E verdicts are assertable.
     const score = this.sealBest > 0 ? this.sealBest : (qaActive() ? qaScore() : this.myScore > 0 ? this.myScore : 4200 + Math.floor(Math.random() * 900));
     const opts = this.sealRuns >= 2 ? { continueRefId: String(c.id) } : undefined;
+    console.debug('[arena] SIGN SCORE — submit start (card #' + c.id + ', score ' + score + ')');
     void this.run(
       () => this.adapter().submitScore(c.id, me, score, opts),
       (nc) => {
@@ -1061,6 +1092,7 @@ export class ArenaUI {
   private doResolve(): ArenaAction {
     const c = this.current;
     if (!c) return { act: 'none' };
+    console.debug('[arena] RESOLVE — start (card #' + c.id + ')');
     void this.run(
       () => this.adapter().resolve(c.id),
       (nc) => {
@@ -1073,6 +1105,7 @@ export class ArenaUI {
 
   private doClaim(id: number): ArenaAction {
     const me = arenaAddress();
+    console.debug('[arena] CLAIM — start (card #' + id + ')');
     void this.run(
       () => this.adapter().claim(id, me),
       () => {
@@ -1304,20 +1337,30 @@ export class ArenaUI {
 
     // v13: MY OPEN CARDS — compact chips strip under the feed (mobile-first:
     // zero extra screens, thumb-reachable, private cards included)
+    // v14.2: render ALL of my cards — the strip wraps to a second row before
+    // it ever overflows the header; only a true overflow (2 full rows) falls
+    // back to a +N counter.
     let TOP = 60;
     if (this.mine.length > 0) {
       drawText(c, 'MY OPEN CARDS:', 10, 58, 1, GOLD);
       let cx = 10 + textWidth('MY OPEN CARDS:', 1) + 8;
-      const maxShow = 4;
-      for (let mi = 0; mi < Math.min(maxShow, this.mine.length); mi++) {
+      let cy = 56;
+      let shown = 0;
+      for (let mi = 0; mi < this.mine.length; mi++) {
         const mc = this.mine[mi];
         const label = '#' + mc.id + (mc.visibility === 'private' ? '*' : '');
         const cw = textWidth(label, 1) + 10;
-        this.btn(c, frame, { id: 'card:' + mc.id, x: cx, y: 56, w: cw, h: 12 }, label, { small: true, gold: true });
+        if (cx + cw > VW - 8) {
+          if (cy !== 56) break; // second row full too — +N counter below
+          cx = 10; // wrap to the second chip row
+          cy = 72;
+        }
+        this.btn(c, frame, { id: 'card:' + mc.id, x: cx, y: cy, w: cw, h: 12 }, label, { small: true, gold: true });
         cx += cw + 6;
+        shown++;
       }
-      if (this.mine.length > maxShow) drawText(c, '+' + (this.mine.length - maxShow), cx, 58, 1, DIM);
-      TOP = 76;
+      if (shown < this.mine.length) drawText(c, '+' + (this.mine.length - shown), cx, cy + 2, 1, DIM);
+      TOP = cy === 72 ? 92 : 76;
     }
     const ROW_H = 44;
     const me = arenaAddress();
@@ -1384,8 +1427,11 @@ export class ArenaUI {
       }
     }
     // v10.3: page keys on the right rail + PAGE indicator
+    // v14.2: the NEXT key rides the LAST card row (pageSize, not a hardcoded
+    // 3) — with MY OPEN CARDS up, 3 rows would put it ON the BACK button
+    // (the stray white-bordered box the Prince screenshotted).
     if (this.page > 0) this.btn(c, frame, { id: 'page:prev', x: VW - 26, y: TOP, w: 18, h: 14 }, '<', { small: true });
-    if (this.page < pages - 1) this.btn(c, frame, { id: 'page:next', x: VW - 26, y: TOP + 3 * ROW_H - 14, w: 18, h: 14 }, '>', { small: true });
+    if (this.page < pages - 1) this.btn(c, frame, { id: 'page:next', x: VW - 26, y: TOP + pageSize * ROW_H - 14, w: 18, h: 14 }, '>', { small: true });
     if (pages > 1) drawText(c, 'PAGE ' + (this.page + 1) + '/' + pages, VW - 104, 190, 1, DIM, 'right');
     // footer: CREATE CARD / HISTORY / MY LEGACY / BACK
     this.btn(c, frame, { id: 'create', x: 8, y: 198, w: 100, h: 14 }, 'CREATE CARD', { gold: true });
@@ -1794,6 +1840,13 @@ export class ArenaUI {
     // (the whole point of ?duel= is that anyone can open the card)
     if (card.creator === me && live && !this.verdict) {
       this.btn(c, frame, { id: 'share', x: VW - 86, y: 30, w: 78, h: 12 }, 'SHARE', { gold: true });
+    }
+    // v14.2: several of MY cards live? Cycle them without leaving the detail
+    const mi = this.mine.findIndex((m) => m.id === card.id);
+    if (this.mine.length > 1 && mi >= 0) {
+      this.btn(c, frame, { id: 'mine:prev', x: 8, y: 198, w: 26, h: 14 }, '<', { small: true });
+      this.btn(c, frame, { id: 'mine:next', x: 40, y: 198, w: 26, h: 14 }, '>', { small: true });
+      drawText(c, 'MY CARDS ' + (mi + 1) + '/' + this.mine.length, 74, 202, 1, DIM);
     }
     this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
     void art;
