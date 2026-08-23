@@ -73,7 +73,7 @@ def main() -> None:
             on_complete=transaction.OnComplete.NoOpOC,
             approval_program=approval,
             clear_program=clear,
-            global_schema=transaction.StateSchema(3, 2),
+            global_schema=transaction.StateSchema(4, 2),  # v2: + version (uint)
             local_schema=transaction.StateSchema(0, 0),
             app_args=app_args,
             extra_pages=1,

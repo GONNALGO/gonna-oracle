@@ -40,7 +40,12 @@ ORACLE_SEED = bytes(range(32))
 
 STAKE = 1_000_000  # 1 $GONNA with 6 decimals
 DECIMALS = 6
-CHALLENGE_MBR = 350_000
+# v2 box MBR (both boxes, worst-case 13 players):
+#   meta 2500 + 2500*(9+148) = 395_000
+#   players 2500 + 2500*(9+717) = 1_817_500
+CHALLENGE_MBR = 2_212_500
+EARLY_CLOSE_FEE = 1_000_000  # 1 ALGO anti-spam fee
+SEAT_TTL = 3600
 T0 = 1_790_000_000  # fixed "now" for deterministic tests
 
 SCORE_DOMAIN = b"QA-SCORE|"
@@ -50,6 +55,25 @@ VERDICT_DOMAIN = b"QA-VERDICT|"
 def pk(account: Account) -> bytes:
     """Raw 32-byte public key of a test account."""
     return account.bytes.value
+
+
+def inner_txns(ctx: AlgopyTestContext):
+    """Flatten the inner transactions of the last executed group."""
+    return [t for grp in ctx.txn.last_group.itxn_groups for t in grp]
+
+
+def inner_axfers(ctx: AlgopyTestContext):
+    """Inner asset transfers only (v2 close paths also emit ALGO payments)."""
+    from algopy import TransactionType
+
+    return [t for t in inner_txns(ctx) if t.type == TransactionType.AssetTransfer]
+
+
+def inner_payments(ctx: AlgopyTestContext):
+    """Inner ALGO payments only (v2: MBR refunds to the box payer)."""
+    from algopy import TransactionType
+
+    return [t for t in inner_txns(ctx) if t.type == TransactionType.Payment]
 
 
 def score_msg(app_id: int, cid: int, seat: int, addr: bytes, score: int) -> bytes:
@@ -154,6 +178,49 @@ class Env:
                 UInt64(creator_score),
                 sig,
             )
+        )
+
+    def fee_pay(self, sender: Account, amount: int = EARLY_CLOSE_FEE):
+        """1 ALGO anti-spam fee payment to the treasury."""
+        return self.ctx.any.txn.payment(
+            sender=sender, receiver=self.treasury, amount=amount
+        )
+
+    def spawn_rumble(
+        self,
+        who: Account | None = None,
+        seats: int = 4,
+        stake: int = STAKE,
+        mode: int = 0,
+        seed: bytes = b"\x00" * 32,
+    ) -> int:
+        """Permissionless rumble self-spawn (v2-C)."""
+        who = who or self.creator
+        return int(
+            self._as(
+                who,
+                self.contract.spawn_rumble,
+                self.mbr_pay(who),
+                self.stake_axfer(who, stake),
+                self.fee_pay(who),
+                UInt64(stake),
+                UInt64(seats),
+                UInt64(mode),
+                Bytes(seed),
+            )
+        )
+
+    def claim_forfeit(self, who: Account, cid: int, seat: int) -> None:
+        self._as(who, self.contract.claim_forfeit, UInt64(cid), UInt64(seat))
+
+    def early_close(self, who: Account, cid: int, fee: int = EARLY_CLOSE_FEE) -> None:
+        self._as(who, self.contract.early_close, self.fee_pay(who, fee), UInt64(cid))
+
+    def boxes_exist(self, cid: int) -> tuple[bool, bool]:
+        """(meta box exists, players box exists)."""
+        return (
+            UInt64(cid) in self.contract.challenges,
+            UInt64(cid) in self.contract.players,
         )
 
     def join(self, who: Account, cid: int, stake: int = STAKE) -> None:

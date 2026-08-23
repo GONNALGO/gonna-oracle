@@ -16,6 +16,7 @@ from tests.conftest import (
     STAKE,
     T0,
     Env,
+    inner_axfers as _axfers,
     pk,
     score_msg,
 )
@@ -27,8 +28,13 @@ BPS = 10_000
 
 
 def inner_axfers(env: Env):
-    """Flatten the inner transactions of the last executed group."""
-    return [t for grp in env.ctx.txn.last_group.itxn_groups for t in grp]
+    """Inner asset transfers of the last executed group.
+
+    v2 note: close paths additionally emit an inner ALGO payment (the MBR
+    refund to the box payer); it is intentionally filtered out here so the
+    v1 stake-flow assertions below are unchanged.
+    """
+    return _axfers(env.ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -58,9 +64,9 @@ def test_duel_happy_path(env: Env) -> None:
     winner = env.resolve(cid, [(0, pk(env.creator), 5000), (1, pk(j), 9000)])
     assert winner.value == pk(j)
 
-    meta = env.meta(cid)
-    assert meta.status == 2  # RESOLVED
-    assert meta.winner.value == pk(j)
+    # v2: the terminal RESOLVED transition deleted both boxes (MBR refunded);
+    # the status is observable via the ChallengeResolved event, not storage.
+    assert env.boxes_exist(cid) == (False, False)
 
     pot = 2 * STAKE
     fee = pot * FEE_BPS // BPS
@@ -181,8 +187,8 @@ def test_perfect_tie_full_refund(env: Env) -> None:
     winner = env.resolve(cid, [(0, pk(env.creator), 5000), (1, pk(j), 5000)])
     assert winner.value == b""  # no winner
 
-    meta = env.meta(cid)
-    assert meta.status == 3  # REFUNDED
+    # v2: boxes deleted on the tie-refund close path too
+    assert env.boxes_exist(cid) == (False, False)
 
     itxns = inner_axfers(env)
     assert len(itxns) == 2  # two full refunds, no fee txn at all
@@ -220,8 +226,8 @@ def test_claim_after_deadline(env: Env) -> None:
     env.set_time(T0 + 4 * 3600)
     env._as(env.creator, env.contract.claim, UInt64(cid))
 
-    meta = env.meta(cid)
-    assert meta.status == 3  # REFUNDED
+    # v2: REFUNDED terminal state -> boxes deleted
+    assert env.boxes_exist(cid) == (False, False)
     itxns = inner_axfers(env)
     assert len(itxns) == 1
     assert itxns[0].asset_amount == STAKE  # full stake, zero fee
@@ -235,8 +241,8 @@ def test_claim_for_permissionless_sweep(env: Env) -> None:
     env.set_time(T0 + DUEL + 7 * DAY)
     env._as(env.outsider, env.contract.claim_for, UInt64(cid))
 
-    meta = env.meta(cid)
-    assert meta.status == 3
+    # v2: REFUNDED terminal state -> boxes deleted
+    assert env.boxes_exist(cid) == (False, False)
     itxns = inner_axfers(env)
     assert len(itxns) == 1
     assert itxns[0].asset_receiver.bytes.value == pk(env.creator)
@@ -254,8 +260,8 @@ def test_early_close(env: Env) -> None:
     )
     env._as(env.creator, env.contract.early_close, fee_pay, UInt64(cid))
 
-    meta = env.meta(cid)
-    assert meta.status == 3  # REFUNDED
+    # v2: REFUNDED terminal state -> boxes deleted, MBR refunded
+    assert env.boxes_exist(cid) == (False, False)
     itxns = inner_axfers(env)
     assert len(itxns) == 1
     assert itxns[0].asset_amount == STAKE
@@ -301,8 +307,8 @@ def test_catastrophe_refund(env: Env) -> None:
     env.set_time(T0 + 4 * 3600 + 7 * DAY)
     env._as(env.outsider, env.contract.catastrophe_refund, UInt64(cid))
 
-    meta = env.meta(cid)
-    assert meta.status == 3
+    # v2: REFUNDED terminal state -> boxes deleted
+    assert env.boxes_exist(cid) == (False, False)
     itxns = inner_axfers(env)
     assert len(itxns) == 3  # creator + 2 joiners, zero fee
     refunds = {t.asset_receiver.bytes.value: t.asset_amount for t in itxns}
@@ -389,7 +395,8 @@ def test_double_resolve_fails(env: Env) -> None:
     env.submit(j, cid, seat=1, score=200)
     signed = [(0, pk(env.creator), 100), (1, pk(j), 200)]
     env.resolve(cid, signed)
-    with pytest.raises(AssertionError, match="not active"):
+    # v2: resolve deleted the boxes, so a second resolve finds nothing
+    with pytest.raises(AssertionError, match="challenge not found"):
         env.resolve(cid, signed)
 
 
