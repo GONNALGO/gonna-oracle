@@ -2685,7 +2685,7 @@ function signSendManaged(sign, buildTxns, opts = {}) {
       return recovering;
     },
     get stalled() {
-      return !settled && attemptStartedAt > 0 && Date.now() - attemptStartedAt >= nudgeMs;
+      return !settled && phase !== "sending" && attemptStartedAt > 0 && Date.now() - attemptStartedAt >= nudgeMs;
     },
     get cancellable() {
       return !settled && phase !== "sending";
@@ -2730,6 +2730,7 @@ function signSendManaged(sign, buildTxns, opts = {}) {
       live();
       console.debug("[arena] wallet response \u2014 " + signed.length + " signed txn(s)");
       phase = "sending";
+      attemptStartedAt = Date.now();
       const txid = await (opts.send ? opts.send(signed) : defaultSend(signed));
       live();
       opts.onEvent?.("sent");
@@ -2776,8 +2777,10 @@ function signSendManaged(sign, buildTxns, opts = {}) {
       settleErr(e instanceof Error ? e : new Error(String(e)));
     }
   }
+  const onWire = () => phase === "sending";
   async function doRetry() {
     if (settled || cancelled) return;
+    if (onWire()) return;
     opts.onEvent?.("retry");
     const hanging = attemptStartedAt > 0;
     const rec = opts.recover ?? recoverHook;
@@ -2791,7 +2794,7 @@ function signSendManaged(sign, buildTxns, opts = {}) {
       }
       recovering = false;
     }
-    if (settled || cancelled) return;
+    if (settled || cancelled || onWire()) return;
     gen++;
     wedged = false;
     attempt++;

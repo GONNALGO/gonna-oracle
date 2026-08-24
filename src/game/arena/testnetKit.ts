@@ -606,7 +606,9 @@ export function signSendManaged(sign: TxSignFn, buildTxns: () => Promise<Txn[]>,
       return recovering;
     },
     get stalled() {
-      return !settled && attemptStartedAt > 0 && Date.now() - attemptStartedAt >= nudgeMs;
+      // v15.2.3: NEVER stalled while the tx is on the wire — the wallet already
+      // answered; only the chain can be slow now, and RETRY there would double-broadcast
+      return !settled && phase !== 'sending' && attemptStartedAt > 0 && Date.now() - attemptStartedAt >= nudgeMs;
     },
     get cancellable() {
       return !settled && phase !== 'sending';
@@ -653,6 +655,7 @@ export function signSendManaged(sign: TxSignFn, buildTxns: () => Promise<Txn[]>,
       live();
       console.debug('[arena] wallet response — ' + signed.length + ' signed txn(s)');
       phase = 'sending'; // on the wire: CANCEL goes away, the truth is algod's
+      attemptStartedAt = Date.now(); // the clock tracks the CURRENT phase (chain wait now)
       const txid = await (opts.send ? opts.send(signed) : defaultSend(signed));
       live();
       opts.onEvent?.('sent');
@@ -705,8 +708,16 @@ export function signSendManaged(sign: TxSignFn, buildTxns: () => Promise<Txn[]>,
     }
   }
 
+  // live read of the wire state — a function boundary so TS control-flow
+  // narrowing can never freeze the phase across the recovery await below
+  const onWire = (): boolean => phase === 'sending';
+
   async function doRetry(): Promise<void> {
     if (settled || cancelled) return;
+    // v15.2.3: RETRY only makes sense while waiting for the wallet's SIGNATURE.
+    // Once the signed tx is broadcast ('sending'), a retry would build+sign+SEND
+    // a SECOND challenge — duplicate on-chain stake. Hard guard.
+    if (onWire()) return;
     opts.onEvent?.('retry');
     // RETRY while an attempt is in flight means the wallet never answered (or
     // reported a wedged session): HEAL FIRST — abandon the pending request and
@@ -725,7 +736,7 @@ export function signSendManaged(sign: TxSignFn, buildTxns: () => Promise<Txn[]>,
       }
       recovering = false;
     }
-    if (settled || cancelled) return; // a late wallet answer during recovery wins
+    if (settled || cancelled || onWire()) return; // a late wallet answer during recovery wins (it may already be ON THE WIRE)
     gen++; // abandon the previous attempt — its late answer is NEVER sent
     wedged = false;
     attempt++;

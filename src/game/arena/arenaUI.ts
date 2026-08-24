@@ -1425,6 +1425,7 @@ export class ArenaUI {
     // forfeit/close). Drawn LAST so it rides above the busy labels.
     const op = this.busy ? activeSignOp() : null;
     if (op && (op.stalled || op.recovering)) this.drawSignStall(c, frame, op);
+    else if (op && op.phase === 'sending') this.drawSignWire(c, frame);
     if (!touch) drawText(c, 'ESC BACK', VW - 8, VH - 11, 1, DIM, 'right');
     if (this.focus >= this.hots.length) this.focus = 0;
   }
@@ -1449,6 +1450,19 @@ export class ArenaUI {
     drawTextSh(c, 'NO WORD FROM THE WALLET?', VW / 2, y + 6, 1, AMBER, 'center');
     this.btn(c, frame, { id: 'sign:retry', x: 72, y: y + 22, w: 104, h: 16 }, 'RETRY', { gold: true });
     if (op.cancellable) this.btn(c, frame, { id: 'sign:cancel', x: 208, y: y + 22, w: 104, h: 16 }, 'CANCEL', { dim: true });
+  }
+
+  // v15.2.3: the tx is SIGNED and BROADCAST — only the chain can be slow now.
+  // Info-only strip: NO RETRY (a second send would double the on-chain stake),
+  // NO CANCEL (aborting a broadcast tx is meaningless).
+  private drawSignWire(c: CanvasRenderingContext2D, frame: number): void {
+    const y = VH - 96;
+    c.fillStyle = 'rgba(4,14,10,0.95)';
+    c.fillRect(52, y, VW - 104, 24);
+    c.strokeStyle = (frame & 8) !== 0 ? GREEN : '#1d5c33';
+    c.lineWidth = 1;
+    c.strokeRect(52.5, y + 0.5, VW - 105, 23);
+    drawTextSh(c, 'TX ON THE WIRE - WAITING FOR THE CHAIN', VW / 2, y + 8, 1, GREEN, 'center');
   }
 
   private btn(c: CanvasRenderingContext2D, frame: number, h: Omit<Hot, 'id'> & { id: string }, label: string, opts: { gold?: boolean; green?: boolean; red?: boolean; dim?: boolean; small?: boolean; disabled?: boolean } = {}): void {

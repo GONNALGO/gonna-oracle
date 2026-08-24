@@ -1,10 +1,14 @@
-// GONNA FIGHT v15.2.2 — RETRY/CANCEL on stuck wallet signing + real NFT shelf.
+// GONNA FIGHT v15.2.3 — retry phase guard: NO double broadcast while the tx
+// is on the wire (v15.2.2: RETRY/CANCEL on stuck wallet signing + NFT shelf).
 //   PART A (node, unit): signSendManaged with FAKE signers/senders —
 //     (a) a hanging signer exposes the stalled op after the nudge delay,
 //     (b) RETRY heals FIRST (recover hook) then re-issues the request,
 //     (c) CANCEL rejects cleanly and a LATE wallet answer is never sent,
 //     (d) a wedged-session error ("REQUEST PENDING ...") auto-recovers and
 //         re-sends before settling,
+//     (e) v15.2.3 REGRESSION: fast sign + hanging confirm -> RETRY during
+//         'sending' is a NO-OP (no second broadcast), never stalled on the wire,
+//     (f) RETRY still works during the SIGNATURE wait,
 //     + the v15.2.1 cid-race composition (rebuild + re-send on the 400) and
 //     the hard-timeout backstop.
 //   PART B (browser, TESTNET adapter, REAL chain reads + FAKE HANGING signer):
@@ -133,6 +137,57 @@ console.log('\n[A] UNIT: signSendManaged — retry / cancel / wedge / cid-race /
     ok(txid === 'FAKETXID2', '(d) wedged attempt still lands the tx after recovery');
     ok(recovers === 1 && order.join(',') === 'sign1,recover,sign2,send', '(d) wedge error triggered reconnect BEFORE re-send (' + order.join(',') + ')');
     ok(kit.isWedgeError(new Error(WEDGE)) && !kit.isWedgeError(new Error('user rejected')), '(d) isWedgeError matches REQUEST PENDING, not a plain reject');
+  }
+
+  // ---- (e) v15.2.3: RETRY is a NO-OP once the tx is ON THE WIRE -----------
+  // the verifier's live repro: FAST sign + SLOW confirm -> attemptStartedAt
+  // goes stale -> stalled=true -> the amber strip draws RETRY -> a second
+  // broadcast -> duplicate on-chain challenge with the stake locked TWICE.
+  {
+    let signCalls = 0, sends = 0;
+    const events = [];
+    let releaseSend;
+    const sendGate = new Promise((r) => { releaseSend = r; });
+    const h = kit.signSendManaged(
+      async (groups) => { signCalls++; return realSign(groups); }, // FAST sign
+      async () => mkTxns(),
+      {
+        label: 'SIGN & STAKE', nudgeMs: 200, timeoutMs: 60_000,
+        send: async () => { sends++; await sendGate; return 'WIRETX'; }, // the chain hangs (~3s below)
+        onEvent: (ev) => events.push(ev),
+      },
+    );
+    h.done.catch(() => {});
+    await sleep(150); // signed fast; now SENDING with the chain silent
+    let op = kit.activeSignOp();
+    ok(op !== null && op.phase === 'sending', '(e) fast sign + hanging send -> phase is sending');
+    await sleep(300); // PAST the nudge delay while the confirm is still hanging
+    op = kit.activeSignOp();
+    ok(op !== null && !op.stalled && !op.cancellable, '(e) NEVER stalled while sending — the strip cannot offer RETRY on the wire');
+    h.retry(); // the verifier's repro: RETRY during a slow confirmation
+    await sleep(150);
+    ok(sends === 1 && signCalls === 1, '(e) RETRY during sending is a NO-OP — NO second broadcast (sends=' + sends + ')');
+    ok(!events.includes('retry'), '(e) the guarded retry never entered the state machine');
+    releaseSend(); // the chain finally answers (~3s after broadcast)
+    const txid = await h.done;
+    ok(txid === 'WIRETX' && sends === 1, '(e) the one true broadcast confirms normally');
+  }
+
+  // ---- (f) v15.2.3: RETRY still works during the SIGNATURE wait ------------
+  {
+    let signCalls = 0, sends = 0;
+    const sign = async (groups) => {
+      signCalls++;
+      if (signCalls === 1) return never(); // attempt 1: the wallet is silent
+      return realSign(groups);
+    };
+    const h = kit.signSendManaged(sign, async () => mkTxns(), { label: 'SIGN & STAKE', nudgeMs: 200, timeoutMs: 60_000, send: async () => { sends++; return 'RETRYOK'; } });
+    await sleep(300); // stalled while WAITING FOR THE SIGNATURE
+    const op = kit.activeSignOp();
+    ok(op !== null && op.phase === 'signing' && op.stalled, '(f) still stalled during the signature wait (strip intact there)');
+    h.retry();
+    const txid = await h.done;
+    ok(txid === 'RETRYOK' && signCalls === 2 && sends === 1, '(f) RETRY during the signature wait still re-issues and lands');
   }
 
   // ---- v15.2.1 composition: cid-race 400 -> rebuild + re-send -------------
