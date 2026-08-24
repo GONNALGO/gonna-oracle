@@ -30,12 +30,37 @@
   "app_address": "GISV2JNJTT7XCOQFN7BBLKPT3HQKXAUSFKCODTYQ7U7B2XJ2BIMAQIBNM4",
   "bootstrap_txid": "IWIUGC7T6BWRCSJYLH2Y3JDG3FWUR2ZFAPMJ4ZDATQOMWDH7YCRQ",
   "smoke_v2": {
-    "duel_create_cid": 9,
-    "duel_create_txid": "7R5I3ZHIGXZZYL3RFLOGA7XHIOZCQBNC6EEJ5F6KPKRBOBFKXTVA",
-    "duel_join_txid": "FMTILKFND66OL6HCZRMABOI626IEC3WQ6T33VNEDGVM7WCXCEVEA",
-    "duel_forfeit_claimable_after": 1787585314,
+    "duel_create_cid": 15,
+    "duel_create_txid": "UOAXKPGKLZ5A5NM7RWEM2CPUL7KL67CRMMC6FY4GHNRK6YJU7UAQ",
+    "duel_join_txid": "IYO53AD625BBXWF6LTF3UQHJFGWXGOM5BCGJNXD7JXUBN6G37A7A",
+    "duel_forfeit_claimable_after": 1787593714,
     "rumble_cid": 10,
     "rumble_spawn_txid": "BZJB5YBXOAAZB4MXN32MIOJBVEH5EZPVMPKROFECEEKC76ZRHPEA",
     "rumble_deadline": 1787605200
+  },
+  "v1524_live": {
+    "note": "v15.2.4 live QA cycles \u2014 full duels resolved THROUGH THE UI PATH (QA keys only; founder funds untouched)",
+    "joiner_wins": {
+      "cid": 16,
+      "create_txid": "SQCKYGVNX3EZ37TK5SNJ22VAAMCPIPYIJPMGMUORVXNLWSB663LA",
+      "join_txid": "SGYRCHFE7HT54CNYXM233VBZTLB4PZNHTKVVTTDTTLJPGG4Y2YFQ",
+      "submit_txid": "6T3RMOU74S3R727IULQ5BYQ2XV3HI7F6HXTDNWBXWIWWXWHIFFRA",
+      "resolve_txid": "2J6OMCH5GDIQ2MPNCXFT27SKMUBQ7PYXDTMSMELFRMMWXPAIKEGA",
+      "winner": "PLAYER_B (joiner)",
+      "payout_micro": 1900000,
+      "fee_micro": 100000,
+      "mbr_refund_microalgo": 358200
+    },
+    "creator_wins": {
+      "cid": 17,
+      "create_txid": "56ECW5V3UAXQ4B5GXXSNYFKPSLKTHIA5YQZHG5MDQFUXGSVC7XLA",
+      "join_txid": "MQFGLJBQBUYZIEEGZQBABEQJJO5DDORATBIVS2YW4SPP5HVKQSIQ",
+      "submit_txid": "LULGGAJ3542N42F3AFIS4UMN2DERQBJP5L3MQJ2R6OCIVW6HLKHQ",
+      "resolve_txid": "QF4GCI3VHH6PBP3VXLW3AHU33VY4BRMKVQKKUGQZTFZCEHHS423A",
+      "winner": "PLAYER_A (creator)",
+      "payout_micro": 1900000,
+      "fee_micro": 100000,
+      "mbr_refund_microalgo": 358200
+    }
   }
 }

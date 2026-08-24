@@ -238,6 +238,12 @@ async function buildSubmitGroup(o) {
 }
 async function buildResolveGroup(o) {
   const a = await sdk();
+  const meta = await readMeta(o.cid);
+  if (!meta) throw new Error("card not found on chain (already settled?)");
+  const roster = await readPlayers(o.cid);
+  const enc = (pk) => a.encodeAddress(pk instanceof Uint8Array ? pk : Uint8Array.from(pk));
+  const creator = enc(meta.creator);
+  const accounts = [.../* @__PURE__ */ new Set([o.winner, creator, TREASURY_ADDR, ...roster.map((p) => enc(p.addr))])].filter((x) => x !== o.caller).slice(0, 4);
   const call = a.makeApplicationNoOpTxnFromObject({
     sender: o.caller,
     appIndex: ARENA_APP_ID,
@@ -248,7 +254,7 @@ async function buildResolveGroup(o) {
       await appArg(a, "byte[]", o.seedReveal),
       await appArg(a, "byte[]", o.verdictSig)
     ],
-    accounts: [o.winner, TREASURY_ADDR],
+    accounts,
     foreignAssets: [GONNA_ASA_TESTNET],
     boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
     suggestedParams: await baseParams(6e3)
@@ -622,6 +628,89 @@ function getResolveAt(cid) {
 function explorerTxUrl(txid) {
   return "https://testnet.explorer.perawallet.app/tx/" + txid;
 }
+var INDEXER_TESTNET = "https://testnet-idx.algonode.cloud";
+var EV_RESOLVED = "ae488dc6";
+var EV_FORFEITED = "24d3dd8b";
+var EV_REFUNDED = "0bfda53a";
+function hex4(b) {
+  return [...b.slice(0, 4)].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+function b64ToBytes(s) {
+  return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
+}
+function u64At(b, off) {
+  return Number(new DataView(b.buffer, b.byteOffset + off, 8).getBigUint64(0, false));
+}
+async function fetchArenaCloseEvents(maxPages = 5) {
+  const a = await sdk();
+  const ZERO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ";
+  const out = [];
+  let next = null;
+  for (let page = 0; page < maxPages; page++) {
+    const url = INDEXER_TESTNET + "/v2/transactions?application-id=" + ARENA_APP_ID + "&tx-type=appl&limit=100" + (next ? "&next=" + encodeURIComponent(next) : "");
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("indexer http " + r.status);
+    const j = await r.json();
+    for (const t of j.transactions ?? []) {
+      for (const log of t.logs ?? []) {
+        const b = b64ToBytes(log);
+        if (b.length < 12) continue;
+        const sel = hex4(b);
+        const at = (t["round-time"] ?? 0) * 1e3;
+        if (sel === EV_RESOLVED || sel === EV_FORFEITED) {
+          if (b.length < 60) continue;
+          const winnerRaw = a.encodeAddress(b.slice(12, 44));
+          out.push({
+            cid: u64At(b, 4),
+            kind: sel === EV_RESOLVED ? "resolved" : "forfeited",
+            winner: winnerRaw === ZERO ? null : winnerRaw,
+            payout: u64At(b, 44),
+            fee: u64At(b, 52),
+            reason: null,
+            txid: t.id,
+            round: t["confirmed-round"],
+            at
+          });
+        } else if (sel === EV_REFUNDED) {
+          if (b.length < 20) continue;
+          out.push({ cid: u64At(b, 4), kind: "refunded", winner: null, payout: 0, fee: 0, reason: u64At(b, 12), txid: t.id, round: t["confirmed-round"], at });
+        }
+      }
+    }
+    next = j["next-token"] ?? null;
+    if (!next) break;
+  }
+  return out;
+}
+var CARD_KEY = "gonna.arena.cards";
+var CARD_MEM_MAX = 200;
+function readCardMem() {
+  try {
+    return JSON.parse(window.localStorage.getItem(CARD_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+function rememberCard(m) {
+  try {
+    const all = readCardMem();
+    const prev = all[String(m.cid)];
+    all[String(m.cid)] = prev ? { ...prev, ...m, players: m.players.length > 0 ? m.players : prev.players, closedAt: m.closedAt ?? prev.closedAt } : m;
+    const keys = Object.keys(all);
+    if (keys.length > CARD_MEM_MAX) {
+      const sorted = keys.sort((x, y) => Number(x) - Number(y));
+      for (const k of sorted.slice(0, keys.length - CARD_MEM_MAX)) delete all[k];
+    }
+    window.localStorage.setItem(CARD_KEY, JSON.stringify(all));
+  } catch {
+  }
+}
+function rememberedCard(cid) {
+  return readCardMem()[String(cid)] ?? null;
+}
+function rememberedCards() {
+  return Object.values(readCardMem());
+}
 export {
   ALGOD_TESTNET,
   ARENA_APP_ID,
@@ -629,6 +718,7 @@ export {
   CONTINUE_FEE_MICRO,
   GONNA_ASA_TESTNET,
   GONNA_DECIMALS,
+  INDEXER_TESTNET,
   LEGACY_ARENA_APP_ID,
   OPUP_APP_ID,
   ORACLE_ADDR,
@@ -653,6 +743,7 @@ export {
   continueNote,
   contractVersion,
   explorerTxUrl,
+  fetchArenaCloseEvents,
   getResolveAt,
   getTxid,
   isCidRaceReject,
@@ -663,6 +754,9 @@ export {
   readPlayers,
   recordResolveAt,
   recordTxid,
+  rememberCard,
+  rememberedCard,
+  rememberedCards,
   scanChallengeIds,
   scoreMsg,
   sdk,

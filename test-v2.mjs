@@ -323,6 +323,213 @@ console.log('\n[C] TESTNET: real unsigned duel renders the seat clock (read-only
   }
 }
 
+// ================= PART D: TESTNET LIVE — full resolve cycles THROUGH THE UI =
+// v15.2.4 regression proof for the three live-E2E bugs:
+//   D1 JOINER WINS: fixture duel (A signed 1000, B joins + signs 2000), the
+//      RESOLVE tap goes through the REAL UI path (QA identity + dev oracle
+//      in the page, adapter builds the group). Pre-fix this 400'd with
+//      'unavailable Account' (creator missing from accounts). Asserts the
+//      exact on-chain settlement: B +1.9 GONNA, treasury +0.1, A +358200 µALGO.
+//   D2 CREATOR WINS: same through the UI as PLAYER_A (winner == creator ==
+//      caller — the degenerate account list).
+//   D3 EVENT HISTORY: a FRESH browser context (no card memory) still lists
+//      both battles in HISTORY from the v2 event log, deep-links a resolved
+//      cid to the terminal SETTLED card and a forfeited cid (on-chain cid 2)
+//      to the terminal FORFEIT card; the resolving browser's LEGACY counts
+//      the win from memory+events.
+// Secrets are read from the GITIGNORED deploy/testnet.secrets.json and are
+// NEVER printed. Live txids ARE printed (they are the audit trail).
+console.log('\n[D] TESTNET LIVE: creator-wins + joiner-wins resolved THROUGH THE UI PATH');
+{
+  const DEPLOY = '/mnt/agents/output/app/contracts/quantum-arena/deploy';
+  const secrets = JSON.parse(readFileSync(DEPLOY + '/testnet.secrets.json', 'utf8'));
+  const state = JSON.parse(readFileSync(DEPLOY + '/testnet.json', 'utf8'));
+  execFileSync('npx', ['esbuild', 'src/game/arena/testnetKit.ts', '--bundle', '--format=esm', '--platform=node', `--banner:js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);`, '--outfile=.tmp-kit-testv2.mjs'], { cwd: '/mnt/agents/output/app', stdio: 'pipe' });
+  const kit = await import('/mnt/agents/output/app/.tmp-kit-testv2.mjs');
+  const algosdk = (await import('algosdk')).default ?? (await import('algosdk'));
+  const nacl = (await import('tweetnacl')).default;
+  const A = algosdk.mnemonicToSecretKey(secrets.PLAYER_A.mnemonic);
+  const B = algosdk.mnemonicToSecretKey(secrets.PLAYER_B.mnemonic);
+  const oracleKp = nacl.sign.keyPair.fromSeed(algosdk.mnemonicToSecretKey(secrets.ORACLE.mnemonic).sk.slice(0, 32));
+  const algod = await kit.algodClient();
+  const STAKE = 1_000_000; // 1 GONNA a seat
+  const A_ADDR = A.addr.toString();
+  const B_ADDR = B.addr.toString();
+  const TRE = state.treasury_addr;
+
+  const gonnaBal = async (addr) => {
+    const i = await algod.accountInformation(addr).do();
+    const h = (i.assets ?? []).find((x) => Number(x.assetId ?? x['asset-id']) === kit.GONNA_ASA_TESTNET);
+    return h ? Number(h.amount) : 0;
+  };
+  const algoBal = async (addr) => Number((await algod.accountInformation(addr).do()).amount);
+  const send = async (txns, sk) => {
+    algosdk.assignGroupID(txns);
+    const r = await algod.sendRawTransaction(txns.map((t) => t.signTxn(sk))).do();
+    await algosdk.waitForConfirmation(algod, r.txid, 10);
+    return r.txid;
+  };
+  // fixture: A creates SIGNED (aScore), B joins + signs bScore -> full table,
+  // all signed -> immediately resolvable. Fixture only; RESOLVE goes via UI.
+  async function fixtureDuel(aScore, bScore) {
+    const cid = await kit.nextChallengeId();
+    const aSig = nacl.sign.detached(kit.scoreMsg(cid, 0, A.addr.publicKey, aScore), oracleKp.secretKey);
+    const txCreate = await send(await kit.buildCreateGroup({
+      creator: A_ADDR, cid, stakeBase: STAKE, seats: 1, durationSecs: 86400,
+      stageMode: 0, creatorScore: aScore, creatorScoreSig: aSig,
+    }), A.sk);
+    const txJoin = await send(await kit.buildJoinGroup({ joiner: B_ADDR, cid, stakeBase: STAKE }), B.sk);
+    const bSig = nacl.sign.detached(kit.scoreMsg(cid, 1, B.addr.publicKey, bScore), oracleKp.secretKey);
+    const txSubmit = await send(await kit.buildSubmitGroup({ player: B_ADDR, cid, score: bScore, sig: bSig }), B.sk);
+    return { cid, txCreate, txJoin, txSubmit };
+  }
+  // RESOLVE through the real UI: browser page, QA identity, dev oracle,
+  // tap the card, tap RESOLVE THE BATTLE, wait out the wallet+confirm cycle.
+  async function uiResolve(role, addr, cid) {
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 560 } });
+    await ctx.addInitScript(({ mn, a, omn }) => {
+      window.localStorage.setItem('gonna.qa', '1');
+      window.localStorage.setItem('gonna.qa.player.mn', mn);
+      window.localStorage.setItem('gonna.qa.player.addr', a);
+      window.localStorage.setItem('gonna.qa.oracle.mn', omn);
+      window.localStorage.setItem('gonna.arena.adapter', 'testnet');
+    }, { mn: secrets[role].mnemonic, a: addr, omn: secrets.ORACLE.mnemonic });
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => window.__gonna, null, { timeout: 15000 });
+    await page.evaluate(() => window.__gonna.debugOpenArena());
+    await page.waitForFunction(
+      (id) => window.__gonna.arenaInfo.screen === 'board' && window.__gonna.arenaInfo.mine.some((m) => m.id === id),
+      cid, { timeout: 30000 },
+    );
+    await tapHot(page, 'chip:' + cid);
+    await page.waitForFunction(() => window.__gonna.arenaInfo.screen === 'versus', null, { timeout: 8000 });
+    await sleep(400);
+    await tapHot(page, 'resolve');
+    await page.waitForFunction(() => !window.__gonna.arenaInfo.busy, null, { timeout: 120000 });
+    await sleep(500);
+    const i = await info(page);
+    const txid = await page.evaluate((id) => (JSON.parse(window.localStorage.getItem('gonna.arena.txids') ?? '{}'))[String(id)] ?? null, cid);
+    return { ctx, page, i, txid };
+  }
+
+  // ---- D1: JOINER WINS (the critical pre-fix failure) ----------------------
+  const d1 = await fixtureDuel(1000, 2000);
+  console.log('  fixture D1 cid=' + d1.cid + ' create=' + d1.txCreate + ' join=' + d1.txJoin + ' submit=' + d1.txSubmit);
+  const pre1 = { bG: await gonnaBal(B_ADDR), treG: await gonnaBal(TRE), aA: await algoBal(A_ADDR) };
+  const r1 = await uiResolve('PLAYER_B', B_ADDR, d1.cid);
+  ok(r1.txid !== null, 'D1 resolve txid recorded (UI path)');
+  ok(r1.i.err === '', 'D1 NO error toast after a successful joiner-wins resolve' + (r1.i.err ? ' — got: ' + r1.i.err : ''));
+  ok(r1.i.current && r1.i.current.status === 'resolved', 'D1 card terminal RESOLVED in the UI (no STATE SYNC PENDING)');
+  ok(r1.i.current && r1.i.current.winner === B_ADDR, 'D1 winner is PLAYER_B (the joiner)');
+  await r1.page.screenshot({ path: SHOTS + '/v2-d1-joiner-wins-resolved.png' });
+  const post1 = { bG: await gonnaBal(B_ADDR), treG: await gonnaBal(TRE), aA: await algoBal(A_ADDR) };
+  ok(post1.bG - pre1.bG === 1_900_000, 'D1 B received pot-5% = 1900000 microGONNA (got ' + (post1.bG - pre1.bG) + ')');
+  ok(post1.treG - pre1.treG === 100_000, 'D1 treasury fee = 100000 microGONNA (got ' + (post1.treG - pre1.treG) + ')');
+  ok(post1.aA - pre1.aA === 358_200, 'D1 creator MBR refunded 358200 microALGO (got ' + (post1.aA - pre1.aA) + ')');
+  // memory-paired history + LEGACY in the SAME browser (card memory lives in
+  // its localStorage — a fresh context would be the event-only path)
+  await r1.page.evaluate(() => window.__gonna.debugOpenArena());
+  const histOk1 = await r1.page
+    .waitForFunction((id) => window.__gonna.arenaInfo.history.some((h) => h.id === id), d1.cid, { timeout: 60000 })
+    .then(() => true)
+    .catch(() => false);
+  const h1 = await info(r1.page);
+  const e1 = h1.history.find((h) => h.id === d1.cid);
+  ok(histOk1 && e1 && e1.claimed === true, 'D1 settled card visible in HISTORY (event + memory)');
+  const legOk1 = await r1.page
+    .waitForFunction(() => (window.__gonna.arenaInfo.legacy?.wins ?? 0) >= 1, null, { timeout: 30000 })
+    .then(() => true)
+    .catch(() => false);
+  ok(legOk1, 'D1 MY LEGACY counts the win for PLAYER_B (wins=' + ((await info(r1.page)).legacy?.wins ?? '?') + ')');
+  console.log('  D1 RESOLVE txid=' + r1.txid + ' (JOINER B won: +1900000 microGONNA, treasury +100000, creator MBR +358200)');
+  await r1.ctx.close();
+
+  // ---- D2: CREATOR WINS (winner == creator == caller) ----------------------
+  const d2 = await fixtureDuel(3000, 2000);
+  console.log('  fixture D2 cid=' + d2.cid + ' create=' + d2.txCreate + ' join=' + d2.txJoin + ' submit=' + d2.txSubmit);
+  const pre2 = { aG: await gonnaBal(A_ADDR), treG: await gonnaBal(TRE), aA: await algoBal(A_ADDR) };
+  const r2 = await uiResolve('PLAYER_A', A_ADDR, d2.cid);
+  ok(r2.txid !== null, 'D2 resolve txid recorded (UI path)');
+  ok(r2.i.err === '', 'D2 NO error toast after a successful creator-wins resolve' + (r2.i.err ? ' — got: ' + r2.i.err : ''));
+  ok(r2.i.current && r2.i.current.status === 'resolved' && r2.i.current.winner === A_ADDR, 'D2 card terminal RESOLVED, winner is PLAYER_A (creator)');
+  await r2.page.screenshot({ path: SHOTS + '/v2-d2-creator-wins-resolved.png' });
+  const post2 = { aG: await gonnaBal(A_ADDR), treG: await gonnaBal(TRE), aA: await algoBal(A_ADDR) };
+  ok(post2.aG - pre2.aG === 1_900_000, 'D2 A received pot-5% = 1900000 microGONNA (got ' + (post2.aG - pre2.aG) + ')');
+  ok(post2.treG - pre2.treG === 100_000, 'D2 treasury fee = 100000 microGONNA (got ' + (post2.treG - pre2.treG) + ')');
+  // A is ALSO the resolve caller here: +358200 MBR minus the 10000 µALGO
+  // group fees he paid (6000 call + 4x1000 OpUp) = 348200 net
+  ok(post2.aA - pre2.aA === 358_200 - 10_000, 'D2 creator MBR refunded 358200 microALGO net of the 10000 caller fees (got ' + (post2.aA - pre2.aA) + ')');
+  console.log('  D2 RESOLVE txid=' + r2.txid + ' (CREATOR A won: +1900000 microGONNA, treasury +100000, MBR +358200)');
+  await r2.ctx.close();
+
+  // ---- D3: EVENT-ONLY paths (FRESH browser: no card memory at all) ---------
+  {
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 560 } });
+    await ctx.addInitScript(({ mn, a }) => {
+      window.localStorage.setItem('gonna.qa', '1');
+      window.localStorage.setItem('gonna.qa.player.mn', mn);
+      window.localStorage.setItem('gonna.qa.player.addr', a);
+      window.localStorage.setItem('gonna.arena.adapter', 'testnet');
+    }, { mn: secrets.PLAYER_A.mnemonic, a: A_ADDR });
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    // D3a: HISTORY lists BOTH settled duels from the v2 event log alone
+    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => window.__gonna, null, { timeout: 15000 });
+    await page.evaluate(() => window.__gonna.debugOpenArena());
+    const histOk3 = await page
+      .waitForFunction(
+        (ids) => ids.every((id) => window.__gonna.arenaInfo.history.some((h) => h.id === id)),
+        [d1.cid, d2.cid], { timeout: 60000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    const h3 = await info(page);
+    ok(histOk3 && (h3.history.find((h) => h.id === d1.cid)?.winner.length ?? 0) > 0, 'D3a HISTORY lists D1 from the EVENT LOG (fresh browser, no memory)');
+    ok(histOk3 && (h3.history.find((h) => h.id === d2.cid)?.winner.length ?? 0) > 0, 'D3a HISTORY lists D2 from the EVENT LOG');
+    await page.screenshot({ path: SHOTS + '/v2-d3-event-history.png' });
+    await ctx.close();
+  }
+  {
+    // D3b: deep-link a RESOLVED cid -> terminal SETTLED card (was a 404)
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 560 } });
+    await ctx.addInitScript(() => { window.localStorage.setItem('gonna.arena.adapter', 'testnet'); });
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(BASE + '?arena=testnet&duel=' + d1.cid, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => window.__gonna, null, { timeout: 15000 });
+    const dlOk = await page
+      .waitForFunction(() => window.__gonna.arenaInfo.screen === 'versus' && window.__gonna.arenaInfo.current, null, { timeout: 30000 })
+      .then(() => true)
+      .catch(() => false);
+    const i = await info(page);
+    ok(dlOk && i.current && i.current.id === d1.cid && i.current.status === 'resolved', 'D3b deep-link to a CLOSED cid renders the terminal SETTLED card (no 404)');
+    ok(dlOk && i.current && i.current.winner === B_ADDR, 'D3b terminal card names the real winner from the event');
+    ok(!i.hots.some((h) => h.id === 'resolve' || h.id === 'submit' || h.id === 'accept'), 'D3b terminal card has NO live actions');
+    await page.screenshot({ path: SHOTS + '/v2-d3-deeplink-settled.png' });
+    await ctx.close();
+  }
+  {
+    // D3c: deep-link the on-chain FORFEITED cid 2 -> terminal FORFEIT card
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 560 } });
+    await ctx.addInitScript(() => { window.localStorage.setItem('gonna.arena.adapter', 'testnet'); });
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(BASE + '?arena=testnet&duel=2', { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => window.__gonna, null, { timeout: 15000 });
+    const dlOk = await page
+      .waitForFunction(() => window.__gonna.arenaInfo.screen === 'versus' && window.__gonna.arenaInfo.current, null, { timeout: 30000 })
+      .then(() => true)
+      .catch(() => false);
+    const i = await info(page);
+    ok(dlOk && i.current && i.current.status === 'closed' && i.current.forfeited === true, 'D3c deep-link forfeited cid=2 renders FORFEIT - SEAT CLOCK EXPIRED');
+    await page.screenshot({ path: SHOTS + '/v2-d3-deeplink-forfeit.png' });
+    await ctx.close();
+  }
+}
+
 console.log('\n=================================================');
 console.log('RESULT: ' + passed + '/' + total + ' passed');
 if (pageErrors.length > 0) console.log('PAGE ERRORS:\n' + pageErrors.join('\n'));

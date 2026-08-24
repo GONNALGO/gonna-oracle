@@ -115,7 +115,9 @@ export interface ArenaAdapter {
   myChallenges(address: string): Promise<Challenge[]>;
   listHistory(): Promise<HistoryEntry[]>;
   legacyStats(address: string): Promise<LegacyStats>;
-  // v10.4: deep-link lookup (?duel=<id>) — any visibility, live cards only
+  // v10.4: deep-link lookup (?duel=<id>) — any visibility. v15.2.4: on
+  // testnet a CLOSED cid resolves to its terminal card (v2 event log + card
+  // memory) — settled battles are never a 404.
   getChallenge(id: number): Promise<Challenge | null>;
   // v15: the id the NEXT create will get — a creator's DESCENT run is seeded
   // by it, so the joiner later fights the exact same waves. Read-only.
@@ -872,28 +874,61 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const vsig = await devOracleSign(await kit.verdictMsg(id, Number(meta.stageMode), extra, entries));
     let best = entries[0];
     for (const e of entries) if (e.score > best.score) best = e;
+    const tie = entries.filter((e) => e.score === best.score).length > 1; // contract: perfect tie -> refund all, zero fee
+    const winnerAddr = tie ? null : a.encodeAddress(best.addr);
+    // v15.2.4 (BUG-2): the v2 contract DELETES both boxes inside resolve, so
+    // a post-confirm re-read legitimately finds NOTHING — that is the SUCCESS
+    // case, not a sync error. Snapshot the card BEFORE the send (the earlyClose
+    // pattern, v15.2.1) and hand back the terminal state on confirm.
+    const before = await this.toChallenge(id, meta, players);
     const txns = await kit.buildResolveGroup({
       caller: me.address,
       cid: id,
       stageIdx: 0, // TODO(mainnet): chosen stage for MODE_STAGE_IDX
       seedReveal: new Uint8Array(0), // MODE_FULL: empty reveal
       verdictSig: vsig,
-      winner: a.encodeAddress(best.addr),
+      winner: a.encodeAddress(best.addr), // tie: contract ignores it, refunds all
     });
     kit.recordTxid(id, await kit.signSend(me.sign, txns, { label: 'RESOLVE' }));
     kit.recordResolveAt(id, Date.now()); // honest "x AGO" for the HISTORY
+    // card memory for the event-paired history (BUG-3): exact settlement math
+    // (protocol_fee = floor(pot * 500 / 10_000))
+    const potMicro = Number(meta.stake) * Number(meta.seatsTaken);
+    const feeMicro = tie ? 0 : Math.floor(potMicro * 0.05);
+    kit.rememberCard({
+      cid: id,
+      creator: before.creator,
+      stake: before.stake,
+      seatsTotal: before.seatsTotal,
+      stageMode: before.stageMode,
+      stageIdx: before.stageIdx,
+      deadline: before.deadline,
+      players: before.players.map((p) => ({ address: p.address, score: p.score, signed: !!p.signed })),
+      closedKind: tie ? 'refunded' : 'resolved',
+      winner: winnerAddr,
+      payout: (potMicro - feeMicro) / 1e6,
+      fee: feeMicro / 1e6,
+      closedAt: Date.now(),
+    });
     const ch = await this.getChallenge(id);
-    // NEVER synthesize a verdict: the UI may only crown a winner the CHAIN
-    // has confirmed (status RESOLVED + winner read from the box).
-    if (!ch || ch.status !== 'resolved') throw new Error('RESOLVE CONFIRMED - STATE SYNC PENDING, REOPEN THE CARD');
-    return ch;
+    // box still readable would mean the tx landed but state didn't move —
+    // contradictory after a confirmed v2 resolve; trust the CONFIRMED tx
+    // (waitForConfirmation inside signSend) and return the terminal copy.
+    if (ch && ch.status === 'resolved') return ch;
+    return { ...before, status: tie ? 'closed' : 'resolved', winner: winnerAddr };
   }
 
+  // v15.2.4 audit: claim() is a TERMINAL close path on v2 (deletes both
+  // boxes, ChallengeRefunded reason 1). It never re-read the box after the
+  // send, so there is no false-error bug here — it only needs the card
+  // memory write so the deep-link/history survive the box deletion.
   async claim(id: number, _address: string): Promise<ClaimResult> {
     const me = await this.id();
+    const before = await this.getChallenge(id);
     const txns = await kit.buildClaimGroup({ caller: me.address, cid: id });
     const txid = await kit.signSend(me.sign, txns, { label: 'CLAIM' });
     kit.recordTxid(id, txid);
+    if (before) this.rememberClosed(before, 'refunded', null, 0, 0);
     return { payout: 0, txid }; // exact payout lives in the inner txns
   }
 
@@ -903,6 +938,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
   async claimForfeit(id: number, _address: string): Promise<ClaimResult> {
     const me = await this.id();
     const a = await kit.sdk();
+    const before = await this.getChallenge(id); // snapshot for the card memory (v15.2.4)
     const players = await kit.readPlayers(id);
     const myPk = a.decodeAddress(me.address).publicKey;
     const mySeat = players.findIndex((p) => sameAddr(asBytes(p.addr), myPk));
@@ -919,6 +955,11 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const txid = await kit.signSend(me.sign, txns, { label: 'CLAIM FORFEIT' });
     kit.recordTxid(id, txid);
     kit.recordResolveAt(id, Date.now()); // terminal: honest "x AGO" everywhere
+    if (before) {
+      // contract: caller keeps own stake + 95% of the forfeited stake, 5% fee
+      const feeMicro = Math.floor(Number(before.stake * 1e6) * 0.05);
+      this.rememberClosed(before, 'forfeited', me.address, (before.stake * 1e6 - feeMicro) / 1e6, feeMicro / 1e6);
+    }
     return { payout: 0, txid }; // exact payout lives in the inner txns
   }
 
@@ -932,15 +973,112 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const txns = await kit.buildEarlyCloseGroup({ caller: me.address, cid: id });
     kit.recordTxid(id, await kit.signSend(me.sign, txns, { label: 'EARLY CLOSE' }));
     const ch = await this.getChallenge(id);
-    if (ch) return ch; // box still readable (unexpected) — return the truth
-    if (before) return { ...before, status: 'closed' };
+    if (ch && ch.status !== 'closed') return ch; // box still readable (unexpected) — return the truth
+    if (before) {
+      this.rememberClosed(before, 'refunded', null, 0, 0);
+      return { ...before, status: 'closed' };
+    }
     throw new Error('closed on-chain');
   }
 
   async getChallenge(id: number): Promise<Challenge | null> {
     const [meta, players] = await Promise.all([kit.readMeta(id), kit.readPlayers(id)]);
-    if (!meta) return null;
-    return this.toChallenge(id, meta, players);
+    if (meta) return this.toChallenge(id, meta, players);
+    // v15.2.4 (BUG-3): v2 deletes BOTH boxes on every terminal transition, so
+    // a missing box means SETTLED — never a 404. Rebuild the terminal card
+    // from the v2 event log (winner/payout/fee + real round-time), paired with
+    // this browser's card memory for stake/format/roster. Indexer down ->
+    // memory alone; fresh browser -> event alone; neither -> honest notfound.
+    const mem = kit.rememberedCard(id);
+    let ev: kit.ArenaCloseEvent | null = null;
+    try {
+      const events = await this.closeEvents(true);
+      ev = events.filter((e) => e.cid === id).sort((x, y) => y.round - x.round)[0] ?? null;
+    } catch { /* indexer unreachable — memory below still renders */ }
+    if (ev) return this.terminalChallenge(id, ev.kind, ev, mem);
+    if (mem && mem.closedKind) return this.terminalChallenge(id, mem.closedKind, null, mem);
+    return null; // truly unknown card
+  }
+
+  // terminal card reconstructed from a close event and/or card memory.
+  // kind 'resolved' with NO winner = perfect tie -> everyone refunded
+  // (v14.4 convention: refunded cards render 'closed').
+  private terminalChallenge(id: number, kind: 'resolved' | 'forfeited' | 'refunded', ev: kit.ArenaCloseEvent | null, mem: kit.CardMemory | null): Challenge {
+    const winner = (kind !== 'refunded' ? (ev?.winner ?? null) : null) ?? mem?.winner ?? null;
+    const settled = kind === 'resolved' && winner !== null;
+    const potMicro = ev ? ev.payout + ev.fee : mem ? Math.round((mem.payout + mem.fee) * 1e6) : 0;
+    const at = ev?.at ?? mem?.closedAt ?? Date.now();
+    const players =
+      mem && mem.players.length > 0
+        ? mem.players.map((p) => ({
+            address: p.address,
+            name: shortAddr(p.address),
+            score: p.score,
+            fighter: { skin: 'gonna', assetId: null, name: 'GONNA' },
+            accountType: 'ed25519' as AccountType,
+            signed: p.signed,
+          }))
+        : winner
+          ? [{ address: winner, name: shortAddr(winner), score: 0, fighter: { skin: 'gonna', assetId: null, name: 'GONNA' }, accountType: 'ed25519' as AccountType }]
+          : [];
+    const creator = mem?.creator ?? winner ?? '';
+    return {
+      id,
+      creator,
+      creatorName: creator ? shortAddr(creator) : '???',
+      creatorType: 'ed25519',
+      visibility: 'public',
+      format: mem && mem.seatsTotal > 2 ? 'open' : 'duel', // event-only: duels are the live format
+      seatsTotal: mem?.seatsTotal ?? 2,
+      durationSecs: 0,
+      stageMode: mem?.stageMode ?? 'full',
+      stageIdx: mem?.stageIdx ?? null,
+      // event-only cards know the POT, not the per-seat stake — show half the
+      // pot (duel) rather than inventing a number the chain never said
+      stake: mem?.stake ?? potMicro / 1e6 / 2,
+      createdAt: at - 3600_000, // unknown — the settle time is the real record
+      deadline: mem?.deadline ?? at,
+      status: settled ? 'resolved' : 'closed',
+      players,
+      winner,
+      pot: potMicro / 1e6 || (mem ? mem.stake * Math.max(1, mem.players.length) : 0),
+      forfeited: kind === 'forfeited',
+    };
+  }
+
+  // event-log cache: the indexer answers once per 30s per session at most
+  // (board refreshes and deep-links share it); failures fall back to the
+  // last good answer so an indexer hiccup never blanks the HISTORY.
+  private eventsCache: { at: number; events: kit.ArenaCloseEvent[] } | null = null;
+  private async closeEvents(force = false): Promise<kit.ArenaCloseEvent[]> {
+    if (!force && this.eventsCache && Date.now() - this.eventsCache.at < 30_000) return this.eventsCache.events;
+    try {
+      const events = await kit.fetchArenaCloseEvents();
+      this.eventsCache = { at: Date.now(), events };
+      return events;
+    } catch {
+      console.debug('[arena] indexer unreachable — HISTORY falls back to live boxes + card memory');
+      return this.eventsCache?.events ?? [];
+    }
+  }
+
+  // card memory write for a close path this browser just confirmed
+  private rememberClosed(c: Challenge, kind: 'resolved' | 'forfeited' | 'refunded', winner: string | null, payout: number, fee: number): void {
+    kit.rememberCard({
+      cid: c.id,
+      creator: c.creator,
+      stake: c.stake,
+      seatsTotal: c.seatsTotal,
+      stageMode: c.stageMode,
+      stageIdx: c.stageIdx,
+      deadline: c.deadline,
+      players: c.players.map((p) => ({ address: p.address, score: p.score, signed: !!p.signed })),
+      closedKind: kind,
+      winner,
+      payout,
+      fee,
+      closedAt: Date.now(),
+    });
   }
 
   // v15: the on-chain counter = the id the next create will get (DESCENT seed)
@@ -971,7 +1109,28 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const ids = await kit.scanChallengeIds();
     // parallel box reads — sequential is 2 round-trips PER card, way too slow
     const all = await Promise.all(ids.map((cid) => this.getChallenge(cid).catch(() => null)));
-    return all.filter((c): c is Challenge => c !== null);
+    const live = all.filter((c): c is Challenge => c !== null);
+    // v15.2.4 (BUG-3): remember every LIVE card this browser sees — when it
+    // later closes, the v2 event pairs with this memory for stake/format/
+    // roster (the event alone only names cid/winner/payout/fee)
+    for (const c of live) {
+      kit.rememberCard({
+        cid: c.id,
+        creator: c.creator,
+        stake: c.stake,
+        seatsTotal: c.seatsTotal,
+        stageMode: c.stageMode,
+        stageIdx: c.stageIdx,
+        deadline: c.deadline,
+        players: c.players.map((p) => ({ address: p.address, score: p.score, signed: !!p.signed })),
+        closedKind: null,
+        winner: c.winner,
+        payout: 0,
+        fee: 0,
+        closedAt: null,
+      });
+    }
+    return live;
   }
 
   async listOpenChallenges(): Promise<Challenge[]> {
@@ -982,26 +1141,87 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     return (await this.scan()).filter((c) => c.creator === address || c.players.some((p) => p.address === address));
   }
 
+  // v15.2.4 (BUG-3): v2 terminal transitions DELETE both boxes, so HISTORY
+  // = live settled boxes (none on v2, kept for safety) UNION the v2 event log
+  // (ChallengeResolved / ChallengeForfeited — the permanent on-chain record)
+  // UNION this browser's card memory (covers indexer lag and offline).
+  // Pure REFUNDED events (claim / early-close / catastrophe / tie leg) are
+  // NOT battles — no entry (a tie still shows via its ChallengeResolved).
+  // The LEGACY app (769688298) emits NO events: its history stays whatever
+  // this browser remembers — documented in the header of testnetKit.ts.
   async listHistory(): Promise<HistoryEntry[]> {
-    const settled = (await this.scan()).filter((c) => c.status === 'resolved' || c.status === 'claimed');
-    return settled.map((c) => ({
-      id: c.id,
-      stake: c.stake,
-      pot: c.pot,
-      format: c.format,
-      stageMode: c.stageMode,
-      stageIdx: c.stageIdx,
-      seats: c.seatsTotal,
-      winner: c.winner ?? '',
-      winnerName: c.winner ? shortAddr(c.winner) : '???',
-      players: c.players.map((p) => ({ address: p.address, name: p.name, score: p.score })),
-      // no on-chain timestamp: if WE resolved it the real time is remembered
-      // locally (recordResolveAt); else the deadline is the closest truth,
-      // clamped to now so a card resolved early never shows "1M AGO" from a
-      // FUTURE deadline
-      resolvedAt: kit.getResolveAt(c.id) ?? Math.min(c.deadline, Date.now()),
-      claimed: c.status === 'claimed',
-    }));
+    const byId = new Map<number, HistoryEntry>();
+    // algod hiccup must never blank the HISTORY — events + memory still render
+    const settled = await this.scan()
+      .then((all) => all.filter((c) => c.status === 'resolved' || c.status === 'claimed'))
+      .catch(() => [] as Challenge[]);
+    for (const c of settled) {
+      byId.set(c.id, {
+        id: c.id,
+        stake: c.stake,
+        pot: c.pot,
+        format: c.format,
+        stageMode: c.stageMode,
+        stageIdx: c.stageIdx,
+        seats: c.seatsTotal,
+        winner: c.winner ?? '',
+        winnerName: c.winner ? shortAddr(c.winner) : '???',
+        players: c.players.map((p) => ({ address: p.address, name: p.name, score: p.score })),
+        // no on-chain timestamp: if WE resolved it the real time is remembered
+        // locally (recordResolveAt); else the deadline is the closest truth,
+        // clamped to now so a card resolved early never shows "1M AGO" from a
+        // FUTURE deadline
+        resolvedAt: kit.getResolveAt(c.id) ?? Math.min(c.deadline, Date.now()),
+        claimed: c.status === 'claimed',
+      });
+    }
+    for (const ev of await this.closeEvents()) {
+      if (ev.kind === 'refunded') continue; // not a battle (see header)
+      const mem = kit.rememberedCard(ev.cid);
+      byId.set(ev.cid, {
+        id: ev.cid,
+        // event knows pot = payout + fee exactly; stake/seats come from the
+        // card memory when this browser witnessed the card, else duel estimate
+        stake: mem?.stake ?? (ev.payout + ev.fee) / 1e6 / 2,
+        pot: (ev.payout + ev.fee) / 1e6,
+        format: mem && mem.seatsTotal > 2 ? 'open' : 'duel',
+        stageMode: mem?.stageMode ?? 'full',
+        stageIdx: mem?.stageIdx ?? null,
+        seats: mem?.seatsTotal ?? 2,
+        winner: ev.winner ?? '',
+        winnerName: ev.winner ? shortAddr(ev.winner) : 'TIE - ALL REFUNDED',
+        players:
+          mem && mem.players.length > 0
+            ? mem.players.map((p) => ({ address: p.address, name: shortAddr(p.address), score: p.score }))
+            : ev.winner
+              ? [{ address: ev.winner, name: shortAddr(ev.winner), score: 0 }]
+              : [],
+        // the indexer round-time IS the real settle timestamp — better than
+        // the local record and available on every browser, not just ours
+        resolvedAt: ev.at || (kit.getResolveAt(ev.cid) ?? Date.now()),
+        claimed: true, // testnet pays INSIDE resolve/forfeit — a settled match is a PAID match
+      });
+    }
+    // terminal cards the indexer has not caught yet (or never will, offline):
+    // this browser's own closes are never lost
+    for (const mem of kit.rememberedCards()) {
+      if (!mem.closedKind || mem.closedKind === 'refunded' || byId.has(mem.cid)) continue;
+      byId.set(mem.cid, {
+        id: mem.cid,
+        stake: mem.stake,
+        pot: mem.payout + mem.fee || mem.stake * Math.max(1, mem.players.length),
+        format: mem.seatsTotal > 2 ? 'open' : 'duel',
+        stageMode: mem.stageMode,
+        stageIdx: mem.stageIdx,
+        seats: mem.seatsTotal,
+        winner: mem.winner ?? '',
+        winnerName: mem.winner ? shortAddr(mem.winner) : '???',
+        players: mem.players.map((p) => ({ address: p.address, name: shortAddr(p.address), score: p.score })),
+        resolvedAt: mem.closedAt ?? kit.getResolveAt(mem.cid) ?? mem.deadline,
+        claimed: true,
+      });
+    }
+    return [...byId.values()].sort((x, y) => y.resolvedAt - x.resolvedAt);
   }
 
   async legacyStats(address: string): Promise<LegacyStats> {
@@ -1013,6 +1233,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     let bestWin = 0;
     for (const h of hist) {
       if (!h.players.some((p) => p.address === address)) continue;
+      if (!h.winner) continue; // tie: everyone refunded — no scar, no W, no L
       if (h.winner === address) {
         wins++;
         const takes = splitPot(h.stake, h.pot, h.players.length).takes;

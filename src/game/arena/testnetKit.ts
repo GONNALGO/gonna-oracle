@@ -300,8 +300,33 @@ export async function buildSubmitGroup(o: { player: string; cid: number; score: 
 // NOTE: resolve(cid, stage_idx, seed_reveal, verdict_sig) — for MODE_FULL the
 // seed_reveal arg must be EMPTY; the ZERO_32 extra is derived inside the
 // contract and only lives in the ORACLE verdict message, not in the call.
+//
+// v15.2.4 ACCOUNT AVAILABILITY (the joiner-wins fix): resolve pays
+//   - the winner        (inner axfer of the pot, via _pay_gonna)
+//   - the treasury      (inner axfer of the 5% fee + redirect sink)
+//   - the CREATOR       (inner ALGO pay of the 358,200 µALGO MBR back)
+//   - EVERY roster leg  (tie path: _pay_gonna to each signed player)
+// Every inner receiver must be AVAILABLE to the app call. The old group sent
+// accounts=[winner, treasury] only — when the JOINER won, the creator's MBR
+// refund had no account reference and algod 400'd the whole group
+// ('unavailable Account'). Cross-checked against the working script resolve
+// 7TPQ5B7JEJWZ2P53W4XYLHWAUWL2KPGJX7DWLFIGKE655ZPIZYFQ (accounts = winner,
+// treasury, creator). Per AUDIT-v2 the $GONNA ASA in foreign-assets covers
+// every AssetHoldingGet under AVM v9 (either side available), so the ASA
+// slot below unlocks ALL holding checks; the accounts array carries the
+// receivers. Txn.accounts is capped at 4: winner + creator + treasury +
+// first roster player covers every duel (roster = {creator, winner-or-
+// joiner}); on bigger tables the caller and dedup squeeze out extra slots.
 export async function buildResolveGroup(o: { caller: string; cid: number; stageIdx: number; seedReveal: Uint8Array; verdictSig: Uint8Array; winner: string }): Promise<Txn[]> {
   const a = await sdk();
+  const meta = await readMeta(o.cid);
+  if (!meta) throw new Error('card not found on chain (already settled?)');
+  const roster = await readPlayers(o.cid);
+  const enc = (pk: Uint8Array | number[]) => a.encodeAddress(pk instanceof Uint8Array ? pk : Uint8Array.from(pk));
+  const creator = enc(meta.creator);
+  const accounts = [...new Set([o.winner, creator, TREASURY_ADDR, ...roster.map((p) => enc(p.addr))])]
+    .filter((x) => x !== o.caller) // the sender is always available — save the slot
+    .slice(0, 4);
   const call = a.makeApplicationNoOpTxnFromObject({
     sender: o.caller, appIndex: ARENA_APP_ID,
     appArgs: [
@@ -311,7 +336,7 @@ export async function buildResolveGroup(o: { caller: string; cid: number; stageI
       await appArg(a, 'byte[]', o.seedReveal),
       await appArg(a, 'byte[]', o.verdictSig),
     ],
-    accounts: [o.winner, TREASURY_ADDR],
+    accounts,
     foreignAssets: [GONNA_ASA_TESTNET],
     boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)],
     suggestedParams: await baseParams(6000),
@@ -803,4 +828,142 @@ export function getResolveAt(cid: number): number | null {
 }
 export function explorerTxUrl(txid: string): string {
   return 'https://testnet.explorer.perawallet.app/tx/' + txid;
+}
+
+// ============================================================================
+// v15.2.4 — ON-CHAIN HISTORY via ARC-28 events (BUG-3).
+// The v2 contract DELETES both boxes on every terminal transition, so a
+// box scan can never see a settled card. The permanent record is the event
+// log: ChallengeResolved / ChallengeForfeited / ChallengeRefunded (arc56
+// QuantumArena.json). The LEGACY app (769688298, v1) emits NO events —
+// cross-app history is: v2 events + this browser's card memory below.
+// ============================================================================
+export const INDEXER_TESTNET = 'https://testnet-idx.algonode.cloud';
+
+// selectors = sha512_256('<Name>(<args>)')[0..4] — pinned from the arc56 spec
+const EV_RESOLVED = 'ae488dc6'; // ChallengeResolved(uint64,address,uint64,uint64)
+const EV_FORFEITED = '24d3dd8b'; // ChallengeForfeited(uint64,address,uint64,uint64)
+const EV_REFUNDED = '0bfda53a'; // ChallengeRefunded(uint64,uint64)
+
+export interface ArenaCloseEvent {
+  cid: number;
+  kind: 'resolved' | 'forfeited' | 'refunded';
+  winner: string | null; // null on tie (zero address) and on refund-only
+  payout: number; // microGONNA to the winner (0 on tie/refund)
+  fee: number; // microGONNA to the treasury
+  reason: number | null; // ChallengeRefunded: 1 claim, 2 early-close, 3 tie, 4 catastrophe
+  txid: string;
+  round: number;
+  at: number; // ms epoch (indexer round-time — the real settle timestamp)
+}
+
+function hex4(b: Uint8Array): string {
+  return [...b.slice(0, 4)].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+function b64ToBytes(s: string): Uint8Array {
+  return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
+}
+function u64At(b: Uint8Array, off: number): number {
+  return Number(new DataView(b.buffer, b.byteOffset + off, 8).getBigUint64(0, false));
+}
+
+// One indexer page scan of the v2 app's appl txns; decodes the close events.
+// Indexer down/lagging -> THROWS; callers catch and fall back to card memory.
+export async function fetchArenaCloseEvents(maxPages = 5): Promise<ArenaCloseEvent[]> {
+  const a = await sdk();
+  const ZERO = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ';
+  const out: ArenaCloseEvent[] = [];
+  let next: string | null = null;
+  for (let page = 0; page < maxPages; page++) {
+    const url =
+      INDEXER_TESTNET + '/v2/transactions?application-id=' + ARENA_APP_ID + '&tx-type=appl&limit=100' + (next ? '&next=' + encodeURIComponent(next) : '');
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('indexer http ' + r.status);
+    const j = (await r.json()) as {
+      transactions?: { id: string; 'confirmed-round': number; 'round-time'?: number; logs?: string[] }[];
+      'next-token'?: string;
+    };
+    for (const t of j.transactions ?? []) {
+      for (const log of t.logs ?? []) {
+        const b = b64ToBytes(log);
+        if (b.length < 12) continue;
+        const sel = hex4(b);
+        const at = (t['round-time'] ?? 0) * 1000;
+        if (sel === EV_RESOLVED || sel === EV_FORFEITED) {
+          if (b.length < 60) continue;
+          const winnerRaw = a.encodeAddress(b.slice(12, 44));
+          out.push({
+            cid: u64At(b, 4),
+            kind: sel === EV_RESOLVED ? 'resolved' : 'forfeited',
+            winner: winnerRaw === ZERO ? null : winnerRaw,
+            payout: u64At(b, 44),
+            fee: u64At(b, 52),
+            reason: null,
+            txid: t.id,
+            round: t['confirmed-round'],
+            at,
+          });
+        } else if (sel === EV_REFUNDED) {
+          if (b.length < 20) continue;
+          out.push({ cid: u64At(b, 4), kind: 'refunded', winner: null, payout: 0, fee: 0, reason: u64At(b, 12), txid: t.id, round: t['confirmed-round'], at });
+        }
+      }
+    }
+    next = j['next-token'] ?? null;
+    if (!next) break;
+  }
+  return out;
+}
+
+// ---------- per-challenge CARD MEMORY (pairs with the event log) ----------
+// The event gives cid/winner/payout/fee; the MEMORY gives stake/format/stage/
+// roster for cards THIS browser witnessed (created, joined, scanned, closed).
+// Indexer offline -> memory alone still renders terminal cards; a fresh
+// browser -> events alone still render (stake/seats fall back to the pot).
+export interface CardMemory {
+  cid: number;
+  creator: string;
+  stake: number; // display $GONNA per seat
+  seatsTotal: number; // UI convention (joiner seats + creator)
+  stageMode: 'full' | 'single' | 'random';
+  stageIdx: number | null;
+  deadline: number; // ms epoch
+  players: { address: string; score: number; signed: boolean }[];
+  closedKind: 'resolved' | 'forfeited' | 'refunded' | null;
+  winner: string | null;
+  payout: number; // display $GONNA the winner took (0 pre-close)
+  fee: number;
+  closedAt: number | null; // ms epoch
+}
+const CARD_KEY = 'gonna.arena.cards';
+const CARD_MEM_MAX = 200;
+
+function readCardMem(): Record<string, CardMemory> {
+  try {
+    return JSON.parse(window.localStorage.getItem(CARD_KEY) ?? '{}') as Record<string, CardMemory>;
+  } catch {
+    return {};
+  }
+}
+export function rememberCard(m: CardMemory): void {
+  try {
+    const all = readCardMem();
+    const prev = all[String(m.cid)];
+    // merge: a later close never blanks fields an earlier snapshot knew
+    all[String(m.cid)] = prev
+      ? { ...prev, ...m, players: m.players.length > 0 ? m.players : prev.players, closedAt: m.closedAt ?? prev.closedAt }
+      : m;
+    const keys = Object.keys(all);
+    if (keys.length > CARD_MEM_MAX) {
+      const sorted = keys.sort((x, y) => Number(x) - Number(y));
+      for (const k of sorted.slice(0, keys.length - CARD_MEM_MAX)) delete all[k];
+    }
+    window.localStorage.setItem(CARD_KEY, JSON.stringify(all));
+  } catch { /* no storage */ }
+}
+export function rememberedCard(cid: number): CardMemory | null {
+  return readCardMem()[String(cid)] ?? null;
+}
+export function rememberedCards(): CardMemory[] {
+  return Object.values(readCardMem());
 }
