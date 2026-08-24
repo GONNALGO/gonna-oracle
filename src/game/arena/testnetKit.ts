@@ -477,21 +477,279 @@ export function isCidRaceReject(e: unknown): boolean {
   return /status 400/i.test(msg) && /logic eval error/i.test(msg);
 }
 
-export async function signSend(sign: TxSignFn, txns: Txn[]): Promise<string> {
+// ============================================================================
+// v15.2.2 — RETRY/CANCEL on every wallet signing wait.
+// The founder's wedge: Pera shows "Please launch Pera Wallet..." forever, the
+// WC session then answers "REQUEST PENDING: THE USER CURRENTLY HAS ANOTHER
+// REQUEST THAT IS IN PROGRESS" — and the degen's sealed run is hostage. Now:
+//   - after SIGN_NUDGE_MS of silence the UI shows an amber strip with
+//     RETRY (re-issue the request) and CANCEL (abort cleanly — the sealed
+//     score/draft is NEVER touched);
+//   - RETRY first HEALS a wedged session (cancel/abandon the pending request
+//     + force a fresh WC reconnect — the cure that worked for the founder),
+//     then re-sends; create re-reads next_challenge_id and re-signs with the
+//     oracle before the re-send (v15.2.1 cid-race composition);
+//   - the 90s SIGN_TIMEOUT_MS stays the final backstop with the red toast.
+// No silent hangs, ever.
+// ============================================================================
+export const SIGN_NUDGE_MS = 12_000; // amber RETRY/CANCEL strip after this
+export const SIGN_CANCEL_MSG = 'SIGNING CANCELLED - SEALED SCORE SAFE';
+
+export class SignCancelled extends Error {
+  constructor() {
+    super(SIGN_CANCEL_MSG);
+    this.name = 'SignCancelled';
+  }
+}
+// message-prefix check too: HMR/module duplication must not defeat instanceof
+export function isSignCancel(e: unknown): boolean {
+  return e instanceof SignCancelled || String((e as { message?: string } | null)?.message ?? e).toUpperCase().startsWith('SIGNING CANCELLED');
+}
+
+// WalletConnect wedge signatures (Pera verbatim: "REQUEST PENDING: THE USER
+// CURRENTLY HAS ANOTHER REQUEST THAT IS IN PROGRESS.")
+export function isWedgeError(e: unknown): boolean {
+  const msg = String((e as { message?: string } | null)?.message ?? e);
+  return /request pending/i.test(msg) || /another request/i.test(msg) || /session currently connected/i.test(msg);
+}
+
+// the wallet layer (arenaWallet.ts -> testnetWallet.ts) registers the wedge
+// cure: drop the wedged WC session and force a FRESH reconnect BEFORE the
+// re-send (disconnect+reconnect is what un-wedged the founder's Pera)
+let recoverHook: (() => Promise<void>) | null = null;
+export function setSignRecoverHook(fn: (() => Promise<void>) | null): void {
+  recoverHook = fn;
+}
+
+export type SignPhase = 'building' | 'signing' | 'sending';
+
+// live view of the in-flight wallet sign op — the UI polls this every frame
+export interface SignOpView {
+  readonly label: string;
+  readonly attempt: number; // 1-based; bumps on every manual RETRY
+  readonly attemptStartedAt: number; // ms epoch of the CURRENT attempt
+  readonly phase: SignPhase;
+  readonly recovering: boolean; // wedge cure in flight (disconnect/reconnect)
+  readonly stalled: boolean; // silent for >= nudgeMs (draw the amber strip)
+  readonly cancellable: boolean; // false once the tx is on the wire
+  retry(): void;
+  cancel(): void;
+}
+
+let activeOp: SignOpView | null = null;
+export function activeSignOp(): SignOpView | null {
+  return activeOp;
+}
+
+export interface SignManagedOpts {
+  label?: string; // console/UI breadcrumb ('SIGN & STAKE', 'ACCEPT & STAKE', ...)
+  nudgeMs?: number; // strip delay (default SIGN_NUDGE_MS) — harness-tunable
+  timeoutMs?: number; // hard per-attempt timeout (default SIGN_TIMEOUT_MS)
+  rebuildOnRetry?: boolean; // manual RETRY re-invokes buildTxns (create: fresh cid + oracle sig)
+  autoRetries?: number; // automatic re-sends on the cid-race 400 (default 0)
+  wedgeRetries?: number; // automatic recover+re-send on a wedged-session error (default 1)
+  recover?: () => Promise<void>; // per-call wedge cure override (default: global hook)
+  send?: (signed: Uint8Array[]) => Promise<string>; // TEST HOOK: algod send+confirm
+  onEvent?: (ev: string) => void; // TEST HOOK: 'attempt' | 'retry' | 'recover' | 'cancel' | 'sent'
+}
+
+export interface SignHandle {
+  done: Promise<string>; // txid; rejects on failure / SignCancelled
+  retry(): void;
+  cancel(): void;
+}
+
+class StaleAttempt extends Error {} // a newer attempt (or a cancel) owns the outcome
+
+async function defaultSend(signed: Uint8Array[]): Promise<string> {
   const a = await sdk();
   const algod = await algodClient();
-  a.assignGroupID(txns);
-  console.debug('[arena] sign start — atomic group of ' + txns.length + ' txn(s)');
-  const signed = await withTimeout(
-    sign([txns.map((txn) => ({ txn, signers: [txn.sender.toString()] }))]),
-    SIGN_TIMEOUT_MS,
-    SIGN_TIMEOUT_MSG,
-  );
-  console.debug('[arena] wallet response — ' + signed.length + ' signed txn(s)');
   const res = (await algod.sendRawTransaction(signed).do()) as { txid: string };
   console.debug('[arena] tx sent: ' + res.txid + ' — waiting for confirmation');
   await a.waitForConfirmation(algod, res.txid, 10);
   return res.txid;
+}
+
+export function signSendManaged(sign: TxSignFn, buildTxns: () => Promise<Txn[]>, opts: SignManagedOpts = {}): SignHandle {
+  const nudgeMs = opts.nudgeMs ?? SIGN_NUDGE_MS;
+  const timeoutMs = opts.timeoutMs ?? SIGN_TIMEOUT_MS;
+  const label = opts.label ?? 'SIGN';
+  let gen = 0;
+  let settled = false;
+  let cancelled = false;
+  let recovering = false;
+  let attempt = 0;
+  let attemptStartedAt = 0;
+  let phase: SignPhase = 'building';
+  let wedged = false; // the last attempt reported/looked like a wedged WC session
+  let autoLeft = opts.autoRetries ?? 0;
+  let wedgeLeft = opts.wedgeRetries ?? 1;
+  let resolveDone!: (txid: string) => void;
+  let rejectDone!: (e: Error) => void;
+  const done = new Promise<string>((res, rej) => {
+    resolveDone = res;
+    rejectDone = rej;
+  });
+
+  const view: SignOpView = {
+    label,
+    get attempt() {
+      return attempt;
+    },
+    get attemptStartedAt() {
+      return attemptStartedAt;
+    },
+    get phase() {
+      return phase;
+    },
+    get recovering() {
+      return recovering;
+    },
+    get stalled() {
+      return !settled && attemptStartedAt > 0 && Date.now() - attemptStartedAt >= nudgeMs;
+    },
+    get cancellable() {
+      return !settled && phase !== 'sending';
+    },
+    retry: () => {
+      void doRetry();
+    },
+    cancel: () => doCancel(),
+  };
+  activeOp = view;
+
+  function settleOk(txid: string): void {
+    settled = true;
+    if (activeOp === view) activeOp = null;
+    resolveDone(txid);
+  }
+  function settleErr(e: Error): void {
+    settled = true;
+    if (activeOp === view) activeOp = null;
+    rejectDone(e);
+  }
+
+  async function attemptRun(myGen: number): Promise<void> {
+    const live = (): void => {
+      if (cancelled) throw new SignCancelled();
+      if (myGen !== gen) throw new StaleAttempt();
+    };
+    try {
+      live();
+      phase = 'building';
+      attemptStartedAt = Date.now();
+      const txns = await buildTxns();
+      live();
+      const a = await sdk();
+      a.assignGroupID(txns);
+      console.debug('[arena] ' + label + ' — sign start, atomic group of ' + txns.length + ' txn(s) (attempt ' + attempt + ')');
+      phase = 'signing';
+      attemptStartedAt = Date.now(); // the nudge clock measures WALLET silence
+      const signed = await withTimeout(
+        sign([txns.map((txn) => ({ txn, signers: [txn.sender.toString()] }))]),
+        timeoutMs,
+        SIGN_TIMEOUT_MSG,
+      );
+      live();
+      console.debug('[arena] wallet response — ' + signed.length + ' signed txn(s)');
+      phase = 'sending'; // on the wire: CANCEL goes away, the truth is algod's
+      const txid = await (opts.send ? opts.send(signed) : defaultSend(signed));
+      live();
+      opts.onEvent?.('sent');
+      settleOk(txid);
+    } catch (e) {
+      if (e instanceof StaleAttempt) return; // discarded attempt — stay silent
+      if (cancelled || e instanceof SignCancelled) {
+        settleErr(new SignCancelled());
+        return;
+      }
+      // v15.2.1 cid race: algod 400 'logic eval error' on a create whose cid
+      // moved mid-approval — rebuild (fresh cid + fresh oracle sig) and re-send
+      if (autoLeft > 0 && opts.rebuildOnRetry && isCidRaceReject(e)) {
+        autoLeft--;
+        wedged = false;
+        console.debug('[arena] create 400 (stale cid race) — retrying with fresh challenge id');
+        opts.onEvent?.('cid-race-retry');
+        return attemptRun(myGen);
+      }
+      // wedged WC session reported BY the wallet layer ("REQUEST PENDING:
+      // ...ANOTHER REQUEST ... IN PROGRESS") — heal (fresh session) and
+      // re-send ONCE automatically; a second wedge settles VISIBLY.
+      if (isWedgeError(e) && wedgeLeft > 0) {
+        wedgeLeft--;
+        wedged = true;
+        console.debug('[arena] wedged wallet session — recovering before re-send');
+        opts.onEvent?.('wedge');
+        const rec = opts.recover ?? recoverHook;
+        if (rec) {
+          recovering = true;
+          opts.onEvent?.('recover');
+          try {
+            await rec();
+          } catch (re) {
+            console.debug('[arena] session recovery failed (re-sending anyway):', re);
+          }
+          recovering = false;
+        }
+        if (cancelled) {
+          settleErr(new SignCancelled());
+          return;
+        }
+        if (myGen !== gen) return; // a manual RETRY already took over
+        attempt++;
+        opts.onEvent?.('attempt');
+        return attemptRun(myGen);
+      }
+      if (isWedgeError(e)) wedged = true; // remembered for the next manual RETRY
+      settleErr(e instanceof Error ? e : new Error(String(e)));
+    }
+  }
+
+  async function doRetry(): Promise<void> {
+    if (settled || cancelled) return;
+    opts.onEvent?.('retry');
+    // RETRY while an attempt is in flight means the wallet never answered (or
+    // reported a wedged session): HEAL FIRST — abandon the pending request and
+    // force a fresh WC session reconnect — THEN re-send.
+    const hanging = attemptStartedAt > 0; // the strip only exists pre-settle
+    const rec = opts.recover ?? recoverHook;
+    if ((wedged || hanging) && rec) {
+      recovering = true;
+      opts.onEvent?.('recover');
+      try {
+        await rec();
+      } catch (e) {
+        // recovery itself failed (user closed the pairing, wallet gone) —
+        // re-send ANYWAY: the signer chain falls back or fails VISIBLY
+        console.debug('[arena] session recovery failed (re-sending anyway):', e);
+      }
+      recovering = false;
+    }
+    if (settled || cancelled) return; // a late wallet answer during recovery wins
+    gen++; // abandon the previous attempt — its late answer is NEVER sent
+    wedged = false;
+    attempt++;
+    opts.onEvent?.('attempt');
+    void attemptRun(gen);
+  }
+
+  function doCancel(): void {
+    if (settled || cancelled) return;
+    opts.onEvent?.('cancel');
+    cancelled = true;
+    gen++; // any in-flight attempt goes stale: a late wallet answer is discarded
+    settleErr(new SignCancelled());
+  }
+
+  attempt = 1;
+  opts.onEvent?.('attempt');
+  void attemptRun(gen);
+  return { done, retry: view.retry, cancel: view.cancel };
+}
+
+// one-shot signer (fixed group): the managed op WITHOUT the cid-race rebuild
+export async function signSend(sign: TxSignFn, txns: Txn[], opts: SignManagedOpts = {}): Promise<string> {
+  return signSendManaged(sign, () => Promise.resolve(txns), opts).done;
 }
 
 // per-challenge txid memory (for VIEW ON CHAIN)

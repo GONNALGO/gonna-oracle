@@ -487,6 +487,21 @@ export async function disconnect(): Promise<void> {
   sessionEnded();
 }
 
+// v15.2.2 WEDGE CURE (gate side): the gate session doubles as the ARENA
+// signer on the staging path. When WalletConnect wedges (Pera "REQUEST
+// PENDING"), drop ONLY the session and re-pair fresh — identity, eligibility
+// and the sealed draft all survive; the next sign lands on a clean session.
+export async function recoverSession(): Promise<void> {
+  if (mock || !state.provider) return; // CI mock / never connected: nothing to heal
+  const provider = state.provider;
+  const w = (activeLibKey ? libs[activeLibKey] : null) ?? libs[libKey(provider)];
+  try {
+    if (w) await w.disconnect();
+  } catch { /* wedged beyond disconnect — connect() rebuilds below */ }
+  state.address = null; // force connect() past its idempotent early-return
+  await connect(provider); // reconnect-first, then a FRESH pairing
+}
+
 // boot: restore a persisted session (mock in CI, wallet lib otherwise)
 export function init(): void {
   lsDel(KEY_ELIG_OLD); // v9.0.2: drop the poisoned pre-unwrap cache once

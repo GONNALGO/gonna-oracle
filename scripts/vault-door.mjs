@@ -24,6 +24,7 @@ const STALE_ENTRIES = [
   'index-BGUn4qk0.js', // v15.1.1 — retired by QuantumArena v2 testnet build
   'index-DBDXN5_2.js', // v15.2 (QuantumArena v2) — retired by v15.2.1
   'index-Co757ms-.js', // v15.2.1-rc — superseded by the final v15.2.1 build
+  'index-DdIuTq7q.js', // v15.2.1 — retired by v15.2.2 (RETRY/CANCEL + real NFT shelf)
 ];
 const KEY = [0x47,0x4f,0x4e,0x4e,0x41,0x56,0x45,0x52,0x53,0x45,0x21,0x42,0x59,0x5a,0x41,0x4e,0x54,0x49,0x4e,0x45]; // GONNAVERSE!BYZANTINE
 

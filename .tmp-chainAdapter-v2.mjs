@@ -2626,21 +2626,192 @@ function isCidRaceReject(e) {
   const msg = String(e?.message ?? e);
   return /status 400/i.test(msg) && /logic eval error/i.test(msg);
 }
-async function signSend(sign, txns) {
+var SIGN_NUDGE_MS = 12e3;
+var SIGN_CANCEL_MSG = "SIGNING CANCELLED - SEALED SCORE SAFE";
+var SignCancelled = class extends Error {
+  constructor() {
+    super(SIGN_CANCEL_MSG);
+    this.name = "SignCancelled";
+  }
+};
+function isWedgeError(e) {
+  const msg = String(e?.message ?? e);
+  return /request pending/i.test(msg) || /another request/i.test(msg) || /session currently connected/i.test(msg);
+}
+var recoverHook = null;
+var activeOp = null;
+var StaleAttempt = class extends Error {
+};
+async function defaultSend(signed) {
   const a = await sdk();
   const algod = await algodClient();
-  a.assignGroupID(txns);
-  console.debug("[arena] sign start \u2014 atomic group of " + txns.length + " txn(s)");
-  const signed = await withTimeout(
-    sign([txns.map((txn) => ({ txn, signers: [txn.sender.toString()] }))]),
-    SIGN_TIMEOUT_MS,
-    SIGN_TIMEOUT_MSG
-  );
-  console.debug("[arena] wallet response \u2014 " + signed.length + " signed txn(s)");
   const res = await algod.sendRawTransaction(signed).do();
   console.debug("[arena] tx sent: " + res.txid + " \u2014 waiting for confirmation");
   await a.waitForConfirmation(algod, res.txid, 10);
   return res.txid;
+}
+function signSendManaged(sign, buildTxns, opts = {}) {
+  const nudgeMs = opts.nudgeMs ?? SIGN_NUDGE_MS;
+  const timeoutMs = opts.timeoutMs ?? SIGN_TIMEOUT_MS;
+  const label = opts.label ?? "SIGN";
+  let gen = 0;
+  let settled = false;
+  let cancelled = false;
+  let recovering = false;
+  let attempt = 0;
+  let attemptStartedAt = 0;
+  let phase = "building";
+  let wedged = false;
+  let autoLeft = opts.autoRetries ?? 0;
+  let wedgeLeft = opts.wedgeRetries ?? 1;
+  let resolveDone;
+  let rejectDone;
+  const done = new Promise((res, rej) => {
+    resolveDone = res;
+    rejectDone = rej;
+  });
+  const view = {
+    label,
+    get attempt() {
+      return attempt;
+    },
+    get attemptStartedAt() {
+      return attemptStartedAt;
+    },
+    get phase() {
+      return phase;
+    },
+    get recovering() {
+      return recovering;
+    },
+    get stalled() {
+      return !settled && attemptStartedAt > 0 && Date.now() - attemptStartedAt >= nudgeMs;
+    },
+    get cancellable() {
+      return !settled && phase !== "sending";
+    },
+    retry: () => {
+      void doRetry();
+    },
+    cancel: () => doCancel()
+  };
+  activeOp = view;
+  function settleOk(txid) {
+    settled = true;
+    if (activeOp === view) activeOp = null;
+    resolveDone(txid);
+  }
+  function settleErr(e) {
+    settled = true;
+    if (activeOp === view) activeOp = null;
+    rejectDone(e);
+  }
+  async function attemptRun(myGen) {
+    const live = () => {
+      if (cancelled) throw new SignCancelled();
+      if (myGen !== gen) throw new StaleAttempt();
+    };
+    try {
+      live();
+      phase = "building";
+      attemptStartedAt = Date.now();
+      const txns = await buildTxns();
+      live();
+      const a = await sdk();
+      a.assignGroupID(txns);
+      console.debug("[arena] " + label + " \u2014 sign start, atomic group of " + txns.length + " txn(s) (attempt " + attempt + ")");
+      phase = "signing";
+      attemptStartedAt = Date.now();
+      const signed = await withTimeout(
+        sign([txns.map((txn) => ({ txn, signers: [txn.sender.toString()] }))]),
+        timeoutMs,
+        SIGN_TIMEOUT_MSG
+      );
+      live();
+      console.debug("[arena] wallet response \u2014 " + signed.length + " signed txn(s)");
+      phase = "sending";
+      const txid = await (opts.send ? opts.send(signed) : defaultSend(signed));
+      live();
+      opts.onEvent?.("sent");
+      settleOk(txid);
+    } catch (e) {
+      if (e instanceof StaleAttempt) return;
+      if (cancelled || e instanceof SignCancelled) {
+        settleErr(new SignCancelled());
+        return;
+      }
+      if (autoLeft > 0 && opts.rebuildOnRetry && isCidRaceReject(e)) {
+        autoLeft--;
+        wedged = false;
+        console.debug("[arena] create 400 (stale cid race) \u2014 retrying with fresh challenge id");
+        opts.onEvent?.("cid-race-retry");
+        return attemptRun(myGen);
+      }
+      if (isWedgeError(e) && wedgeLeft > 0) {
+        wedgeLeft--;
+        wedged = true;
+        console.debug("[arena] wedged wallet session \u2014 recovering before re-send");
+        opts.onEvent?.("wedge");
+        const rec = opts.recover ?? recoverHook;
+        if (rec) {
+          recovering = true;
+          opts.onEvent?.("recover");
+          try {
+            await rec();
+          } catch (re) {
+            console.debug("[arena] session recovery failed (re-sending anyway):", re);
+          }
+          recovering = false;
+        }
+        if (cancelled) {
+          settleErr(new SignCancelled());
+          return;
+        }
+        if (myGen !== gen) return;
+        attempt++;
+        opts.onEvent?.("attempt");
+        return attemptRun(myGen);
+      }
+      if (isWedgeError(e)) wedged = true;
+      settleErr(e instanceof Error ? e : new Error(String(e)));
+    }
+  }
+  async function doRetry() {
+    if (settled || cancelled) return;
+    opts.onEvent?.("retry");
+    const hanging = attemptStartedAt > 0;
+    const rec = opts.recover ?? recoverHook;
+    if ((wedged || hanging) && rec) {
+      recovering = true;
+      opts.onEvent?.("recover");
+      try {
+        await rec();
+      } catch (e) {
+        console.debug("[arena] session recovery failed (re-sending anyway):", e);
+      }
+      recovering = false;
+    }
+    if (settled || cancelled) return;
+    gen++;
+    wedged = false;
+    attempt++;
+    opts.onEvent?.("attempt");
+    void attemptRun(gen);
+  }
+  function doCancel() {
+    if (settled || cancelled) return;
+    opts.onEvent?.("cancel");
+    cancelled = true;
+    gen++;
+    settleErr(new SignCancelled());
+  }
+  attempt = 1;
+  opts.onEvent?.("attempt");
+  void attemptRun(gen);
+  return { done, retry: view.retry, cancel: view.cancel };
+}
+async function signSend(sign, txns, opts = {}) {
+  return signSendManaged(sign, () => Promise.resolve(txns), opts).done;
 }
 var TX_KEY = "gonna.arena.txids";
 function recordTxid(cid, txid) {
@@ -3245,10 +3416,12 @@ var TestnetArenaAdapter = class {
     }
     const score = cfg.sealedScore ?? qaScore();
     const myPk = a.decodeAddress(me.address).publicKey;
-    for (let attempt = 1; ; attempt++) {
+    let builtCid = -1;
+    const build = async () => {
       const cid = await nextChallengeId();
       const sig = await devOracleSignScore(scoreMsg(cid, 0, myPk, score));
-      const txns = await buildCreateGroup({
+      builtCid = cid;
+      return buildCreateGroup({
         creator: me.address,
         cid,
         stakeBase,
@@ -3259,26 +3432,24 @@ var TestnetArenaAdapter = class {
         creatorScore: score,
         creatorScoreSig: sig
       });
-      try {
-        recordTxid(cid, await signSend(me.sign, txns));
-        const ch = await this.getChallenge(cid);
-        if (!ch) throw new Error("created on-chain but box unreadable");
-        return ch;
-      } catch (e) {
-        if (attempt < 3 && isCidRaceReject(e)) {
-          console.debug("[arena] create 400 (stale cid race) \u2014 retrying with fresh challenge id, attempt " + (attempt + 1) + "/3");
-          continue;
-        }
-        throw e;
-      }
-    }
+    };
+    const txid = await signSendManaged(me.sign, build, {
+      label: "SIGN & STAKE",
+      rebuildOnRetry: true,
+      autoRetries: 2
+      // up to 3 sends total on the cid-race 400 (was attempt<3)
+    }).done;
+    recordTxid(builtCid, txid);
+    const ch = await this.getChallenge(builtCid);
+    if (!ch) throw new Error("created on-chain but box unreadable");
+    return ch;
   }
   async join(id, _player) {
     const me = await this.id();
     const meta = await readMeta(id);
     if (!meta) throw new Error("card not found on chain");
     const txns = await buildJoinGroup({ joiner: me.address, cid: id, stakeBase: Number(meta.stake) });
-    recordTxid(id, await signSend(me.sign, txns));
+    recordTxid(id, await signSend(me.sign, txns, { label: "ACCEPT & STAKE" }));
     const ch = await this.getChallenge(id);
     if (!ch) throw new Error("joined but box unreadable");
     return ch;
@@ -3296,7 +3467,7 @@ var TestnetArenaAdapter = class {
       opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : void 0
     );
     const txns = await buildSubmitGroup({ player: me.address, cid: id, score, sig });
-    recordTxid(id, await signSend(me.sign, txns));
+    recordTxid(id, await signSend(me.sign, txns, { label: "SIGN SCORE" }));
     const ch = await this.getChallenge(id);
     if (!ch) throw new Error("submitted but box unreadable");
     return ch;
@@ -3328,7 +3499,7 @@ var TestnetArenaAdapter = class {
       verdictSig: vsig,
       winner: a.encodeAddress(best.addr)
     });
-    recordTxid(id, await signSend(me.sign, txns));
+    recordTxid(id, await signSend(me.sign, txns, { label: "RESOLVE" }));
     recordResolveAt(id, Date.now());
     const ch = await this.getChallenge(id);
     if (!ch || ch.status !== "resolved") throw new Error("RESOLVE CONFIRMED - STATE SYNC PENDING, REOPEN THE CARD");
@@ -3337,7 +3508,7 @@ var TestnetArenaAdapter = class {
   async claim(id, _address) {
     const me = await this.id();
     const txns = await buildClaimGroup({ caller: me.address, cid: id });
-    const txid = await signSend(me.sign, txns);
+    const txid = await signSend(me.sign, txns, { label: "CLAIM" });
     recordTxid(id, txid);
     return { payout: 0, txid };
   }
@@ -3360,7 +3531,7 @@ var TestnetArenaAdapter = class {
       throw new Error("SEAT CLOCK STILL RUNNING - FORFEIT AT " + new Date(expiresAt * 1e3).toISOString().slice(11, 16) + " UTC");
     }
     const txns = await buildClaimForfeitGroup({ caller: me.address, cid: id, seat: target });
-    const txid = await signSend(me.sign, txns);
+    const txid = await signSend(me.sign, txns, { label: "CLAIM FORFEIT" });
     recordTxid(id, txid);
     recordResolveAt(id, Date.now());
     return { payout: 0, txid };
@@ -3369,7 +3540,7 @@ var TestnetArenaAdapter = class {
     const me = await this.id();
     const before = await this.getChallenge(id);
     const txns = await buildEarlyCloseGroup({ caller: me.address, cid: id });
-    recordTxid(id, await signSend(me.sign, txns));
+    recordTxid(id, await signSend(me.sign, txns, { label: "EARLY CLOSE" }));
     const ch = await this.getChallenge(id);
     if (ch) return ch;
     if (before) return { ...before, status: "closed" };

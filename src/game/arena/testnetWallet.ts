@@ -122,6 +122,26 @@ export async function disconnectTestnetPera(): Promise<void> {
   } catch { /* no storage */ }
 }
 
+// v15.2.2 WEDGE CURE (the founder's fix, automated): a Pera modal stuck on
+// "Please launch Pera Wallet..." followed by "REQUEST PENDING: THE USER
+// CURRENTLY HAS ANOTHER REQUEST THAT IS IN PROGRESS" means the WalletConnect
+// session is wedged. The cure that worked by hand: DISCONNECT (drops the
+// pending request) then RECONNECT a fresh session — the next sign pairs clean.
+// Unlike disconnectTestnetPera() the stored address SURVIVES: identity is not
+// the problem, the session is.
+export async function recoverTestnetSession(): Promise<void> {
+  try {
+    const p = await peraInstance();
+    // disconnect can wedge too — never let the cure hang the RETRY
+    await withTimeout(p.disconnect(), PROBE_TIMEOUT_MS, 'disconnect timeout');
+  } catch {
+    pera = null; // instance wedged beyond disconnect — rebuild it from scratch
+  }
+  // fresh WC session: reconnectSession is empty after a disconnect, so this
+  // opens a NEW pairing (Pera app-switch / QR) and stores the account again
+  await connectTestnetPera();
+}
+
 // Pera-compatible atomic-group signer for the connected testnet account
 export async function peraSignFn(address: string): Promise<TxSignFn> {
   const p = await peraInstance();

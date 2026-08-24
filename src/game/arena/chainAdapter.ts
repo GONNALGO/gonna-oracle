@@ -790,10 +790,15 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     // moves next_challenge_id and algod 400s the group ('logic eval error:
     // assert failed ... ed25519verify_bare'). Re-read, re-sign, retry — a
     // fresh attempt is exact, a stale one can never confirm.
-    for (let attempt = 1; ; attempt++) {
+    // v15.2.2: the group is built LAZILY per attempt — a manual RETRY (or the
+    // automatic cid-race re-send) always re-reads next_challenge_id and
+    // re-signs with the oracle before going back to the wallet.
+    let builtCid = -1;
+    const build = async () => {
       const cid = await kit.nextChallengeId(); // oracle score sig is cid-bound
       const sig = await devOracleSignScore(kit.scoreMsg(cid, 0, myPk, score));
-      const txns = await kit.buildCreateGroup({
+      builtCid = cid;
+      return kit.buildCreateGroup({
         creator: me.address,
         cid,
         stakeBase,
@@ -804,19 +809,16 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         creatorScore: score,
         creatorScoreSig: sig,
       });
-      try {
-        kit.recordTxid(cid, await kit.signSend(me.sign, txns));
-        const ch = await this.getChallenge(cid);
-        if (!ch) throw new Error('created on-chain but box unreadable');
-        return ch;
-      } catch (e) {
-        if (attempt < 3 && kit.isCidRaceReject(e)) {
-          console.debug('[arena] create 400 (stale cid race) — retrying with fresh challenge id, attempt ' + (attempt + 1) + '/3');
-          continue;
-        }
-        throw e;
-      }
-    }
+    };
+    const txid = await kit.signSendManaged(me.sign, build, {
+      label: 'SIGN & STAKE',
+      rebuildOnRetry: true,
+      autoRetries: 2, // up to 3 sends total on the cid-race 400 (was attempt<3)
+    }).done;
+    kit.recordTxid(builtCid, txid);
+    const ch = await this.getChallenge(builtCid);
+    if (!ch) throw new Error('created on-chain but box unreadable');
+    return ch;
   }
 
   async join(id: number, _player: ChallengePlayer): Promise<Challenge> {
@@ -824,7 +826,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const meta = await kit.readMeta(id);
     if (!meta) throw new Error('card not found on chain');
     const txns = await kit.buildJoinGroup({ joiner: me.address, cid: id, stakeBase: Number(meta.stake) });
-    kit.recordTxid(id, await kit.signSend(me.sign, txns));
+    kit.recordTxid(id, await kit.signSend(me.sign, txns, { label: 'ACCEPT & STAKE' }));
     const ch = await this.getChallenge(id);
     if (!ch) throw new Error('joined but box unreadable');
     return ch;
@@ -844,7 +846,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : undefined,
     );
     const txns = await kit.buildSubmitGroup({ player: me.address, cid: id, score, sig });
-    kit.recordTxid(id, await kit.signSend(me.sign, txns));
+    kit.recordTxid(id, await kit.signSend(me.sign, txns, { label: 'SIGN SCORE' }));
     const ch = await this.getChallenge(id);
     if (!ch) throw new Error('submitted but box unreadable');
     return ch;
@@ -878,7 +880,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       verdictSig: vsig,
       winner: a.encodeAddress(best.addr),
     });
-    kit.recordTxid(id, await kit.signSend(me.sign, txns));
+    kit.recordTxid(id, await kit.signSend(me.sign, txns, { label: 'RESOLVE' }));
     kit.recordResolveAt(id, Date.now()); // honest "x AGO" for the HISTORY
     const ch = await this.getChallenge(id);
     // NEVER synthesize a verdict: the UI may only crown a winner the CHAIN
@@ -890,7 +892,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
   async claim(id: number, _address: string): Promise<ClaimResult> {
     const me = await this.id();
     const txns = await kit.buildClaimGroup({ caller: me.address, cid: id });
-    const txid = await kit.signSend(me.sign, txns);
+    const txid = await kit.signSend(me.sign, txns, { label: 'CLAIM' });
     kit.recordTxid(id, txid);
     return { payout: 0, txid }; // exact payout lives in the inner txns
   }
@@ -914,7 +916,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       throw new Error('SEAT CLOCK STILL RUNNING - FORFEIT AT ' + new Date(expiresAt * 1000).toISOString().slice(11, 16) + ' UTC');
     }
     const txns = await kit.buildClaimForfeitGroup({ caller: me.address, cid: id, seat: target });
-    const txid = await kit.signSend(me.sign, txns);
+    const txid = await kit.signSend(me.sign, txns, { label: 'CLAIM FORFEIT' });
     kit.recordTxid(id, txid);
     kit.recordResolveAt(id, Date.now()); // terminal: honest "x AGO" everywhere
     return { payout: 0, txid }; // exact payout lives in the inner txns
@@ -928,7 +930,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     // mock adapter), otherwise the UI screams a red toast over a good close.
     const before = await this.getChallenge(id);
     const txns = await kit.buildEarlyCloseGroup({ caller: me.address, cid: id });
-    kit.recordTxid(id, await kit.signSend(me.sign, txns));
+    kit.recordTxid(id, await kit.signSend(me.sign, txns, { label: 'EARLY CLOSE' }));
     const ch = await this.getChallenge(id);
     if (ch) return ch; // box still readable (unexpected) — return the truth
     if (before) return { ...before, status: 'closed' };

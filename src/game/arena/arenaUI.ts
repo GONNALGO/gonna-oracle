@@ -22,7 +22,8 @@ import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait } from '../skins';
 import type { SkinId } from '../skins';
 import { getArenaAdapter, arenaMode, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, splitPot } from './chainAdapter';
-import { explorerTxUrl, getTxid } from './testnetKit';
+import { activeSignOp, explorerTxUrl, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
+import type { SignOpView } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
 import { qaActive, qaScore } from './qaSigner';
 import type { Challenge, ChallengeConfig, FighterPick, HistoryEntry, LegacyStats, Visibility } from './chainAdapter';
@@ -39,6 +40,8 @@ const GRAY = '#8a8f9c';
 const DIM = '#5a5f6c';
 const RED = '#e23b3b';
 const PQCYAN = '#57c8d8';
+const AMBER = '#ffb02e'; // v15.2.2: the stuck-signing strip (never red, never white)
+const AMBER_DK = '#8a5a10';
 
 export type ArenaAction = { act: 'none' } | { act: 'move' } | { act: 'title' } | { act: 'run'; stageMode: 'full' | 'stage'; stageIdx: number; seedTag?: string; target?: number };
 
@@ -103,6 +106,7 @@ export class ArenaUI {
   private busy = false;
   private err = '';
   private errT = 0;
+  private errKind: 'err' | 'note' = 'err'; // note = amber cancel toast (not a failure)
   // board
   private cards: Challenge[] = [];
   private mine: Challenge[] = []; // v13: my open cards (creator or seated)
@@ -174,14 +178,28 @@ export class ArenaUI {
     }
   }
 
+  // v15.2.2: a CONNECTED wallet sees the TRUTH — base GONNA + its real
+  // eligibility NFTs, even when that is ZERO NFTs. MOCK_SHELF (GONNA 7/42
+  // OWNED) is demo dressing for wallet-less sessions ONLY — never fake
+  // holdings to a connected degen (the main game's CHOOSE YOUR FIGHTER
+  // already shows the truth; the arena shelf must agree).
+  private walletConnected(): boolean {
+    if (wallet.isConnected()) return true; // gate session (mainnet or mock QA)
+    if (arenaMode() === 'testnet') {
+      const a = arenaAddress(); // QA signer, Pera testnet, or adopted gate identity
+      return !(a.startsWith('ANON') || a.startsWith('DEGEN'));
+    }
+    return false;
+  }
+
   private fighterShelf(): FighterOpt[] {
-    const e = wallet.getEligibility();
-    if (wallet.isConnected() && e.nfts.length > 0) {
+    if (this.walletConnected()) {
+      const e = wallet.getEligibility();
       const opts: FighterOpt[] = [{ pick: { skin: 'gonna', assetId: null, name: 'GONNA' }, owned: true }];
       for (const n of e.nfts) opts.push({ pick: { skin: n.skin, assetId: n.id, name: n.name }, owned: true });
       return opts;
     }
-    return MOCK_SHELF; // mock: owned flags drive the QA flow
+    return MOCK_SHELF; // no wallet: demo shelf, owned flags drive the QA flow
   }
 
   open(deepDuel?: number | null): void {
@@ -297,6 +315,13 @@ export class ArenaUI {
         this.closeCopyOverlay();
         return { act: 'move' };
       }
+      // v15.2.2: ESC during a wallet sign wait CANCELS the sign — it must
+      // NEVER fall through to back() and discard the sealed run
+      const op = this.busy ? activeSignOp() : null;
+      if (op && op.cancellable) {
+        op.cancel();
+        return { act: 'move' };
+      }
       return this.back();
     }
     if (this.hots.length > 0) {
@@ -394,7 +419,17 @@ export class ArenaUI {
     // the reason (logic eval error / overspend / ...) on screen.
     this.err = msg.toUpperCase().slice(0, 96);
     this.errT = 240; // 4s — a wallet error must be READABLE, not a blink
+    this.errKind = 'err';
     console.debug('[arena] UI error:', this.err);
+    return { act: 'none' };
+  }
+
+  // v15.2.2: amber NOTE toast (same strip, amber ink) — clean aborts like a
+  // cancelled signing are information, not failures; never red, never silent
+  private note(msg: string): ArenaAction {
+    this.err = msg.toUpperCase().slice(0, 96);
+    this.errT = 240;
+    this.errKind = 'note';
     return { act: 'none' };
   }
 
@@ -647,6 +682,19 @@ export class ArenaUI {
 
   // ---------- actions ----------
   private activate(id: string): ArenaAction {
+    // v15.2.2: RETRY/CANCEL ride the stuck-signing strip — they exist BECAUSE
+    // we are busy, so they must slip past the busy guard below
+    if (id === 'sign:retry' || id === 'sign:cancel') {
+      const op = activeSignOp();
+      if (!op) return { act: 'none' };
+      if (id === 'sign:retry') {
+        console.debug('[arena] manual RETRY on ' + op.label + ' (attempt ' + op.attempt + ' wedged/hanging)');
+        op.retry();
+      } else {
+        op.cancel();
+      }
+      return { act: 'none' };
+    }
     if (this.busy) return { act: 'none' };
     // any other tap commits + dismisses the native stake keyboard
     if (id !== 'stake:custom') this.closeStakeInput(true);
@@ -987,7 +1035,7 @@ export class ArenaUI {
             const me = idp ? await idp() : null;
             if (!me) throw new Error('WALLET NOT CONNECTED - TAP CONNECT');
             const txns = await kit.buildContinuePayment({ sender: me.address, refId });
-            const txid = await kit.signSend(me.sign, txns);
+            const txid = await kit.signSend(me.sign, txns, { label: 'CONTINUE - 5 ALGO' });
             try {
               window.localStorage.setItem('gonna.continue|' + refId + '|' + me.address, txid);
             } catch { /* no storage */ }
@@ -1040,9 +1088,18 @@ export class ArenaUI {
     try {
       ok(await job());
     } catch (e) {
-      // v14.2: EVERY failure is visible — console breadcrumb + red UI line
-      console.debug('[arena] op failed:', e);
-      this.fail(e instanceof Error ? e.message : 'REKT - TRY AGAIN');
+      this.continuePaying = false; // a failed/cancelled CONTINUE payment frees the button
+      if (isSignCancel(e)) {
+        // v15.2.2: CANCEL is a clean abort, NOT an error — back to the sealed
+        // card with the draft UNTOUCHED (sealedScore/sealBest/sealRuns stay),
+        // amber note instead of the red toast, replay stays possible
+        console.debug('[arena] signing cancelled by the degen — sealed draft intact');
+        this.note(SIGN_CANCEL_MSG);
+      } else {
+        // v14.2: EVERY failure is visible — console breadcrumb + red UI line
+        console.debug('[arena] op failed:', e);
+        this.fail(e instanceof Error ? e.message : 'REKT - TRY AGAIN');
+      }
     } finally {
       this.busy = false; // the button ALWAYS comes back (timeout included)
     }
@@ -1354,16 +1411,44 @@ export class ArenaUI {
       }
     }
     // error toast (black strip, red text — never a flash; up to 2 lines so
-    // network errors keep the algod message body on screen)
+    // network errors keep the algod message body on screen); v15.2.2: amber
+    // ink for NOTES (cancelled signing), red stays for failures
     if (this.errT > 0 && this.err) {
       const lines = this.toastLines();
       const two = lines.length > 1;
       c.fillStyle = 'rgba(7,10,20,0.92)';
       c.fillRect(40, VH - (two ? 52 : 44), VW - 80, two ? 20 : 12);
-      lines.forEach((ln, i) => drawTextSh(c, ln, VW / 2, VH - (two ? 49 : 41) + i * 8, 1, RED, 'center'));
+      lines.forEach((ln, i) => drawTextSh(c, ln, VW / 2, VH - (two ? 49 : 41) + i * 8, 1, this.errKind === 'note' ? AMBER : RED, 'center'));
     }
+    // v15.2.2: amber RETRY/CANCEL strip on a stuck wallet sign wait — after
+    // 12s of silence on ANY sign flow (create/join/submit/continue/claim/
+    // forfeit/close). Drawn LAST so it rides above the busy labels.
+    const op = this.busy ? activeSignOp() : null;
+    if (op && (op.stalled || op.recovering)) this.drawSignStall(c, frame, op);
     if (!touch) drawText(c, 'ESC BACK', VW - 8, VH - 11, 1, DIM, 'right');
     if (this.focus >= this.hots.length) this.focus = 0;
+  }
+
+  // v15.2.2: the amber "NO WORD FROM THE WALLET?" strip. RETRY re-issues the
+  // request (healing a wedged WC session first); CANCEL aborts cleanly back
+  // to the sealed card — the sealed score/draft lives in localStorage/arena
+  // state and is NEVER deleted by a cancel. GONE once the tx is on the wire
+  // (cancellable === false): after broadcast only the chain tells the truth.
+  private drawSignStall(c: CanvasRenderingContext2D, frame: number, op: SignOpView): void {
+    const y = VH - 96;
+    c.fillStyle = 'rgba(20,14,4,0.95)';
+    c.fillRect(52, y, VW - 104, 46);
+    c.strokeStyle = (frame & 8) !== 0 ? AMBER : AMBER_DK;
+    c.lineWidth = 1;
+    c.strokeRect(52.5, y + 0.5, VW - 105, 45);
+    if (op.recovering) {
+      drawTextSh(c, 'WAKING THE WALLET - RECONNECTING', VW / 2, y + 6, 1, AMBER, 'center');
+      if (op.cancellable) this.btn(c, frame, { id: 'sign:cancel', x: VW / 2 - 52, y: y + 24, w: 104, h: 14 }, 'CANCEL', { dim: true });
+      return;
+    }
+    drawTextSh(c, 'NO WORD FROM THE WALLET?', VW / 2, y + 6, 1, AMBER, 'center');
+    this.btn(c, frame, { id: 'sign:retry', x: 72, y: y + 22, w: 104, h: 16 }, 'RETRY', { gold: true });
+    if (op.cancellable) this.btn(c, frame, { id: 'sign:cancel', x: 208, y: y + 22, w: 104, h: 16 }, 'CANCEL', { dim: true });
   }
 
   private btn(c: CanvasRenderingContext2D, frame: number, h: Omit<Hot, 'id'> & { id: string }, label: string, opts: { gold?: boolean; green?: boolean; red?: boolean; dim?: boolean; small?: boolean; disabled?: boolean } = {}): void {
@@ -1722,7 +1807,9 @@ export class ArenaUI {
         drawCrown(c, x + 24, y - 6);
       }
     }
-    if (!wallet.isConnected()) drawText(c, 'MOCK SHELF - CONNECT FOR REAL NFTS', VW / 2, 170, 1, DIM, 'center');
+    // v15.2.2: honest shelf captions — mock dressing only with NO wallet
+    if (!this.walletConnected()) drawText(c, 'MOCK SHELF - CONNECT FOR REAL NFTS', VW / 2, 170, 1, DIM, 'center');
+    else if (opts.length <= 1) drawText(c, 'NO GONNA NFTS IN THIS WALLET - BASE FIGHTER', VW / 2, 170, 1, DIM, 'center');
   }
 
   private stepConfirm(c: CanvasRenderingContext2D, frame: number): void {
@@ -2301,6 +2388,9 @@ export class ArenaUI {
     forfeit: { kind: string; seat?: number; remainingMs?: number } | null; // v2 seat clock (current card)
     mine: { id: number; status: string; visibility: Visibility }[];
     seal: { role: 'creator' | 'joiner'; runs: number; sealed: number | null; continuePaying: boolean };
+    // v15.2.2: live wallet-sign op (RETRY/CANCEL strip) + the fighter shelf
+    signOp: { label: string; attempt: number; phase: string; recovering: boolean; stalled: boolean; cancellable: boolean } | null;
+    shelf: { name: string; owned: boolean }[];
     verdict: boolean;
     coins: number;
     feed: string[];
@@ -2336,6 +2426,13 @@ export class ArenaUI {
       hots: this.hots.map((h) => ({ ...h })),
       mine: this.mine.map((m) => ({ id: m.id, status: m.status, visibility: m.visibility })),
       seal: { role: this.sealRole, runs: this.sealRuns, sealed: this.sealedScore, continuePaying: this.continuePaying },
+      signOp: (() => {
+        const op = this.busy ? activeSignOp() : null;
+        return op
+          ? { label: op.label, attempt: op.attempt, phase: op.phase, recovering: op.recovering, stalled: op.stalled, cancellable: op.cancellable }
+          : null;
+      })(),
+      shelf: this.fighterOpts.map((o) => ({ name: o.pick.name, owned: o.owned })),
     };
   }
 

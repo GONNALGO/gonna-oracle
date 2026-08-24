@@ -18,8 +18,9 @@
 import * as wallet from '../wallet';
 import type { AccountType, ChallengePlayer } from './chainAdapter';
 import { arenaMode, mockAccountType, setTestnetIdentityProvider } from './chainAdapter';
-import { connectTestnetPera, liveTestnetSignFn, testnetAddress } from './testnetWallet';
+import { connectTestnetPera, liveTestnetSignFn, recoverTestnetSession, testnetAddress } from './testnetWallet';
 import { qaActive, qaPlayerAddress, qaSignFn } from './qaSigner';
+import { setSignRecoverHook } from './testnetKit';
 import type { TxSignFn } from './testnetKit';
 
 export type ArenaWalletProvider = wallet.WalletProvider;
@@ -113,6 +114,27 @@ setTestnetIdentityProvider(async () => {
     throw new Error('WALLET NOT CONNECTED - TAP CONNECT');
   };
   return { address: target, sign };
+});
+
+// v15.2.2: the WEDGE CURE behind every RETRY on a stuck sign wait. Drops the
+// wedged WalletConnect session and forces a FRESH reconnect BEFORE the
+// re-send (the founder's manual disconnect+reconnect, automated). Heals
+// whichever session the signer chain would actually use.
+setSignRecoverHook(async () => {
+  // CI hook (same precedent as __arenaIdProvider): the harness stubs the heal
+  // — a real recovery opens a Pera pairing that no headless degen can approve
+  const ov = (window as unknown as { __arenaRecover?: () => Promise<void> }).__arenaRecover;
+  if (ov) return ov();
+  if (qaActive()) return; // the QA signer never wedges — nothing to heal
+  if (arenaMode() === 'testnet') {
+    if (testnetAddress()) {
+      await recoverTestnetSession(); // arena-side Pera (chainId 416002)
+      return;
+    }
+    if (wallet.isConnected()) return wallet.recoverSession(); // gate IS the arena identity on staging
+    return;
+  }
+  if (wallet.isConnected()) await wallet.recoverSession(); // mock/mainnet gate signer
 });
 
 export async function disconnectArenaWallet(): Promise<void> {
