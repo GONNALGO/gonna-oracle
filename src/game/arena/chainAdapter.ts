@@ -759,29 +759,64 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     await this.requireOracle();
     const a = await kit.sdk();
     if (cfg.stageMode === 'random') throw new Error('RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY');
-    const cid = await kit.nextChallengeId(); // oracle score sig is cid-bound
+    const stakeBase = Math.round(cfg.stake * 1e6);
+    // v15.2.1 PREFLIGHT: algod's 400 'overspend' must never be the first word
+    // a degen hears about a missing ASA opt-in or a light balance — fail with
+    // a VISIBLE, actionable line BEFORE any wallet prompt.
+    {
+      const algod = await kit.algodClient();
+      const acct = (await algod.accountInformation(me.address).do()) as {
+        amount: number | bigint;
+        minBalance?: number | bigint;
+        assets?: { assetId: number | bigint; amount: number | bigint }[];
+      };
+      const gonna = (acct.assets ?? []).find((x) => Number(x.assetId) === kit.GONNA_ASA_TESTNET);
+      if (!gonna) throw new Error('OPT INTO $GONNA FIRST - ASA ' + kit.GONNA_ASA_TESTNET + ' (TESTNET)');
+      if (Number(gonna.amount) < stakeBase) {
+        throw new Error('NOT ENOUGH GONNA - NEED ' + fmtGonna(stakeBase / 1e6) + ', WALLET HAS ' + fmtGonna(Number(gonna.amount) / 1e6));
+      }
+      const spendable = Number(acct.amount) - Number(acct.minBalance ?? 0);
+      if (spendable < 358_200 + 10_000) throw new Error('NEED ~0.37 ALGO FOR THE CARD MBR + FEES');
+    }
     // v11: the creator's score is the SEALED RUN score (PLAY -> SEAL -> SIGN);
     // qaScore() remains the deterministic fallback for the QA harness
     const score = cfg.sealedScore ?? qaScore();
     // v14.4: creator replays are FREE pre-commitment — a create NEVER
     // carries a continue receipt. The payment-verified devOracle continue
     // path is JOINER-ONLY now (submitScore below).
-    const sig = await devOracleSignScore(kit.scoreMsg(cid, 0, a.decodeAddress(me.address).publicKey, score));
-    const txns = await kit.buildCreateGroup({
-      creator: me.address,
-      cid,
-      stakeBase: Math.round(cfg.stake * 1e6),
-      seats: cfg.format === 'duel' ? 1 : cfg.seatsTotal,
-      // contract rule: duels are ALWAYS 24h; tables pick 4h/12h/24h
-      durationSecs: cfg.format === 'duel' ? 86400 : cfg.durationSecs,
-      stageMode: cfg.stageMode === 'full' ? 0 : 1,
-      creatorScore: score,
-      creatorScoreSig: sig,
-    });
-    kit.recordTxid(cid, await kit.signSend(me.sign, txns));
-    const ch = await this.getChallenge(cid);
-    if (!ch) throw new Error('created on-chain but box unreadable');
-    return ch;
+    const myPk = a.decodeAddress(me.address).publicKey;
+    // v15.2.1: the oracle score sig is cid-bound and the cid is read BEFORE
+    // the wallet signs. A concurrent create inside the manual-approval window
+    // moves next_challenge_id and algod 400s the group ('logic eval error:
+    // assert failed ... ed25519verify_bare'). Re-read, re-sign, retry — a
+    // fresh attempt is exact, a stale one can never confirm.
+    for (let attempt = 1; ; attempt++) {
+      const cid = await kit.nextChallengeId(); // oracle score sig is cid-bound
+      const sig = await devOracleSignScore(kit.scoreMsg(cid, 0, myPk, score));
+      const txns = await kit.buildCreateGroup({
+        creator: me.address,
+        cid,
+        stakeBase,
+        seats: cfg.format === 'duel' ? 1 : cfg.seatsTotal,
+        // contract rule: duels are ALWAYS 24h; tables pick 4h/12h/24h
+        durationSecs: cfg.format === 'duel' ? 86400 : cfg.durationSecs,
+        stageMode: cfg.stageMode === 'full' ? 0 : 1,
+        creatorScore: score,
+        creatorScoreSig: sig,
+      });
+      try {
+        kit.recordTxid(cid, await kit.signSend(me.sign, txns));
+        const ch = await this.getChallenge(cid);
+        if (!ch) throw new Error('created on-chain but box unreadable');
+        return ch;
+      } catch (e) {
+        if (attempt < 3 && kit.isCidRaceReject(e)) {
+          console.debug('[arena] create 400 (stale cid race) — retrying with fresh challenge id, attempt ' + (attempt + 1) + '/3');
+          continue;
+        }
+        throw e;
+      }
+    }
   }
 
   async join(id: number, _player: ChallengePlayer): Promise<Challenge> {
@@ -887,11 +922,17 @@ export class TestnetArenaAdapter implements ArenaAdapter {
 
   async earlyClose(id: number, _address: string): Promise<Challenge> {
     const me = await this.id();
+    // v15.2.1: the contract DELETES both boxes on early_close, so a post-tx
+    // read finds nothing — that is the SUCCESS case, not an error. Snapshot
+    // the card first and hand back the terminal 'closed' copy (same as the
+    // mock adapter), otherwise the UI screams a red toast over a good close.
+    const before = await this.getChallenge(id);
     const txns = await kit.buildEarlyCloseGroup({ caller: me.address, cid: id });
     kit.recordTxid(id, await kit.signSend(me.sign, txns));
     const ch = await this.getChallenge(id);
-    if (!ch) throw new Error('closed on-chain');
-    return ch;
+    if (ch) return ch; // box still readable (unexpected) — return the truth
+    if (before) return { ...before, status: 'closed' };
+    throw new Error('closed on-chain');
   }
 
   async getChallenge(id: number): Promise<Challenge | null> {

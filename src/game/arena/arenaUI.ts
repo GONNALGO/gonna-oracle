@@ -388,12 +388,28 @@ export class ArenaUI {
   }
 
   private fail(msg: string): ArenaAction {
-    // v14.2: 44 chars fit the toast (44x6px < VW-80) — 'WALLET NOT
-    // RESPONDING - RECONNECT AND RETRY' must survive untruncated.
-    this.err = msg.toUpperCase().slice(0, 44);
+    // v15.2.1: the 44-char cut hid the algod body of network errors — a
+    // 'NETWORK REQUEST ERROR. RECEIVED STATUS 400 (' toast carried ZERO
+    // information (the SIGN & STAKE debug). Two toast lines x 48 chars keep
+    // the reason (logic eval error / overspend / ...) on screen.
+    this.err = msg.toUpperCase().slice(0, 96);
     this.errT = 240; // 4s — a wallet error must be READABLE, not a blink
     console.debug('[arena] UI error:', this.err);
     return { act: 'none' };
+  }
+
+  // word-wrap the toast into at most two <=48-char lines (6px font, VW-80 strip)
+  private toastLines(): string[] {
+    const out: string[] = [];
+    let rest = this.err;
+    while (rest.length > 48 && out.length < 1) {
+      let cut = rest.lastIndexOf(' ', 48);
+      if (cut < 24) cut = 48; // no good word boundary — hard cut
+      out.push(rest.slice(0, cut));
+      rest = rest.slice(cut).trimStart();
+    }
+    out.push(rest.slice(0, 48));
+    return out;
   }
 
   // ---------- CUSTOM stake: native keyboard (v10.2, Prince's request) ------
@@ -1337,11 +1353,14 @@ export class ArenaUI {
         this.pixelCoin(c, Math.round(p.x), Math.round(p.y), frame);
       }
     }
-    // error toast (black strip, red text — never a flash)
+    // error toast (black strip, red text — never a flash; up to 2 lines so
+    // network errors keep the algod message body on screen)
     if (this.errT > 0 && this.err) {
+      const lines = this.toastLines();
+      const two = lines.length > 1;
       c.fillStyle = 'rgba(7,10,20,0.92)';
-      c.fillRect(40, VH - 44, VW - 80, 12);
-      drawTextSh(c, this.err, VW / 2, VH - 41, 1, RED, 'center');
+      c.fillRect(40, VH - (two ? 52 : 44), VW - 80, two ? 20 : 12);
+      lines.forEach((ln, i) => drawTextSh(c, ln, VW / 2, VH - (two ? 49 : 41) + i * 8, 1, RED, 'center'));
     }
     if (!touch) drawText(c, 'ESC BACK', VW - 8, VH - 11, 1, DIM, 'right');
     if (this.focus >= this.hots.length) this.focus = 0;

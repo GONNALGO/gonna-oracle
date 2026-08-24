@@ -466,6 +466,17 @@ export function withTimeout<T>(p: Promise<T>, ms: number, timeoutMsg: string): P
   });
 }
 
+// v15.2.1: the create oracle sig is bound to next_challenge_id READ BEFORE
+// the wallet round-trip. On a real device the manual approval window is long
+// enough for another create to move the counter — algod then 400s the group
+// at sendRawTransaction: 'logic eval error: assert failed ... ed25519verify_bare;
+// assert' (the contract's 'bad creator score proof'). That exact rejection is
+// RETRIABLE with a fresh cid + fresh sig; overspend/malformed groups are not.
+export function isCidRaceReject(e: unknown): boolean {
+  const msg = String((e as { message?: string } | null)?.message ?? e);
+  return /status 400/i.test(msg) && /logic eval error/i.test(msg);
+}
+
 export async function signSend(sign: TxSignFn, txns: Txn[]): Promise<string> {
   const a = await sdk();
   const algod = await algodClient();
