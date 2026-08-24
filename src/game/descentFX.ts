@@ -61,6 +61,23 @@ export function bonusIcon(kind: BonusKind): HTMLCanvasElement {
     R(4, 4, 2, 2, GOLD); // hot core
     R(2, 7, 8, 2, '#5a5f6c'); // anvil top
     R(4, 9, 4, 2, '#3a3f4c'); // anvil body
+  } else if (kind === 'longshot') {
+    // LONG SHOT — energy bolt, GONNA green with a white-hot core
+    R(0, 5, 3, 2, GREEN_D); // tail
+    R(3, 4, 6, 4, GREEN); // body
+    R(4, 5, 4, 2, '#eaffea'); // core
+    R(9, 3, 3, 6, GREEN); // head spike
+    R(10, 4, 2, 4, '#eaffea');
+  } else if (kind === 'speed') {
+    // SPEED OF THE LIZARD — lizard foot + speed lines, GONNA green
+    R(0, 2, 4, 1, GREEN_D); // speed lines
+    R(1, 5, 4, 1, GREEN_D);
+    R(0, 8, 4, 1, GREEN_D);
+    R(5, 3, 4, 6, GREEN); // foot
+    R(9, 2, 2, 2, GREEN); // toes
+    R(9, 5, 3, 2, GREEN);
+    R(9, 8, 2, 2, GREEN);
+    R(6, 4, 2, 2, '#eaffea'); // gleam
   } else {
     // BULLET TIME — hourglass, cyan/amber
     R(2, 1, 8, 1, CYAN);
@@ -256,6 +273,34 @@ export function drawBonusAuras(ctx: CanvasRenderingContext2D, g: GameCtx, d: Des
     }
     ctx.restore();
   }
+  if (d.shotT > 0) {
+    // v15.2 LONG SHOT: crackling green charge ring around the fists
+    ctx.save();
+    ctx.strokeStyle = GREEN;
+    ctx.globalAlpha = 0.45 + 0.25 * Math.sin(frame * 0.3);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(sx, sy - 30, 16, 18, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#eaffea';
+    for (let i = 0; i < 3; i++) {
+      const a = frame * 0.12 + (i * Math.PI * 2) / 3;
+      ctx.fillRect(Math.round(sx + Math.cos(a) * 16), Math.round(sy - 30 + Math.sin(a) * 18), 2, 2);
+    }
+    ctx.restore();
+  }
+  if (d.speedT > 0) {
+    // v15.2 SPEED OF THE LIZARD: green speed lines streaming behind the feet
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = GREEN;
+    const back = p.face === 1 ? -1 : 1;
+    for (let i = 0; i < 3; i++) {
+      const lx = sx + back * (10 + ((frame * 3 + i * 11) % 22));
+      ctx.fillRect(Math.round(lx), Math.round(p.y - 4 - i * 7), 6, 1);
+    }
+    ctx.restore();
+  }
 }
 
 // ---------- full-screen descent grade (overlay pass, after the HUD) ----------
@@ -297,10 +342,12 @@ export function drawBonusPips(ctx: CanvasRenderingContext2D, d: DescentState): v
   if (d.candleT > 0) pips.push(['candle', d.candleT]);
   if (d.forgeT > 0) pips.push(['forge', d.forgeT]);
   if (d.bulletT > 0) pips.push(['bullet', d.bulletT]);
+  if (d.shotT > 0) pips.push(['longshot', d.shotT]); // v15.2
+  if (d.speedT > 0) pips.push(['speed', d.speedT]); // v15.2
   let bx = 6;
   for (const [kind, t] of pips) {
     ctx.drawImage(bonusIcon(kind), bx, VH - 16);
-    drawText(ctx, String(Math.ceil(t / 60)), bx + 14, VH - 14, 1, kind === 'bonusA' ? CYAN : kind === 'candle' ? GREEN : kind === 'forge' ? AMBER : CYAN);
+    drawText(ctx, String(Math.ceil(t / 60)), bx + 14, VH - 14, 1, kind === 'bonusA' || kind === 'bullet' ? CYAN : kind === 'forge' ? AMBER : GREEN);
     bx += 30;
   }
 }

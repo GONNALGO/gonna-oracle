@@ -6,7 +6,7 @@
 import { clamp, GRAV, LANE_BOT, LANE_TOP } from './types';
 import type { GameCtx } from './ctx';
 
-export type ProjKind = 'coin' | 'fud' | 'molotov' | 'fudorb';
+export type ProjKind = 'coin' | 'fud' | 'molotov' | 'fudorb' | 'bolt'; // v15.2: bolt = LONG SHOT (player-owned)
 
 const MOLOTOV_FLIGHT = 46; // frames of arc (landing shadow visible the whole time)
 
@@ -39,6 +39,12 @@ export class Proj {
       this.vz = 0;
       this.dmg = 8;
       this.telegraph = 0;
+    } else if (kind === 'bolt') {
+      // v15.2 LONG SHOT: straight flat bolt at fist height, friendly fire OFF
+      this.z = 32;
+      this.vz = 0;
+      this.dmg = 12;
+      this.telegraph = 0;
     } else if (kind === 'fudorb') {
       this.z = 24;
       this.vz = 0;
@@ -67,6 +73,32 @@ export class Proj {
     if (!this.on) return;
     this.t++;
     const p = g.player;
+    if (this.kind === 'bolt') {
+      // v15.2 LONG SHOT: mows down the first enemy on the lane, then bursts
+      this.x += this.vx;
+      const dir = this.vx >= 0 ? 1 : -1;
+      for (const e of g.enemies) {
+        if (!e.alive) continue;
+        if (Math.abs(e.x - this.x) < 14 && Math.abs(e.y - this.y) < 14 && e.z < 40) {
+          e.hurt({ dmg: this.dmg, kb: 2, down: false, dir }, g);
+          g.fx.spark(this.x, this.y - this.z, true); // impact burst
+          g.fx.ring(this.x, this.y - this.z, 16, '#39FF14');
+          g.audio.punch();
+          this.on = false;
+          return;
+        }
+      }
+      if (g.boss && g.boss.alive && Math.abs(g.boss.x - this.x) < 30 && Math.abs(g.boss.y - this.y) < 22) {
+        g.boss.hurt({ dmg: this.dmg, kb: 0, down: false, dir }, g);
+        g.fx.spark(this.x, this.y - this.z, true);
+        g.fx.ring(this.x, this.y - this.z, 16, '#39FF14');
+        g.audio.punch();
+        this.on = false;
+        return;
+      }
+      if (this.t > 90 || this.x < g.camX - 40 || this.x > g.camX + 424) this.on = false;
+      return;
+    }
     if (this.kind === 'coin') {
       this.x += this.vx;
       // hits the player (jump over it)
@@ -139,6 +171,28 @@ export class Proj {
   draw(ctx2d: CanvasRenderingContext2D, g: GameCtx): void {
     if (!this.on) return;
     const sx = Math.round(this.x - g.camX);
+    if (this.kind === 'bolt') {
+      // v15.2 LONG SHOT: pixel energy bolt — white-hot core, GONNA-green
+      // body, fading tail. No shadow (it flies at fist height).
+      const sy = Math.round(this.y - this.z);
+      const dir = this.vx >= 0 ? 1 : -1;
+      ctx2d.save();
+      ctx2d.globalAlpha = 0.35; // glow tail
+      ctx2d.fillStyle = '#39FF14';
+      for (let i = 1; i <= 3; i++) {
+        ctx2d.globalAlpha = 0.30 - i * 0.08;
+        ctx2d.fillRect(sx - dir * (4 + i * 5) - 2, sy - 1, 4, 3);
+      }
+      ctx2d.globalAlpha = 1;
+      ctx2d.fillStyle = '#39FF14';
+      ctx2d.fillRect(sx - 5, sy - 3, 10, 6); // green body
+      ctx2d.fillStyle = '#eaffea';
+      ctx2d.fillRect(sx - 3, sy - 1, 6, 2); // white-hot core
+      ctx2d.fillStyle = '#39FF14';
+      ctx2d.fillRect(sx + dir * 5 - 1, sy - 2, 3, 4); // head spike
+      ctx2d.restore();
+      return;
+    }
     if (this.kind === 'coin') {
       const img = g.art.coinG;
       // spin: squash X with time

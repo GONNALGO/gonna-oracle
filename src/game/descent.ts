@@ -10,7 +10,8 @@ import type { BossKind } from './boss';
 import type { Rng } from './rng';
 
 // ---- bonus carrier drop table ----
-export type BonusKind = 'bonusA' | 'candle' | 'forge' | 'bullet';
+// v15.2: LONG SHOT (energy bolts on PUNCH) + SPEED OF THE LIZARD (+50% speed)
+export type BonusKind = 'bonusA' | 'candle' | 'forge' | 'bullet' | 'longshot' | 'speed';
 
 export interface WavePlan {
   queue: EnemyKind[]; // spawn order (carrier already inserted at its slot)
@@ -43,6 +44,11 @@ export interface DescentState {
   candleT: number; // GREEN CANDLE: x2 points 10s
   forgeT: number; // COMBO FORGE: combo decay frozen 10s
   bulletT: number; // BULLET TIME: world half-speed 5s
+  shotT: number; // v15.2 LONG SHOT: PUNCH launches an energy bolt, 10s
+  speedT: number; // v15.2 SPEED OF THE LIZARD: +50% move speed + trail, 10s
+  // v15.2 ENERGY audit counters (food lives INSIDE furniture, never free)
+  propsSpawned: number; // breakable/throwable props furnished so far
+  foodProps: number; // ...of which carry a chicken (seeded drop table)
   // ---- juice state (founder order #2) ----
   lastMult: number; // multiplier tick detector
   multUpT: number; // "+MULT XN" center popup
@@ -69,16 +75,24 @@ export function newDescent(theme: number, seed: number, seedLabel: string, targe
     carrierBonus: null, carrierOut: false,
     carriersSpawned: 0, carriersEscaped: 0, bonusDrops: 0,
     stallT: 0, target,
-    aT: 0, candleT: 0, forgeT: 0, bulletT: 0,
+    aT: 0, candleT: 0, forgeT: 0, bulletT: 0, shotT: 0, speedT: 0,
+    propsSpawned: 0, foodProps: 0,
     lastMult: 1, multUpT: 0, multLostT: 0,
     clearWave: 0, clearBonus: 0, clearScore: 0,
     nextTriggerX: BOOT_TRIGGER_X, dist: 0,
   };
 }
 
-// ---- wave math (LOCKED spec) ----
-export function waveBudget(w: number): number {
-  return 6 + 3 * w;
+// ---- wave math (v15.2 FINAL CALIBRATION: THREAT POINTS, Prince's order) ----
+// Composition spends THREAT POINTS, not heads: P(w,theme) = (8 + 4w) scaled
+// by a prestige offset that RAMPS with depth — waves 1-3 sit ~equal across
+// themes (everyone at the table); by wave 10 stage 7 runs ~+23% threat vs
+// stage 1, deeper waves diverge further. The monster run lives on heavy
+// themes.
+export function wavePoints(theme: number, w: number): number {
+  const t = Math.max(0, Math.min(6, theme));
+  const prestige = 1 + t * (0.02 + 0.02 * Math.min(w - 1, 10) / 10);
+  return Math.round((8 + 4 * w) * prestige);
 }
 
 export function aliveCap(w: number): number {
@@ -113,10 +127,35 @@ export function rampSpd(w: number): number {
   return Math.min(1.6, 1 + 0.02 * w);
 }
 
-const COST: Record<EnemyKind, number> = {
-  gecko: 1, drone: 1.5, snek: 2, coinsnek: 2, ninja: 2.5, moltov: 2.5,
-  cultist: 3, whale: 5, bouncer: 6, bull: 6, carrier: 0, // carrier: bonus only
+// v15.2 THREAT WEIGHTS (Prince's model): swarm/snek 1, brawler 2, ranged 3,
+// bull/heavy 4, whale-tier 6, carrier free (bonus slot).
+export const THREAT: Record<EnemyKind, number> = {
+  gecko: 1, drone: 1, snek: 1, // swarm tier
+  ninja: 2, // brawler tier
+  coinsnek: 3, moltov: 3, cultist: 3, // ranged tier
+  bull: 4, // heavy tier
+  whale: 6, bouncer: 6, // whale tier
+  carrier: 0, // bonus only
 };
+
+// heavy slots a kind occupies in the wave's heavyCap (whale-tier = 2)
+export function heavySlots(k: EnemyKind): number {
+  return k === 'whale' || k === 'bouncer' ? 2 : k === 'bull' ? 1 : 0;
+}
+// whale-tier is never composed before wave 4, on ANY theme
+export function isWhaleTier(k: EnemyKind): boolean {
+  return k === 'whale' || k === 'bouncer';
+}
+// gradual heavy introduction (non-boss waves). Waves 1-8 are identical on
+// every theme; from wave 9 the cap relaxes ON HEAVY THEMES (stage 7 gets
+// bull packs deep, stage 1 stays a brawl).
+export function heavyCap(w: number, theme = 0): number {
+  if (w <= 1) return 0;
+  if (w <= 3) return 1;
+  if (w <= 7) return 2;
+  if (w === 8) return 3;
+  return 3 + Math.floor(Math.max(0, Math.min(6, theme)) / 2);
+}
 
 // theme boss: stages 1-2 get the new MINOR variants, 3-7 their own boss
 const THEME_BOSS: BossKind[] = ['whaleS', 'darkgonnaS', 'whale', 'darkgonna', 'golem', 'fud', 'gonna404'];
@@ -132,54 +171,100 @@ export function themePool(theme: number): EnemyKind[] {
   return pool;
 }
 
-// seeded bonus drop: A 30% / candle 30% / forge 30% / bullet-time 10%
-// (bullet-time weight is 0 before wave 9 — weights renormalize to thirds)
-export function rollBonus(wave: number, rng: Rng): BonusKind {
-  const r = rng.next();
-  if (wave >= 9) {
-    return r < 0.3 ? 'bonusA' : r < 0.6 ? 'candle' : r < 0.9 ? 'forge' : 'bullet';
-  }
-  return r < 1 / 3 ? 'bonusA' : r < 2 / 3 ? 'candle' : 'forge';
+// v15.2: ranged kinds (molotov throwers, FUD wizards, coin spitters).
+// Per-wave cap (composition AND concurrent spawns — descentSpawnTick):
+// waves 1-5 NEVER exceed 2, waves 6-9 allow 3, wave 10+ allows 4.
+export function isRangedKind(k: EnemyKind): boolean {
+  return k === 'moltov' || k === 'cultist' || k === 'coinsnek';
+}
+export function rangedCap(w: number): number {
+  return w <= 5 ? 2 : w <= 9 ? 3 : 4;
 }
 
-// compose wave w for a theme under the locked budget; ONE carrier per wave
-// from wave 3, inserted at a seeded queue slot.
+// seeded bonus drop — ONE draw per roll (the stream stays aligned).
+// v15.2 FINAL CALIBRATION: uniform among UNLOCKED bonuses (neither rain nor
+// desert). Unlock waves: SPEED 2, BULLET TIME 3 (was 9), LONG SHOT 4; the
+// classics (A / candle / forge) are always on the table.
+export function rollBonus(wave: number, rng: Rng): BonusKind {
+  const unlocked: BonusKind[] = ['bonusA', 'candle', 'forge'];
+  if (wave >= 2) unlocked.push('speed');
+  if (wave >= 3) unlocked.push('bullet');
+  if (wave >= 4) unlocked.push('longshot');
+  return unlocked[Math.floor(rng.next() * unlocked.length)];
+}
+
+// compose wave w for a theme under the locked THREAT-POINT budget; a seeded
+// ~45% chance of ONE carrier per wave from wave 2, inserted at a seeded slot.
+// v15.2 fill order (Prince's order): ranged slots -> heavy slots -> the rest
+// of the points go to the theme's light/medium pool. Every pick is a seeded
+// draw, so a challenge id reproduces the exact same composition.
 export function composeWave(theme: number, w: number, rng: Rng): WavePlan {
   if (isBossWave(w)) {
     const bossK = bossCadenceK(w);
     // seeded trickle under the boss: cheap pressure only
     const queue: EnemyKind[] = [];
-    let budget = Math.max(2, Math.floor(waveBudget(w) / 4));
+    let budget = Math.max(2, Math.floor(wavePoints(theme, w) / 4));
     const trickle: EnemyKind[] = ['gecko', 'gecko', 'drone', 'snek'];
     while (budget >= 1) {
       const k = trickle[Math.floor(rng.next() * trickle.length)];
-      const c = COST[k];
-      if (c > budget) break;
       queue.push(k);
-      budget -= c;
+      budget -= THREAT[k];
     }
     return { queue, carrierBonus: null, boss: true, bossKind: THEME_BOSS[Math.max(0, Math.min(6, theme))], bossK };
   }
   const pool = themePool(theme);
+  const rangedPool = pool.filter(isRangedKind);
+  const heavyPool = pool.filter((k) => heavySlots(k) > 0 && (w >= 4 || !isWhaleTier(k)));
+  const lightPool = pool.filter((k) => THREAT[k] > 0 && heavySlots(k) === 0 && !isRangedKind(k));
+  const pickFrom = (arr: EnemyKind[]): EnemyKind => arr[Math.floor(rng.next() * arr.length)];
   const queue: EnemyKind[] = [];
-  let budget = waveBudget(w);
+  let budget = wavePoints(theme, w);
+
+  // 1) ranged slots: a seeded count up to the wave cap, 3 points each
+  const rMax = Math.min(rangedCap(w), Math.floor(budget / 3));
+  const rWant = rangedPool.length > 0 ? rng.int(0, rMax) : 0;
+  for (let i = 0; i < rWant && budget >= 3; i++) {
+    const k = pickFrom(rangedPool);
+    queue.push(k);
+    budget -= THREAT[k];
+  }
+
+  // 2) heavy slots: a seeded count up to heavyCap(w, theme); whale-tier eats 2
+  let slots = heavyCap(w, theme);
+  if (heavyPool.length > 0 && slots > 0) {
+    let hWant = rng.int(0, slots);
+    let guard = 24;
+    while (hWant > 0 && slots > 0 && guard-- > 0) {
+      const fit = heavyPool.filter((k) => THREAT[k] <= budget && heavySlots(k) <= slots);
+      if (fit.length === 0) break;
+      const k = pickFrom(fit);
+      queue.push(k);
+      budget -= THREAT[k];
+      slots -= heavySlots(k);
+      hWant -= heavySlots(k);
+    }
+  }
+
+  // 3) remaining points: light/medium of the theme pool (gecko burns the rest)
   let guard = 200;
   while (budget >= 1 && guard-- > 0) {
-    const k = pool[Math.floor(rng.next() * pool.length)];
-    const c = COST[k];
-    if (c > budget) {
-      if (budget >= 1 && c > 1) {
-        // burn small remainders on the cheapest punk
-        queue.push('gecko');
-        budget -= 1;
-      }
+    const fit = lightPool.filter((k) => THREAT[k] <= budget);
+    if (fit.length === 0) {
+      queue.push('gecko'); // theme without a cheap punk: burn the remainder
+      budget -= 1;
       continue;
     }
+    const k = pickFrom(fit);
     queue.push(k);
-    budget -= c;
+    budget -= THREAT[k];
   }
+
+  // v15.2 FINAL REFINEMENT: PROBABILISTIC carrier — from wave 2, each
+  // non-boss wave has a seeded ~45% chance of exactly ONE carrier (never
+  // two). Same challenge seed = same carrier luck for every player at the
+  // table (no re-roll exploits). Some seeds are lucky, some stingy.
   let carrierBonus: BonusKind | null = null;
-  if (w >= 3) {
+  if (w >= 2 && rng.chance(0.45)) {
     carrierBonus = rollBonus(w, rng);
     const slot = Math.floor(rng.next() * (queue.length + 1)); // seeded slot
     queue.splice(slot, 0, 'carrier');
@@ -199,9 +284,11 @@ export function buildDescentStage(theme: number): StageDef {
     name: 'THE DESCENT',
     sub: base.name + ' - ' + base.sub,
     waves: [], // the director composes waves live
-    // thinned street set: the run must stay readable (founder: "troppo
-    // affollato") — every second prop survives, same order, all loops equal
-    obstacles: base.obstacles.filter((_, i) => i % 2 === 0),
+    // v15.2: +50% street furniture per zone. The FULL theme set is kept here;
+    // descentObstacleTick spawns it whole on even loops and thinned
+    // (every-second-prop) on odd loops — 0.75x average vs the old flat 0.5x,
+    // and the readability rule survives (founder: "troppo affollato").
+    obstacles: base.obstacles,
     boss: false,
     bossKind: null,
   };

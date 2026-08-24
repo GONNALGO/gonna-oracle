@@ -72,6 +72,10 @@ export class Player {
   airAtk = false;
   withKnife = false;
   carrying: Obstacle | null = null; // lane object held overhead (v2)
+  // ---- v15.2 DESCENT bonuses ----
+  shotCd = 0; // LONG SHOT: frames until the next bolt may fire
+  // SPEED OF THE LIZARD: after-image ring buffer (newest first, max 3)
+  trail: { x: number; y: number; z: number; face: Facing; animT: number }[] = [];
 
   reset(x: number, y: number): void {
     this.x = x; this.y = y; this.z = 0;
@@ -87,6 +91,12 @@ export class Player {
     this.queuedBtn = null; this.punchCyc = -1; this.kickCyc = -1; this.rankTier = 0;
     this.held = null; this.knees = 0; this.airAtk = false;
     this.carrying = null; this.withKnife = false;
+    this.shotCd = 0; this.trail.length = 0;
+  }
+
+  // v15.2 SPEED OF THE LIZARD: +50% move speed while the bonus burns
+  private speedMul(g: GameCtx): number {
+    return g.descent && g.descent.speedT > 0 ? 1.5 : 1;
   }
 
   get onGround(): boolean { return this.z <= 0; }
@@ -232,6 +242,16 @@ export class Player {
     this.animT++;
     if (this.invuln > 0) this.invuln--;
     if (this.flashT > 0) this.flashT--;
+    if (this.shotCd > 0) this.shotCd--; // v15.2 LONG SHOT cooldown
+    // v15.2 SPEED OF THE LIZARD: after-image ring buffer (3 fading ghosts)
+    if (g.descent && g.descent.speedT > 0) {
+      if (this.animT % 5 === 0) {
+        this.trail.unshift({ x: this.x, y: this.y, z: this.z, face: this.face, animT: this.animT });
+        if (this.trail.length > 3) this.trail.pop();
+      }
+    } else if (this.trail.length > 0) {
+      this.trail.length = 0;
+    }
     // chain window decay — combo drops when it runs out
     // v15: COMBO FORGE freezes the decay (the meter burns amber instead)
     if (this.chainT > 0 && !(g.descent && g.descent.forgeT > 0)) {
@@ -246,9 +266,10 @@ export class Player {
         let dx = (inp.down.right ? 1 : 0) - (inp.down.left ? 1 : 0);
         let dy = (inp.down.down ? 1 : 0) - (inp.down.up ? 1 : 0);
         if (dx !== 0 && dy !== 0) { dx *= 0.8; dy *= 0.8; }
+        const spd = this.speedMul(g); // v15.2 SPEED OF THE LIZARD
         const oldX = this.x;
-        this.x = clamp(this.x + dx * 1.4, g.camX + 12, Math.min(g.camX + VW - 12, g.stageLen - 10));
-        this.y = clamp(this.y + dy * 1.0, LANE_TOP, LANE_BOT);
+        this.x = clamp(this.x + dx * 1.4 * spd, g.camX + 12, Math.min(g.camX + VW - 12, g.stageLen - 10));
+        this.y = clamp(this.y + dy * 1.0 * spd, LANE_TOP, LANE_BOT);
         this.x = blockObjects(g.obstacles, oldX, this.x, this.y, this.z);
         if (dx !== 0) this.face = dx > 0 ? 1 : -1;
         this.state = dx !== 0 || dy !== 0 ? 'walk' : 'idle';
@@ -291,12 +312,20 @@ export class Player {
         let dx = (inp.down.right ? 1 : 0) - (inp.down.left ? 1 : 0);
         let dy = (inp.down.down ? 1 : 0) - (inp.down.up ? 1 : 0);
         if (dx !== 0 && dy !== 0) { dx *= 0.8; dy *= 0.8; }
+        const spd = this.speedMul(g); // v15.2 SPEED OF THE LIZARD
         const oldX = this.x;
         // walk speed -40% while hauling
-        this.x = clamp(this.x + dx * 1.4 * 0.6, g.camX + 12, Math.min(g.camX + VW - 12, g.stageLen - 10));
-        this.y = clamp(this.y + dy * 1.0 * 0.6, LANE_TOP, LANE_BOT);
+        this.x = clamp(this.x + dx * 1.4 * 0.6 * spd, g.camX + 12, Math.min(g.camX + VW - 12, g.stageLen - 10));
+        this.y = clamp(this.y + dy * 1.0 * 0.6 * spd, LANE_TOP, LANE_BOT);
         this.x = blockObjects(g.obstacles, oldX, this.x, this.y, this.z);
         if (dx !== 0) this.face = dx > 0 ? 1 : -1;
+        // v15.2 BUG-B ("ghost throw from the left"): the held object must RIDE
+        // the carrier. The old code left o.x frozen at the LIFT point while
+        // the sprite was drawn over GONNA's head — a throw later spawned the
+        // projectile from that stale world x (the left edge of the screen)
+        // instead of from the hands.
+        this.carrying.x = this.x;
+        this.carrying.y = this.y;
         if (inp.pressed.jump) {
           this.setDown(g); // object drops, then jump
           this.set('jump');
@@ -307,9 +336,11 @@ export class Player {
           this.setDown(g); // Z: set down gently
           this.set('idle');
         } else if (inp.pressed.kick) {
-          // X: THROW forward along the lane
+          // X: THROW forward along the lane — ALWAYS from GONNA's hands
+          // (v15.2 BUG-B: o.x/o.y ride the carrier every frame above)
           const o = this.carrying;
           this.carrying = null;
+          o.x = this.x;
           o.y = this.y;
           o.launch(this.face, false, g);
           this.set('throw');
@@ -341,7 +372,7 @@ export class Player {
         this.vz -= GRAV;
         this.z += this.vz;
         const dx = (inp.down.right ? 1 : 0) - (inp.down.left ? 1 : 0);
-        this.x = clamp(this.x + dx * 1.2, g.camX + 12, Math.min(g.camX + VW - 12, g.stageLen - 10));
+        this.x = clamp(this.x + dx * 1.2 * this.speedMul(g), g.camX + 12, Math.min(g.camX + VW - 12, g.stageLen - 10));
         if (dx !== 0 && this.state === 'jump') this.face = dx > 0 ? 1 : -1;
         if (this.state === 'jump' && (inp.pressed.punch || inp.pressed.kick)) {
           this.state = 'jumpkick';
@@ -378,7 +409,22 @@ export class Player {
       case 'hurt': {
         this.x += this.vx;
         this.vx *= 0.85;
-        if (this.t >= 14) this.set('idle');
+        // v15.2 BUG-A ("walking on air"): a hit taken mid-jump must RECONCILE
+        // physics — gravity keeps acting through the hit-stun and the stun
+        // only releases ON THE GROUND. The old code left z/vz frozen in a
+        // suspended jump/hurt hybrid: GONNA floated and could walk on air
+        // until a fresh jump re-zeroed z.
+        if (this.z > 0 || this.vz > 0) {
+          this.vz -= GRAV;
+          this.z += this.vz;
+          if (this.z <= 0) {
+            this.z = 0;
+            this.vz = 0;
+            g.audio.land();
+            g.fx.ring(this.x, this.y, 12, '#8a8f9c');
+          }
+        }
+        if (this.t >= 14 && this.z <= 0) this.set('idle');
         break;
       }
 
@@ -477,6 +523,15 @@ export class Player {
     this.swingId = swingCounter++;
     this.set(btn);
     g.audio.swing();
+    // v15.2 LONG SHOT: while the bonus is armed, PUNCH also launches an
+    // energy bolt toward the facing direction (short cooldown; the melee
+    // swing itself is untouched — it still connects at arm's reach).
+    if (btn === 'punch' && g.descent && g.descent.shotT > 0 && this.shotCd <= 0) {
+      this.shotCd = 26;
+      g.spawnProj('bolt', this.x + this.face * 20, this.y, this.face * 7);
+      g.fx.spark(this.x + this.face * 24, this.y - this.z - 32, true); // muzzle flash
+      g.fx.ring(this.x + this.face * 20, this.y - this.z - 32, 10, '#39FF14');
+    }
   }
 
   private findGrabbable(g: GameCtx): Enemy | null {
@@ -535,6 +590,25 @@ export class Player {
     ctx2d.ellipse(sx, this.y + 2, 16 - this.z * 0.04, 5 - this.z * 0.015, 0, 0, Math.PI * 2);
     ctx2d.fill();
     ctx2d.globalAlpha = 1;
+
+    // v15.2 SPEED OF THE LIZARD: fading after-image ghosts (GONNA green)
+    if (this.trail.length > 0) {
+      const GHOST_A = [0.30, 0.20, 0.11];
+      const gimg = (g.pframes ?? g.frames).get(WALK_FR[0]);
+      for (let i = this.trail.length - 1; i >= 0; i--) {
+        const gh = this.trail[i];
+        const gkey = WALK_FR[Math.floor(gh.animT / 6) & 3];
+        const gi = (g.pframes ?? g.frames).get(gkey) ?? gimg;
+        if (!gi) continue;
+        ctx2d.save();
+        ctx2d.globalAlpha = GHOST_A[i] ?? 0.1;
+        ctx2d.filter = 'brightness(1.6) sepia(1) hue-rotate(60deg) saturate(3)'; // green ghost
+        ctx2d.translate(Math.round(gh.x - g.camX), Math.round(gh.y - gh.z));
+        if (gh.face === -1) ctx2d.scale(-1, 1);
+        ctx2d.drawImage(gi, -(gi.width * SCALE) / 2, -gi.height * SCALE, gi.width * SCALE, gi.height * SCALE);
+        ctx2d.restore();
+      }
+    }
 
     // invuln blink
     if (this.invuln > 0 && (this.animT & 4) !== 0 && this.state !== 'getup') return;

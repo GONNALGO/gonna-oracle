@@ -10,7 +10,7 @@ import type { EnemyKind } from './enemies';
 import type { BossLike } from './boss';
 import { makeBoss } from './bosses';
 import { Item, Obstacle } from './items';
-import type { ItemKind } from './items';
+import type { ItemKind, ObstacleKind } from './items';
 import { Proj } from './proj';
 import type { ProjKind } from './proj';
 import { buildMintStage, buildStage, MINT_FX, resetMintFx } from './stages';
@@ -22,7 +22,7 @@ import type { GameCtx } from './ctx';
 // ---- v15: THE DESCENT ----
 import { hashSeed, makeRng, mathRng, randomSeedLabel, setSeededSim } from './rng';
 import type { Rng } from './rng';
-import { aliveCap, bossBonus, buildDescentStage, composeWave, newDescent, rampHp, rampSpd, saveBestWave, scoreMult, themePool, waveClearBonus, ZONE_ADV } from './descent';
+import { aliveCap, bossBonus, buildDescentStage, composeWave, heavySlots, isRangedKind, newDescent, rampHp, rampSpd, rangedCap, rollBonus, saveBestWave, scoreMult, themePool, THREAT, waveClearBonus, wavePoints, ZONE_ADV } from './descent';
 import type { DescentState } from './descent';
 import { drawBonusAuras, drawBonusPips, drawBossWarning, drawDescentGrade, drawMultJuice, drawWaveSlam } from './descentFX';
 import { drawHud } from './hud';
@@ -1544,11 +1544,38 @@ export class Game implements GameCtx {
     this.stageIdx = themeIdx;
     this.loadDescent(themeIdx, seedLabel ?? randomSeedLabel(), target);
   }
+  // CI (v15.2 Prince's order): cross-theme composition audit. Runs composeWave
+  // on a PRIVATE seeded stream (never touches the live run's rng) and reports
+  // threat points spent / heavy slots used / ranged heads for theme x wave.
+  debugCompose(theme: number, w: number, seed = 0x0152): { queue: string[]; points: number; heavies: number; ranged: number; boss: boolean; bossThreat: number; carriers: number; bonus: string | null } {
+    const rng = makeRng((seed ^ (theme * 131 + w)) >>> 0);
+    const plan = composeWave(theme, w, rng);
+    let points = 0, heavies = 0, ranged = 0, carriers = 0;
+    for (const k of plan.queue) {
+      points += THREAT[k];
+      heavies += heavySlots(k);
+      if (isRangedKind(k)) ranged++;
+      if (k === 'carrier') carriers++;
+    }
+    // boss waves spend most of the budget on the BOSS GATE itself (steepened
+    // 1 + 0.18k depth scaling) — report the full wave threat, not just the
+    // trickle, so the cross-theme audit compares apples to apples.
+    const bossThreat = plan.boss ? wavePoints(theme, w) - points : 0;
+    return { queue: plan.queue, points: points + bossThreat, heavies, ranged, boss: plan.boss, bossThreat, carriers, bonus: plan.carrierBonus };
+  }
+  // CI (v15.2): n seeded bonus rolls at wave w on a PRIVATE stream — proves
+  // the unlock table (SPEED 2 / BULLET TIME 3 / LONG SHOT 4) without a run.
+  debugBonusTable(w: number, n = 48): string[] {
+    const rng = makeRng((0xb0415 ^ w) >>> 0);
+    const out: string[] = [];
+    for (let i = 0; i < n; i++) out.push(rollBonus(w, rng));
+    return out;
+  }
   get descentInfo(): {
     active: boolean; wave: number; phase: string; seed: string; score: number; kos: number;
     queue: number; enemies: number; carriersSpawned: number; carriersEscaped: number;
     bonusDrops: number; boss: string | null; bossHp: number; mult: number; lives: number;
-    aT: number; candleT: number; forgeT: number; bulletT: number; items: string[];
+    aT: number; candleT: number; forgeT: number; bulletT: number; shotT: number; speedT: number; propsSpawned: number; foodProps: number; items: string[];
     dist: number; camX: number; nextTriggerX: number; goArrow: boolean;
   } | null {
     const d = this.descent;
@@ -1573,6 +1600,10 @@ export class Game implements GameCtx {
       candleT: d.candleT,
       forgeT: d.forgeT,
       bulletT: d.bulletT,
+      shotT: d.shotT,
+      speedT: d.speedT,
+      propsSpawned: d.propsSpawned,
+      foodProps: d.foodProps,
       items: this.items.map((i) => i.kind),
       dist: Math.round(d.dist),
       camX: Math.round(this.camX),
@@ -1678,6 +1709,9 @@ export class Game implements GameCtx {
     // v15: campaign keeps the EXACT v14.4 Math.random stream (zero extra
     // draws, visual noise included) — FULL RUN stays byte-equivalent.
     this.rng = mathRng;
+    // v15.2: same stale hit-stop/slow-mo leak plugged on the campaign side
+    this.freezeT = 0;
+    this.slowmoT = 0;
     setSeededSim(false);
     if (idx === 6) void loadSkinFrames('rainbow'); // v9.5: GONNA 404 wears the REAL rainbow skin
     this.stageLen = this.stage.len;
@@ -1801,6 +1835,11 @@ export class Game implements GameCtx {
   private loadDescent(themeIdx: number, seedLabel: string, target: number): void {
     const seed = hashSeed(seedLabel) >>> 0;
     this.rng = makeRng(seed);
+    // v15.2: hit-stop / slow-mo from a previous run must NOT leak into the
+    // fresh one (it froze the first frames of twin-run #2 and broke seeded
+    // determinism in the harness — a stale-freeze state-machine leak).
+    this.freezeT = 0;
+    this.slowmoT = 0;
     setSeededSim(true); // visual noise leaves Math.random alone in the sim
     themePool(themeIdx); // pre-warm the weighted pool (build-time randomness stays OUT of the step)
     this.stage = buildDescentStage(themeIdx);
@@ -1839,7 +1878,22 @@ export class Game implements GameCtx {
     const needK = Math.floor((this.camX + VW * 2) / L);
     while (this.obstacleK <= needK) {
       const off = this.obstacleK * L;
-      for (const o of stage.obstacles) this.obstacles.push(new Obstacle(o.kind, o.x + off, o.y, o.contains));
+      // v15.2: +50% props per zone — full set on even loops, thinned on odd
+      // (was: every loop thinned to half). Loop parity is sim-deterministic.
+      const thin = this.obstacleK % 2 === 1;
+      for (let i = 0; i < stage.obstacles.length; i++) {
+        if (thin && i % 2 === 1) continue;
+        const o = stage.obstacles[i];
+        // v15.2 ENERGY (Capcom doctrine): food lives INSIDE furniture, never
+        // floating free — seeded ~12% of props carry a chicken. Breaking
+        // furniture = time risk = earned survival. "Never guaranteed": theme
+        // defs that hardcode a chicken prop are normalized to 'random' here,
+        // so the seeded 12% table is the ONLY source of guaranteed food.
+        const contains = this.rng.chance(0.12) ? 'chicken' : o.contains === 'chicken' ? 'random' : o.contains;
+        this.obstacles.push(new Obstacle(o.kind, o.x + off, o.y, contains));
+        this.descent.propsSpawned++;
+        if (contains === 'chicken') this.descent.foodProps++;
+      }
       this.obstacleK++;
     }
     // prune what's far behind (never the one being carried/thrown)
@@ -1861,11 +1915,42 @@ export class Game implements GameCtx {
     d.stallT = 0;
     d.phaseT = 0;
     this.camLock = this.camX; // the zone's arena: camera locks until it's cleared
+    // v15.2 FUN GUARDRAIL: every wave zone spawns at least one throwable/
+    // breakable prop reachable inside the arena (seeded kind + spot).
+    let hasProp = false;
+    for (const o of this.obstacles) {
+      if (!o.removeMe && o.cfg.liftable && o.x > this.camLock + 30 && o.x < this.camLock + VW - 30) {
+        hasProp = true;
+        break;
+      }
+    }
+    if (!hasProp) {
+      const propKinds: ObstacleKind[] = ['can', 'crate', 'barrel'];
+      const kind = propKinds[Math.floor(this.rng.next() * propKinds.length)];
+      const x = this.camLock + 60 + this.rng.next() * (VW - 120);
+      const y = this.rng.range(LANE_TOP + 8, LANE_BOT - 4);
+      const contains = this.rng.chance(0.12) ? 'chicken' : 'random';
+      this.obstacles.push(new Obstacle(kind, x, y, contains));
+      d.propsSpawned++;
+      if (contains === 'chicken') d.foodProps++;
+    }
+    // v15.2 ENERGY: boss arenas get 2 edge props with ELEVATED food chance
+    // (~25% each) — the classic "smash the barrel before the boss" beat.
+    if (plan.boss) {
+      for (const side of [46, VW - 46]) {
+        const y = this.rng.range(LANE_TOP + 8, LANE_BOT - 4);
+        const contains = this.rng.chance(0.25) ? 'chicken' : 'random';
+        this.obstacles.push(new Obstacle('barrel', this.camLock + side, y, contains));
+        d.propsSpawned++;
+        if (contains === 'chicken') d.foodProps++;
+      }
+    }
     if (plan.boss && plan.bossKind) {
       d.phase = 'boss';
       d.bossKind = plan.bossKind;
       d.bossK = plan.bossK;
-      this.boss = makeBoss(plan.bossKind, this.camX + VW + 70, 1 + 0.15 * plan.bossK);
+      // v15.2: BOSS ESCALATION — bosses are the gates; depth scaling steepened
+      this.boss = makeBoss(plan.bossKind, this.camX + VW + 70, 1 + 0.18 * plan.bossK);
       this.audio.playTrack(this.stage.bossTrack);
       this.audio.gong();
       this.fx.shake(5);
@@ -1880,9 +1965,23 @@ export class Game implements GameCtx {
   private descentSpawnTick(d: DescentState): void {
     if (d.queue.length === 0) return;
     let alive = 0;
-    for (const e of this.enemies) if (e.alive) alive++;
+    let rangedAlive = 0;
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      alive++;
+      if (isRangedKind(e.kind)) rangedAlive++;
+    }
     if (alive >= d.cap) return;
-    const kind = d.queue.shift()!;
+    // v15.2 Capcom curve: HARD CAP on concurrent ranged enemies (molotov
+    // sneks / FUD cultists / coin sneks): 2 for waves 1-5, 3 for 6-9, 4 after.
+    // When the cap is full the next MELEE in the queue jumps the line; an
+    // all-ranged queue waits. Deterministic: seeded queue, fixed scan order.
+    let slot = 0;
+    if (rangedAlive >= rangedCap(d.wave) && isRangedKind(d.queue[0])) {
+      while (slot < d.queue.length && isRangedKind(d.queue[slot])) slot++;
+      if (slot >= d.queue.length) return; // hold the ranged flood for now
+    }
+    const kind = d.queue.splice(slot, 1)[0];
     const side: Facing = this.rng.chance(0.5) ? -1 : 1; // seeded side
     const x = side === -1 ? this.camX - 24 : this.camX + VW + 24;
     const y = this.rng.range(LANE_TOP + 6, 200); // seeded lane
@@ -1951,6 +2050,8 @@ export class Game implements GameCtx {
     }
     if (d.candleT > 0) d.candleT--;
     if (d.forgeT > 0) d.forgeT--;
+    if (d.shotT > 0) d.shotT--; // v15.2 LONG SHOT
+    if (d.speedT > 0) d.speedT--; // v15.2 SPEED OF THE LIZARD
     // ---- multiplier juice (founder #2): up = amber popup, lost = red pulse ----
     const mult = scoreMult(this.player.comboHits);
     if (mult > d.lastMult) {

@@ -7,7 +7,13 @@ import type { BonusKind } from './descent';
 
 // v15: THE DESCENT bonus kinds — bonusA (THE A: invincibility), candle (GREEN
 // CANDLE: x2 points), forge (COMBO FORGE: no decay), bullet (BULLET TIME)
+// v15.2: longshot (LONG SHOT: bolts on PUNCH), speed (SPEED OF THE LIZARD)
 export type ItemKind = 'chicken' | 'coinG' | 'coinA' | 'liz' | 'knife' | 'chest' | BonusKind;
+
+// v15.2: DESCENT bonus kinds share the pixel-icon draw path (no art-table entry)
+export function isBonusItem(kind: ItemKind): kind is BonusKind {
+  return kind === 'bonusA' || kind === 'candle' || kind === 'forge' || kind === 'bullet' || kind === 'longshot' || kind === 'speed';
+}
 export type ObstacleKind = 'can' | 'barrel' | 'crate' | 'safe' | 'drum' | 'chips';
 export type ObstacleMode = 'idle' | 'held' | 'thrown';
 
@@ -180,6 +186,37 @@ export class Item {
         g.fx.popup(p.x, p.y - 70, 'JACKPOT +5000', '#f5c542');
         g.audio.oneUp();
         break;
+      // ---- v15 DESCENT bonuses (carrier drops) — v15.2: actually armed here ----
+      case 'bonusA':
+        if (g.descent) g.descent.aT = 300; // 5s untouchable
+        g.fx.popup(p.x, p.y - 70, 'THE A - UNTOUCHABLE!', '#3ce8e0');
+        g.audio.oneUp();
+        break;
+      case 'candle':
+        if (g.descent) g.descent.candleT = 600; // 10s x2 points
+        g.fx.popup(p.x, p.y - 70, 'GREEN CANDLE - X2 POINTS!', '#39FF14');
+        g.audio.oneUp();
+        break;
+      case 'forge':
+        if (g.descent) g.descent.forgeT = 600; // 10s combo never decays
+        g.fx.popup(p.x, p.y - 70, 'COMBO FORGE - NO DECAY!', '#ffae2a');
+        g.audio.oneUp();
+        break;
+      case 'bullet':
+        if (g.descent) g.descent.bulletT = 300; // 5s world half-speed
+        g.fx.popup(p.x, p.y - 70, 'BULLET TIME!', '#3ce8e0');
+        g.audio.oneUp();
+        break;
+      case 'longshot':
+        if (g.descent) g.descent.shotT = 600; // 10s: PUNCH fires energy bolts
+        g.fx.popup(p.x, p.y - 70, 'LONG SHOT - PUNCH TO FIRE!', '#39FF14');
+        g.audio.oneUp();
+        break;
+      case 'speed':
+        if (g.descent) g.descent.speedT = 600; // 10s: +50% move speed
+        g.fx.popup(p.x, p.y - 70, 'SPEED OF THE LIZARD!', '#39FF14');
+        g.audio.oneUp();
+        break;
     }
     this.removeMe = true;
   }
@@ -195,7 +232,7 @@ export class Item {
     ctx2d.fill();
     ctx2d.globalAlpha = 1;
     // v15: DESCENT bonus icons are pure pixel art (no art-table entry)
-    if (this.kind === 'bonusA' || this.kind === 'candle' || this.kind === 'forge' || this.kind === 'bullet') {
+    if (isBonusItem(this.kind)) {
       drawBonusIcon(ctx2d, this.kind, sx, sy);
       return;
     }
@@ -265,6 +302,9 @@ export class Obstacle {
       const r = g.rng.next(); // v15: seeded obstacle contents
       drop = r < 0.3 ? 'chicken' : r < 0.55 ? 'coinA' : r < 0.8 ? 'coinG' : r < 0.92 ? 'chest' : 'liz';
     }
+    // v15.2 ENERGY doctrine: NO extra lives in THE DESCENT — one life is the
+    // mode's identity. A 1UP roll downgrades to food (same draw, no re-roll).
+    if (drop === 'liz' && g.descent) drop = 'chicken';
     if (drop !== 'none') g.dropItem(drop, this.x, this.y);
   }
 
