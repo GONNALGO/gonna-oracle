@@ -111,7 +111,34 @@ al microGONNA. Esce con codice ≠ 0 se qualcosa non quadra.
 Firma: ed25519 bare (PyNaCl `SigningKey(seed)` dove seed = primi 32 byte
 della chiave privata algosdk di ORACLE).
 
-## Risultati del run del 2026-08-23
+## Risultati del run v2 del 2026-08-24 (NUOVA app — v1 mantenuta come legacy)
+
+| Voce | Valore |
+|---|---|
+| App ID **v2** | **769767443** |
+| App escrow v2 | `GISV2JNJTT7XCOQFN7BBLKPT3HQKXAUSFKCODTYQ7U7B2XJ2BIMAQIBNM4` |
+| Deploy tx v2 | `U4ZT77JXKHJRJQGJLVGN4WXKLD4UVKPTB6GQXNY5ZAWK4B6C4VWQ` |
+| Bootstrap tx v2 | `IWIUGC7T6BWRCSJYLH2Y3JDG3FWUR2ZFAPMJ4ZDATQOMWDH7YCRQ` |
+| Smoke v2: create duello cid 2 (A firmato) | `Y7HLVCAIM6RZHE2P6N5ASZUSTYNLKZPW6AKO5PKUSL2IV5OQ2NIQ` |
+| Smoke v2: join cid 2 (B NON firmato) | `NMZFZJEDZHJJFUIVWPWHRMCTEZIBJPBIGX2AL3F3W6M6UGUV5GYA` |
+| Smoke v2: spawn_rumble cid 3 | `LODM54LS5OSZDNRLU7B2LRMS4B4JSGZBGKM4CSM56PLEUKMW4EJQ` |
+
+Note v2:
+- Schema globale 4 int / 2 byte (+ `version` = 2), `extra_pages=2`
+  (approval 4473B > 4096).
+- Bootstrap esige il TREASURY opt-in $GONNA on-chain: passare TREASURY in
+  `accounts` (liveness gate). Verificato: treasury già opted-in dal run v1.
+- Box layout v2: meta 148B (+`mbr_paid`), entry `(byte[],uint64,bool,uint64)`
+  con `seated_at`; `CHALLENGE_MBR = 358_200` µALGO.
+- `deploy/smoke_v2_testnet.py`: duello cid 2 lasciato APERTO con B unsigned
+  (claim_forfeit(cid 2, seat 1) si sblocca a `seated_at + 3600`), rumble
+  cid 3 self-spawnato (deadline = prossimo 21:00 UTC, fee 1 ALGO al treasury)
+  lasciato APERTO per QA.
+- La v1 (app 769688298) resta risolvibile on-chain; in `testnet.json` le sue
+  chiavi sono `legacy_*`. Il frontend punta alla v2.
+- Explorer: `https://lora.algokit.io/testnet/application/769767443`
+
+## Risultati del run del 2026-08-23 (v1, LEGACY)
 
 | Voce | Valore |
 |---|---|

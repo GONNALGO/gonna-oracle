@@ -39,6 +39,9 @@ export interface ChallengePlayer {
   score: number; // 0 = not submitted yet
   fighter: FighterPick;
   accountType: AccountType; // falcon accounts carry the QUANTUM SEAL
+  // v2 seat clock (testnet only — mock cards leave both undefined)
+  signed?: boolean; // oracle-signed score accepted on-chain
+  seatedAt?: number; // ms epoch: create for seat 0, join otherwise
 }
 
 export interface Challenge {
@@ -59,6 +62,7 @@ export interface Challenge {
   players: ChallengePlayer[];
   winner: string | null;
   pot: number; // stake * seats taken (paid out on claim)
+  forfeited?: boolean; // v2: terminal STATUS_FORFEIT (4) — seat clock expired
 }
 
 export interface ClaimResult {
@@ -103,6 +107,9 @@ export interface ArenaAdapter {
   submitScore(id: number, address: string, score: number, opts?: { continueRefId?: string }): Promise<Challenge>;
   resolve(id: number): Promise<Challenge>;
   claim(id: number, address: string): Promise<ClaimResult>;
+  // v2: duel seat clock — claim the stake of an UNSIGNED opponent whose
+  // seated_at + SEAT_TTL has expired (testnet contract only; mock optional)
+  claimForfeit?(id: number, address: string): Promise<ClaimResult>;
   earlyClose(id: number, address: string): Promise<Challenge>;
   listOpenChallenges(): Promise<Challenge[]>;
   myChallenges(address: string): Promise<Challenge[]>;
@@ -184,6 +191,53 @@ export function fmtCountdown(deadline: number, now = Date.now()): string {
   s -= m * 60;
   const p = (v: number) => String(v).padStart(2, '0');
   return p(h) + ':' + p(m) + ':' + p(s);
+}
+
+// countdown "42:33" (mm:ss) from a ms remaining span (clamped at 0) —
+// the duel seat clock never exceeds 1h so hours are noise
+export function fmtMMSS(remainingMs: number): string {
+  let s = Math.max(0, Math.floor(remainingMs / 1000));
+  const m = Math.floor(s / 60);
+  s -= m * 60;
+  const p = (v: number) => String(v).padStart(2, '0');
+  return p(m) + ':' + p(s);
+}
+
+// ---------- v2 duel seat clock ----------
+// The contract keeps a 1h clock (seated_at + SEAT_TTL) on every UNSIGNED
+// duel seat: once it lapses, the SIGNED opponent may claim_forfeit() and
+// take 95% of the silent seat's stake. Duels only (seats_total == 1 on
+// chain — the UI counts the creator seat on top, so format === 'duel').
+export const SEAT_TTL_MS = 3600 * 1000;
+
+export type ForfeitInfo =
+  | { kind: 'claimable'; seat: number; expiredAt: number } // viewer can CLAIM FORFEIT on `seat`
+  | { kind: 'own-clock'; remainingMs: number; expiresAt: number } // viewer's own seat is UNSIGNED
+  | null;
+
+// Pure + headless-testable: given a card and the viewer address, what does
+// the seat clock demand RIGHT NOW? Mock cards carry no seatedAt/signed —
+// they return null (the seat clock is a testnet-contract feature).
+export function duelForfeitInfo(card: Challenge, me: string | null, nowMs = Date.now()): ForfeitInfo {
+  if (card.format !== 'duel') return null;
+  if (card.status !== 'open' && card.status !== 'full') return null;
+  if (me === null) return null;
+  const myIdx = card.players.findIndex((p) => p.address === me);
+  if (myIdx < 0) return null;
+  const mine = card.players[myIdx];
+  if (mine.seatedAt === undefined || mine.signed === undefined) return null;
+  if (!mine.signed) {
+    const expiresAt = mine.seatedAt + SEAT_TTL_MS;
+    return { kind: 'own-clock', remainingMs: Math.max(0, expiresAt - nowMs), expiresAt };
+  }
+  // I'm signed: the OTHER seat (duel => exactly one) may be forfeitable
+  const otherIdx = card.players.findIndex((_, i) => i !== myIdx);
+  if (otherIdx < 0) return null;
+  const other = card.players[otherIdx];
+  if (other.signed !== false || other.seatedAt === undefined) return null;
+  const expiredAt = other.seatedAt + SEAT_TTL_MS;
+  if (nowMs > expiredAt) return { kind: 'claimable', seat: otherIdx, expiredAt };
+  return null;
 }
 
 // ======================================================================
@@ -601,7 +655,8 @@ export class MockArenaAdapter implements ArenaAdapter {
 }
 
 // ======================================================================
-// TESTNET ADAPTER — QuantumArena is LIVE on testnet (app 769688298).
+// TESTNET ADAPTER — QuantumArena v2 is LIVE on testnet (app 769767443;
+// v1 app 769688298 kept as legacy in deploy/testnet.json).
 // Exact atomic groups + OpUp donor calls live in ./testnetKit.ts.
 // Identity (Pera testnet via ./testnetWallet.ts, or the QA signer) is
 // INJECTED through setTestnetIdentityProvider by arenaWallet.ts (no
@@ -656,13 +711,14 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const seatsTaken = Number(meta.seatsTaken);
     const seatsTotal = Number(meta.seatsTotal) + 1; // + creator seat (UI convention)
     // contract: 0 OPEN · 1 CLOSED (table full) · 2 RESOLVED · 3 REFUNDED
+    // · 4 FORFEIT (v2, terminal — seat clock expired on an unsigned duel seat)
     // v14.4: REFUNDED (early-close / claim / sweep / catastrophe) maps to
     // 'closed' — stakes went BACK, no pot was ever paid. 'claimed' stays a
     // mock-only "winner took the pot" state; testnet pays inside resolve.
     const statusCode = Number(meta.status);
     const expired = (statusCode === 0 || statusCode === 1) && Number(meta.deadline) <= nowSec;
     const status: ChallengeStatus =
-      statusCode === 3 ? 'closed' : statusCode === 2 ? 'resolved' : expired ? 'expired' : statusCode === 1 || seatsTaken >= seatsTotal ? 'full' : 'open';
+      statusCode === 3 || statusCode === 4 ? 'closed' : statusCode === 2 ? 'resolved' : expired ? 'expired' : statusCode === 1 || seatsTaken >= seatsTotal ? 'full' : 'open';
     const creator = encOpt(meta.creator);
     return {
       id: cid,
@@ -685,9 +741,12 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         score: Number(p.score),
         fighter: { skin: 'gonna', assetId: null, name: 'GONNA' },
         accountType: 'ed25519' as AccountType,
+        signed: p.signed, // v2 seat clock
+        seatedAt: Number(p.seatedAt) * 1000,
       })),
       winner: statusCode === 2 && meta.winner.length === 32 ? enc(meta.winner) : null,
       pot: (Number(meta.stake) * seatsTaken) / 1e6,
+      forfeited: statusCode === 4,
     };
   }
 
@@ -801,6 +860,31 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     return { payout: 0, txid }; // exact payout lives in the inner txns
   }
 
+  // v2: CLAIM FORFEIT — the viewer is the SIGNED duel opponent, the other
+  // seat is UNSIGNED and its seat clock (seated_at + 1h) has lapsed. The
+  // contract deletes both boxes: the card is gone from the board after this.
+  async claimForfeit(id: number, _address: string): Promise<ClaimResult> {
+    const me = await this.id();
+    const a = await kit.sdk();
+    const players = await kit.readPlayers(id);
+    const myPk = a.decodeAddress(me.address).publicKey;
+    const mySeat = players.findIndex((p) => sameAddr(asBytes(p.addr), myPk));
+    if (mySeat < 0) throw new Error('not seated at this table');
+    if (!players[mySeat].signed) throw new Error('SIGN YOUR OWN SCORE FIRST');
+    const target = 1 - mySeat; // a duel has exactly seats 0 and 1
+    if (!players[target]) throw new Error('opponent seat is empty');
+    if (players[target].signed) throw new Error('opponent already signed - no forfeit');
+    const expiresAt = Number(players[target].seatedAt) + kit.SEAT_TTL_SECS;
+    if (Math.floor(Date.now() / 1000) <= expiresAt) {
+      throw new Error('SEAT CLOCK STILL RUNNING - FORFEIT AT ' + new Date(expiresAt * 1000).toISOString().slice(11, 16) + ' UTC');
+    }
+    const txns = await kit.buildClaimForfeitGroup({ caller: me.address, cid: id, seat: target });
+    const txid = await kit.signSend(me.sign, txns);
+    kit.recordTxid(id, txid);
+    kit.recordResolveAt(id, Date.now()); // terminal: honest "x AGO" everywhere
+    return { payout: 0, txid }; // exact payout lives in the inner txns
+  }
+
   async earlyClose(id: number, _address: string): Promise<Challenge> {
     const me = await this.id();
     const txns = await kit.buildEarlyCloseGroup({ caller: me.address, cid: id });
@@ -825,7 +909,22 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     }
   }
 
+  private versionChecked = false;
+  // v2: the VERSION global pins the box layout — warn loudly (visible in
+  // console) if the app we point at is not the v2 contract this build parses
+  private async ensureVersion(): Promise<void> {
+    if (this.versionChecked) return;
+    this.versionChecked = true;
+    try {
+      const v = await kit.contractVersion();
+      if (v !== kit.ARENA_VERSION) console.debug('[arena] WARNING: contract VERSION=' + v + ', this build parses v' + kit.ARENA_VERSION + ' boxes');
+    } catch {
+      console.debug('[arena] VERSION read failed (network hiccup) — continuing');
+    }
+  }
+
   private async scan(): Promise<Challenge[]> {
+    await this.ensureVersion();
     const ids = await kit.scanChallengeIds();
     // parallel box reads — sequential is 2 round-trips PER card, way too slow
     const all = await Promise.all(ids.map((cid) => this.getChallenge(cid).catch(() => null)));

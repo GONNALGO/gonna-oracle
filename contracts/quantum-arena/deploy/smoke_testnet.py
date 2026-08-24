@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""QUANTUM ARENA — real on-chain smoke test on Algorand TESTNET.
+"""QUANTUM ARENA **v1** — real on-chain smoke test on Algorand TESTNET.
+
+⚠ LEGACY: this script targets the v1 app (769688298, see legacy_* keys in
+deploy/testnet.json) with the v1 box layout and CHALLENGE_MBR 350_000.
+For the current v2 app (769767443) use deploy/smoke_v2_testnet.py.
 
 Scenario 1: PLAYER_A creates a duel (stake 1 GONNA, oracle-signed score),
 PLAYER_B joins and submits a higher oracle-signed score, RESOLVE pays

@@ -1,17 +1,24 @@
 // ============================================================================
 // THE ARENA — TESTNET KIT. TESTNET ONLY — NEVER SHIP TO MAINNET.
-// Exact atomic groups for the QuantumArena contract (deploy/smoke_testnet.py
+// Exact atomic groups for the QuantumArena v2 contract (deploy/smoke_v2_testnet.py
 // is the reference implementation; v5.0.0 pooled-opcode-budget via OpUp).
-//   ARENA APP 769688298 · $GONNA ASA 769688287 · OPUP DONOR 769688641
+//   ARENA APP v2 769767443 · $GONNA ASA 769688287 · OPUP DONOR 769688641
+//   v1 app 769688298 is LEGACY — old cards stay resolvable on-chain there.
 // ============================================================================
-export const ARENA_APP_ID = 769688298;
+export const ARENA_APP_ID = 769767443;
+export const LEGACY_ARENA_APP_ID = 769688298; // QuantumArena v1 (superseded)
 export const GONNA_ASA_TESTNET = 769688287;
 export const OPUP_APP_ID = 769688641;
 export const TREASURY_ADDR = '4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM';
 export const ORACLE_ADDR = 'COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA';
 export const ALGOD_TESTNET = 'https://testnet-api.algonode.cloud';
 
-const MBR_CREATE = 350_000; // box MBR payment (create)
+// v2 seat clock: a duel seat that stays UNSIGNED for SEAT_TTL seconds can be
+// forfeited by the signed opponent via claim_forfeit(cid, seat).
+export const SEAT_TTL_SECS = 3600;
+export const ARENA_VERSION = 2; // VERSION global on the v2 app
+
+const MBR_CREATE = 358_200; // v2 box MBR payment (create): 65_300 + 292_900
 const EARLY_CLOSE_FEE_PAY = 1_000_000; // 1 ALGO to treasury (early close)
 export const GONNA_DECIMALS = 6;
 
@@ -27,6 +34,7 @@ export const TESTNET_FEES = {
   resolve: 6000 + 4 * 1000, // call + 4 opup
   claim: 2000,
   close: 1000 + 4000, // pay + call
+  forfeit: 5000, // call + 4 inner (2 axfer winner + fee axfer + MBR payback)
 } as const;
 export type ArenaOp = keyof typeof TESTNET_FEES;
 
@@ -89,14 +97,16 @@ export interface MetaTuple {
   stageMode: bigint;
   seed: Uint8Array;
   creatorScore: bigint;
-  status: bigint; // 0 OPEN, 1 RESOLVED, 2 CLAIMED
+  status: bigint; // 0 OPEN, 1 CLOSED(full), 2 RESOLVED, 3 REFUNDED, 4 FORFEIT
   winner: Uint8Array;
   paidTotal: bigint;
+  mbrPaid: bigint; // v2: exact ALGO MBR paid at create, refunded on close
 }
 export interface PlayerTuple {
   addr: Uint8Array;
   score: bigint;
   signed: boolean;
+  seatedAt: bigint; // v2: seat timestamp (create for seat 0, join otherwise)
 }
 
 export async function nextChallengeId(): Promise<number> {
@@ -111,17 +121,31 @@ export async function nextChallengeId(): Promise<number> {
   return 0;
 }
 
+// v2: the VERSION global must be 2 — a stale build talking to a v1-layout
+// app would mis-parse every box, so callers can hard-fail on mismatch.
+export async function contractVersion(): Promise<number> {
+  const algod = await algodClient();
+  const app = (await algod.getApplicationByID(ARENA_APP_ID).do()) as {
+    params: { globalState?: { key: Uint8Array; value: { type: number; uint?: number | bigint } }[] };
+  };
+  for (const kv of app.params.globalState ?? []) {
+    if (new TextDecoder().decode(kv.key) === 'version') return Number(kv.value.uint ?? 0);
+  }
+  return 0;
+}
+
 export async function readMeta(cid: number): Promise<MetaTuple | null> {
   const algod = await algodClient();
   const a = await sdk();
   try {
     const name = new Uint8Array([0x6d, ...u64be(cid)]); // 'm' + cid8
     const box = await algod.getApplicationBoxByName(ARENA_APP_ID, name).do();
-    const t = a.ABIType.from('(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64)');
-    const v = t.decode(box.value) as [Uint8Array, bigint, bigint, bigint, bigint, bigint, Uint8Array, bigint, bigint, Uint8Array, bigint];
-    return { creator: v[0], stake: v[1], seatsTotal: v[2], seatsTaken: v[3], deadline: v[4], stageMode: v[5], seed: v[6], creatorScore: v[7], status: v[8], winner: v[9], paidTotal: v[10] };
+    // v2 layout (+mbr_paid): 148B for a duel pre-resolve (winner empty)
+    const t = a.ABIType.from('(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64)');
+    const v = t.decode(box.value) as [Uint8Array, bigint, bigint, bigint, bigint, bigint, Uint8Array, bigint, bigint, Uint8Array, bigint, bigint];
+    return { creator: v[0], stake: v[1], seatsTotal: v[2], seatsTaken: v[3], deadline: v[4], stageMode: v[5], seed: v[6], creatorScore: v[7], status: v[8], winner: v[9], paidTotal: v[10], mbrPaid: v[11] };
   } catch {
-    return null; // box gone (claimed/closed) or network hiccup
+    return null; // box gone (claimed/forfeited/closed) or network hiccup
   }
 }
 
@@ -131,9 +155,10 @@ export async function readPlayers(cid: number): Promise<PlayerTuple[]> {
   try {
     const name = new Uint8Array([0x70, ...u64be(cid)]); // 'p' + cid8
     const box = await algod.getApplicationBoxByName(ARENA_APP_ID, name).do();
-    const t = a.ABIType.from('(byte[],uint64,bool)[]');
-    const v = t.decode(box.value) as [Uint8Array, bigint, boolean][];
-    return v.map((p) => ({ addr: p[0], score: p[1], signed: p[2] }));
+    // v2 layout (+seated_at): (byte[],uint64,bool,uint64)[]
+    const t = a.ABIType.from('(byte[],uint64,bool,uint64)[]');
+    const v = t.decode(box.value) as [Uint8Array, bigint, boolean, bigint][];
+    return v.map((p) => ({ addr: p[0], score: p[1], signed: p[2], seatedAt: p[3] }));
   } catch {
     return [];
   }
@@ -389,6 +414,31 @@ export async function buildEarlyCloseGroup(o: { caller: string; cid: number }): 
     suggestedParams: await baseParams(4000),
   });
   return [pay, call];
+}
+
+// v2: CLAIM FORFEIT — duel seat clock expired on an UNSIGNED opponent.
+// The contract pays 95% of the forfeited stake + the caller's own stake to
+// the caller, 5% to the treasury, and the exact MBR back to the creator;
+// both boxes are deleted. Inner txns: 2x axfer caller + axfer treasury +
+// pay creator => the treasury and creator accounts must be referenced.
+export async function buildClaimForfeitGroup(o: { caller: string; cid: number; seat: number }): Promise<Txn[]> {
+  const a = await sdk();
+  const meta = await readMeta(o.cid);
+  if (!meta) throw new Error('card not found on chain (already settled?)');
+  const creator = a.encodeAddress(meta.creator);
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.caller, appIndex: ARENA_APP_ID,
+    appArgs: [
+      await methodSelector(a, 'claim_forfeit(uint64,uint64)void'),
+      await appArg(a, 'uint64', o.cid),
+      await appArg(a, 'uint64', o.seat),
+    ],
+    accounts: [TREASURY_ADDR, creator],
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)],
+    suggestedParams: await baseParams(TESTNET_FEES.forfeit),
+  });
+  return [call];
 }
 
 // sign as one atomic group (Pera-style {txn, signers} groups) and broadcast

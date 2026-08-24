@@ -76,7 +76,7 @@ def main() -> None:
             global_schema=transaction.StateSchema(4, 2),  # v2: + version (uint)
             local_schema=transaction.StateSchema(0, 0),
             app_args=app_args,
-            extra_pages=1,
+            extra_pages=2,  # v2 approval is 4473 bytes > 2048*(1+1)
         )
         txid = cl.send_transaction(txn.sign(deployer_sk))
         info = common.wait(cl, txid)
@@ -111,6 +111,7 @@ def main() -> None:
             sp=sp2,
             index=app_id,
             app_args=[m.get_selector()],
+            accounts=[common.addr("TREASURY")],  # v2: treasury liveness gate
             foreign_assets=[asa_id],
         )
         transaction.assign_group_id([pay, call])

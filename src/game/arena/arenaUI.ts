@@ -21,7 +21,7 @@ import type { Art } from '../sprites';
 import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait } from '../skins';
 import type { SkinId } from '../skins';
-import { getArenaAdapter, arenaMode, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtStake, splitPot } from './chainAdapter';
+import { getArenaAdapter, arenaMode, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, splitPot } from './chainAdapter';
 import { explorerTxUrl, getTxid } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
 import { qaActive, qaScore } from './qaSigner';
@@ -1012,6 +1012,7 @@ export class ArenaUI {
       };
     }
     if (id === 'resolve') return this.doResolve();
+    if (id === 'forfeit') return this.doClaimForfeit();
     if (id === 'vclaim') return this.doClaim(this.current ? this.current.id : -1);
     if (id === 'close') return this.doEarlyClose();
     if (id === 'rematch') return this.doRematch();
@@ -1203,6 +1204,25 @@ export class ArenaUI {
     return { act: 'move' };
   }
 
+  // v2: CLAIM FORFEIT — the contract deletes both boxes on success, so the
+  // card is terminal the moment the tx confirms (no zombie chip, ever)
+  private doClaimForfeit(): ArenaAction {
+    const c = this.current;
+    if (!c) return { act: 'none' };
+    const me = arenaAddress();
+    if (!this.adapter().claimForfeit) return this.fail('FORFEIT IS A TESTNET CONTRACT PATH');
+    console.debug('[arena] CLAIM FORFEIT — start (card #' + c.id + ')');
+    void this.run(
+      () => this.adapter().claimForfeit!(c.id, me),
+      () => {
+        this.current = { ...c, status: 'closed', forfeited: true };
+        void this.refreshBoard();
+        void this.refreshHistory();
+      },
+    );
+    return { act: 'move' };
+  }
+
   private doEarlyClose(): ArenaAction {
     const c = this.current;
     if (!c) return { act: 'none' };
@@ -1327,16 +1347,16 @@ export class ArenaUI {
     if (this.focus >= this.hots.length) this.focus = 0;
   }
 
-  private btn(c: CanvasRenderingContext2D, frame: number, h: Omit<Hot, 'id'> & { id: string }, label: string, opts: { gold?: boolean; green?: boolean; dim?: boolean; small?: boolean; disabled?: boolean } = {}): void {
+  private btn(c: CanvasRenderingContext2D, frame: number, h: Omit<Hot, 'id'> & { id: string }, label: string, opts: { gold?: boolean; green?: boolean; red?: boolean; dim?: boolean; small?: boolean; disabled?: boolean } = {}): void {
     // disabled: drawn but NEVER focusable/tappable (no hotspot registered)
     const lit = !opts.disabled && this.hots.length === this.focus;
     if (!opts.disabled) this.hots.push(h);
-    c.fillStyle = opts.disabled ? '#0a0c12' : opts.gold ? '#14100a' : opts.green ? '#0f2408' : PANEL;
+    c.fillStyle = opts.disabled ? '#0a0c12' : opts.gold ? '#14100a' : opts.green ? '#0f2408' : opts.red ? '#240808' : PANEL;
     c.fillRect(h.x, h.y, h.w, h.h);
-    c.strokeStyle = opts.disabled ? '#232838' : lit ? '#ffffff' : opts.gold ? ((frame & 16) !== 0 ? GOLD : GOLD_DK) : opts.green ? ((frame & 16) !== 0 ? GREEN : '#3fae4a') : '#3a3f4c';
+    c.strokeStyle = opts.disabled ? '#232838' : lit ? '#ffffff' : opts.gold ? ((frame & 16) !== 0 ? GOLD : GOLD_DK) : opts.green ? ((frame & 16) !== 0 ? GREEN : '#3fae4a') : opts.red ? ((frame & 16) !== 0 ? RED : '#ae3f3f') : '#3a3f4c';
     c.lineWidth = 1;
     c.strokeRect(h.x + 0.5, h.y + 0.5, h.w - 1, h.h - 1);
-    const color = opts.disabled ? DIM : opts.dim ? DIM : opts.gold ? GOLD : opts.green ? GREEN : '#c8ccd4';
+    const color = opts.disabled ? DIM : opts.dim ? DIM : opts.gold ? GOLD : opts.green ? GREEN : opts.red ? RED : '#c8ccd4';
     drawTextSh(c, label, h.x + h.w / 2, h.y + Math.floor((h.h - 7) / 2), 1, lit ? '#ffffff' : color, 'center');
     if (lit && (frame & 16) !== 0) drawText(c, '>', h.x + 3, h.y + Math.floor((h.h - 7) / 2), 1, GREEN);
   }
@@ -1887,6 +1907,9 @@ export class ArenaUI {
       // signed) — the owner never owes a score; only a joiner who has not
       // played yet does.
       const iOweScore = seated && myEntry !== null && myEntry.score === 0;
+      // v2 duel seat clock: CLAIM FORFEIT on a silent opponent / SIGN-WITHIN
+      // countdown on my own unsigned seat (null on tables and mock cards)
+      const forfeit = duelForfeitInfo(card, me);
       let ay = 148;
       if (live && !seated && card.creator === me) {
         // v13 self-join guard: you cannot fight yourself (the contract would
@@ -1899,7 +1922,21 @@ export class ArenaUI {
         ay += 12;
         this.btn(c, frame, { id: 'accept', x: 92, y: ay, w: 200, h: 20 }, 'ACCEPT & STAKE ' + fmtStake(card.stake), { gold: true });
         ay += 24;
+      } else if (live && seated && forfeit?.kind === 'claimable') {
+        // v2: I'm SIGNED, the opponent never signed, and their 1h seat clock
+        // lapsed — claim 95% of their stake (5% to the treasury), duel over.
+        // Precedence over the submit/wait branches: the fight is already won.
+        drawTextSh(c, 'OPPONENT NEVER SIGNED - CLOCK EXPIRED', VW / 2, ay, 1, RED, 'center', '#4a0505');
+        ay += 12;
+        this.btn(c, frame, { id: 'forfeit', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM FORFEIT', { red: true });
+        ay += 24;
       } else if (live && seated && (testnet ? iOweScore : card.players.some((p) => p.score === 0))) {
+        // v2: my own seat is UNSIGNED and the 1h seat clock is ticking —
+        // the opponent can claim my stake when it lapses. Live countdown.
+        if (forfeit?.kind === 'own-clock') {
+          drawTextSh(c, 'SIGN WITHIN ' + fmtMMSS(forfeit.remainingMs) + ' OR FORFEIT', VW / 2, ay, 1, RED, 'center', '#4a0505');
+          ay += 12;
+        }
         drawText(c, 'NETWORK FEE: ' + feeLine('submit', acct, testnet), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
         ay += 10;
         this.btn(c, frame, { id: 'submit', x: 92, y: ay, w: 200, h: 18 }, 'SUBMIT SCORE', { green: true });
@@ -1983,8 +2020,15 @@ export class ArenaUI {
     const title = fmtStake(card.stake) + (card.format === 'duel' ? ' DUEL' : ' OPEN TABLE');
     const stage = card.stageMode === 'full' ? 'FULL RUN - ALL 7 STAGES' : 'THE DESCENT - ' + STAGE_NAMES[card.stageIdx ?? 0];
     this.drawHeader(c, title, stage);
-    drawTextSh(c, 'CARD CLOSED - STAKE RETURNED', VW / 2, 48, 1, GOLD, 'center', '#4a3005');
-    drawText(c, 'NO BATTLE WAS FOUGHT - EVERY PAYER REFUNDED IN FULL', VW / 2, 62, 1, GRAY, 'center');
+    if (card.forfeited) {
+      // v2 STATUS_FORFEIT (terminal): an unsigned duel seat ran out its 1h
+      // clock — the signed opponent claimed 95%, the treasury took 5%
+      drawTextSh(c, 'FORFEIT - SEAT CLOCK EXPIRED', VW / 2, 48, 1, RED, 'center', '#4a0505');
+      drawText(c, 'THE SILENT SEAT LOST ITS STAKE - 95% TO THE OPPONENT', VW / 2, 62, 1, GRAY, 'center');
+    } else {
+      drawTextSh(c, 'CARD CLOSED - STAKE RETURNED', VW / 2, 48, 1, GOLD, 'center', '#4a3005');
+      drawText(c, 'NO BATTLE WAS FOUGHT - EVERY PAYER REFUNDED IN FULL', VW / 2, 62, 1, GRAY, 'center');
+    }
     // contenders + sealed scores (the record stands even without a fight)
     let y = 78;
     drawText(c, 'CONTENDERS', 24, y, 1, DIM);
@@ -1999,11 +2043,17 @@ export class ArenaUI {
       y += 10;
     }
     y += 4;
-    const lines: [string, string][] = [
-      ['STAKE', fmtStake(card.stake) + ' $GONNA A SEAT - RETURNED'],
-      ['SEATS', card.players.length + '/' + card.seatsTotal + ' TAKEN'],
-      ['POT', '0 $GONNA - NOTHING TO PAY OUT'],
-    ];
+    const lines: [string, string][] = card.forfeited
+      ? [
+          ['STAKE', fmtStake(card.stake) + ' $GONNA A SEAT - FORFEITED'],
+          ['SEATS', card.players.length + '/' + card.seatsTotal + ' TAKEN'],
+          ['POT', fmtStake(card.pot) + ' $GONNA TO THE SIGNED OPPONENT'],
+        ]
+      : [
+          ['STAKE', fmtStake(card.stake) + ' $GONNA A SEAT - RETURNED'],
+          ['SEATS', card.players.length + '/' + card.seatsTotal + ' TAKEN'],
+          ['POT', '0 $GONNA - NOTHING TO PAY OUT'],
+        ];
     for (const [k, v] of lines) {
       drawText(c, k, 24, y, 1, DIM);
       drawText(c, v, VW - 24, y, 1, '#c8ccd4', 'right');
@@ -2011,7 +2061,14 @@ export class ArenaUI {
     }
     const me = arenaAddress();
     if (me !== null && (card.creator === me || card.players.some((p) => p.address === me))) {
-      if ((frame & 16) !== 0) drawTextSh(c, 'YOUR STAKE IS BACK IN YOUR WALLET', VW / 2, y + 2, 1, FLUO, 'center', '#0a3d00');
+      const mine = card.players.find((p) => p.address === me);
+      if (card.forfeited) {
+        // honest copy: the forfeit pays the SIGNED seat, not "everyone back"
+        const msg = mine && mine.signed === false ? 'YOUR UNSIGNED STAKE WAS FORFEITED' : 'YOUR FORFEIT CLAIM PAID ON-CHAIN';
+        if ((frame & 16) !== 0) drawTextSh(c, msg, VW / 2, y + 2, 1, mine && mine.signed === false ? RED : FLUO, 'center', '#0a3d00');
+      } else if ((frame & 16) !== 0) {
+        drawTextSh(c, 'YOUR STAKE IS BACK IN YOUR WALLET', VW / 2, y + 2, 1, FLUO, 'center', '#0a3d00');
+      }
       y += 12;
     }
     // the early-close / refund tx is the proof — link it when we know it
@@ -2221,7 +2278,8 @@ export class ArenaUI {
     legacy: LegacyStats | null;
     cfg: ChallengeConfig;
     shuffle: { active: boolean; t: number; target: number };
-    current: { id: number; status: string; players: number; winner: string | null; pot: number } | null;
+    current: { id: number; status: string; players: number; winner: string | null; pot: number; forfeited: boolean } | null;
+    forfeit: { kind: string; seat?: number; remainingMs?: number } | null; // v2 seat clock (current card)
     mine: { id: number; status: string; visibility: Visibility }[];
     seal: { role: 'creator' | 'joiner'; runs: number; sealed: number | null; continuePaying: boolean };
     verdict: boolean;
@@ -2250,8 +2308,9 @@ export class ArenaUI {
       cfg: { ...this.cfg },
       shuffle: { active: this.shuffleT >= 0, t: this.shuffleT, target: this.shuffleTarget },
       current: this.current
-        ? { id: this.current.id, status: this.current.status, players: this.current.players.length, winner: this.current.winner, pot: this.current.pot }
+        ? { id: this.current.id, status: this.current.status, players: this.current.players.length, winner: this.current.winner, pot: this.current.pot, forfeited: this.current.forfeited === true }
         : null,
+      forfeit: this.current ? duelForfeitInfo(this.current, arenaAddress()) : null,
       verdict: this.verdict,
       coins: this.coinRain.length,
       feed: [...this.feedLines],
