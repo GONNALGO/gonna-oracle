@@ -2001,40 +2001,106 @@ export class ArenaUI {
     // v10.1: the PRIVATE tag lives bottom-left — never next to the card title
     if (card.visibility === 'private') drawText(c, 'PRIVATE - LINK ONLY', 10, VH - 11, 1, '#b45aff');
 
-    // the two sigilli face to face (first two seats); extra seats queue below
-    // v10.1 vertical rhythm: seals 51..93, names 98, scores 110, pot 56..92
     const p0 = card.players[0] ?? null;
     const p1 = card.players[1] ?? null;
-    this.sealFace(c, frame, 92, 72, p0 ? p0.name : card.creatorName, p0 ? p0.fighter.skin : 'gonna', (p0?.accountType ?? card.creatorType) === 'falcon', card.winner !== null && card.winner === (p0?.address ?? card.creator));
-    if (p1) {
-      this.sealFace(c, frame, VW - 92, 72, p1.name, p1.fighter.skin, p1.accountType === 'falcon', card.winner !== null && card.winner === p1.address);
-    } else {
-      // empty seal: the open seat waits
-      c.strokeStyle = '#232838';
-      c.lineWidth = 2;
-      c.strokeRect(VW - 92 - 21, 72 - 21, 42, 42);
-      if ((frame & 32) !== 0) drawText(c, '???', VW - 92, 68, 1, DIM, 'center');
-      drawText(c, 'OPEN SEAT', VW - 92, 98, 1, DIM, 'center');
-    }
-    // scores under the seals once revealed
-    if (card.status === 'resolved' || card.status === 'claimed') {
-      if (p0) drawText(c, String(p0.score).padStart(6, '0'), 92, 110, 1, '#c8ccd4', 'center');
-      if (p1) drawText(c, String(p1.score).padStart(6, '0'), VW - 92, 110, 1, '#c8ccd4', 'center');
-    }
-    // the pot pulses at the center (gold heartbeat, never white)
-    const beat = Math.sin(frame / 9) * 0.5 + 0.5;
-    c.strokeStyle = beat > 0.5 ? GOLD : GOLD_DK;
-    c.lineWidth = 1;
-    const pr = 24 + Math.round(beat * 4);
-    c.strokeRect(VW / 2 - pr / 2 - 6 + 0.5, 56 + 0.5, pr + 12, 34);
-    this.coinPile(c, VW / 2 - 12, 72, card.stake, frame);
-    drawTextSh(c, fmtStake(card.pot), VW / 2, 92, 1, GOLD, 'center');
+    // v15.2.6: TABLE cards (non-duel format, or >2 seated) render the FULL
+    // ROSTER — every seat with its live score. On-chain scores are public box
+    // data; hiding them behind a '+N MORE' collapse was pointless obscurity.
+    // Tutti devono capire tutto: puntata, score da battere, punteggi, tutto.
+    const isTable = card.format !== 'duel' || card.players.length > 2;
+    if (isTable) {
+      // pot line: coin pile + gold pot, stake/seat dim, seats+countdown right
+      const potStr = fmtStake(card.pot) + ' $GONNA POT';
+      this.coinPile(c, VW / 2 - Math.floor(textWidth(potStr, 1) / 2) - 26, 56, card.stake, frame);
+      drawTextSh(c, potStr, VW / 2, 52, 1, GOLD, 'center', GOLD_DK);
+      drawText(c, 'STAKE ' + fmtStake(card.stake) + '/SEAT', 16, 62, 1, DIM);
+      const seatLine = card.players.length + '/' + card.seatsTotal + ' SEATS';
+      if (live) drawText(c, seatLine + ' - ' + fmtCountdown(card.deadline) + ' LEFT', VW - 16, 62, 1, GREEN, 'right');
+      else drawText(c, card.status.toUpperCase(), VW - 16, 62, 1, card.status === 'claimed' ? GOLD : RED, 'right');
 
-    // status line (clear of the seals' name row)
-    const seatLine = card.players.length + '/' + card.seatsTotal + ' SEATS';
-    if (live) drawText(c, seatLine + ' - ' + fmtCountdown(card.deadline) + ' LEFT', VW / 2, 124, 1, GREEN, 'center');
-    else drawText(c, card.status.toUpperCase(), VW / 2, 124, 1, card.status === 'claimed' ? GOLD : RED, 'center');
-    if (card.players.length > 2) drawText(c, '+' + (card.players.length - 2) + ' MORE DEGENS SEATED', VW / 2, 134, 1, DIM, 'center');
+      // the bar to clear — live scores are public, during 'open'/'full' too
+      const signed = card.players.filter((p) => p.score > 0);
+      let leader = signed.length > 0 ? signed[0] : null;
+      for (const p of signed) if (leader !== null && p.score > leader.score) leader = p;
+      if (leader !== null) {
+        const lname = (leader.name || leader.address.slice(0, 6) + '..' + leader.address.slice(-4)).slice(0, 12);
+        drawTextSh(c, 'SCORE TO BEAT: ' + String(leader.score).padStart(6, '0') + ' - ' + lname, VW / 2, 72, 1, FLUO, 'center', '#0a3d00');
+      } else {
+        drawText(c, 'NO SCORES YET - FIRST BLOOD SETS THE BAR', VW / 2, 72, 1, DIM, 'center');
+      }
+
+      // the roster: one row PER SEAT (1..seatsTotal). >6 seats -> two columns.
+      // Last row bottom stays <= 141 so the action zone at y=148 is untouched.
+      const settled = card.status === 'resolved' || card.status === 'claimed';
+      const n = Math.max(card.seatsTotal, card.players.length);
+      const twoCol = n > 6;
+      const perCol = twoCol ? Math.ceil(n / 2) : n;
+      const colW = twoCol ? VW / 2 - 24 : VW - 32;
+      for (let i = 0; i < n; i++) {
+        const col = twoCol && i >= perCol ? 1 : 0;
+        const row = col === 1 ? i - perCol : i;
+        const rx = col === 0 ? 16 : VW / 2 + 8;
+        const ry = 84 + row * 10;
+        const rightX = rx + colW;
+        const p = card.players[i] ?? null;
+        if (!p) {
+          drawText(c, String(i + 1) + ' OPEN SEAT', rx, ry, 1, DIM);
+          drawText(c, 'OPEN', rightX, ry, 1, GOLD_DK, 'right');
+          continue;
+        }
+        const isCreator = i === 0;
+        const isWinner = card.winner !== null && p.address === card.winner;
+        const isLeader = !settled && leader !== null && p.address === leader.address;
+        const rightStr = p.score > 0 ? String(p.score).padStart(6, '0') : '---';
+        const rightColor = isWinner ? GOLD : p.score > 0 ? '#7ee787' : DIM;
+        // left cell: seat + name, truncated so the score column stays clear
+        const seatNo = String(i + 1) + ' ';
+        const suffixLen = (isCreator ? 4 : 0) + (isWinner ? 7 : isLeader ? (twoCol ? 2 : 8) : 0);
+        const maxChars = Math.floor(colW / 6) - rightStr.length - 1;
+        let nm = (p.name || p.address.slice(0, 6) + '..' + p.address.slice(-4)).slice(0, 12);
+        while (seatNo.length + nm.length + suffixLen > maxChars && nm.length > 3) nm = nm.slice(0, -1);
+        drawText(c, seatNo + nm, rx, ry, 1, isWinner ? GOLD : '#c8ccd4');
+        let sx = rx + textWidth(seatNo + nm, 1) + 6;
+        if (isCreator) {
+          drawText(c, '(C)', sx, ry, 1, isWinner ? GOLD : DIM);
+          sx += textWidth('(C) ', 1);
+        }
+        if (isWinner) drawText(c, 'WINNER', sx, ry, 1, GOLD);
+        else if (isLeader) drawText(c, twoCol ? '<' : '< LEADS', sx, ry, 1, GOLD);
+        drawText(c, rightStr, rightX, ry, 1, rightColor, 'right');
+      }
+    } else {
+      // DUEL: the two sigilli face to face
+      // v10.1 vertical rhythm: seals 51..93, names 98, scores 110, pot 56..92
+      this.sealFace(c, frame, 92, 72, p0 ? p0.name : card.creatorName, p0 ? p0.fighter.skin : 'gonna', (p0?.accountType ?? card.creatorType) === 'falcon', card.winner !== null && card.winner === (p0?.address ?? card.creator));
+      if (p1) {
+        this.sealFace(c, frame, VW - 92, 72, p1.name, p1.fighter.skin, p1.accountType === 'falcon', card.winner !== null && card.winner === p1.address);
+      } else {
+        // empty seal: the open seat waits
+        c.strokeStyle = '#232838';
+        c.lineWidth = 2;
+        c.strokeRect(VW - 92 - 21, 72 - 21, 42, 42);
+        if ((frame & 32) !== 0) drawText(c, '???', VW - 92, 68, 1, DIM, 'center');
+        drawText(c, 'OPEN SEAT', VW - 92, 98, 1, DIM, 'center');
+      }
+      // v15.2.6: scores under the seals WHENEVER signed — no resolve gate,
+      // the box data is public the moment the oracle seal lands on-chain
+      if (p0 && p0.score > 0) drawText(c, String(p0.score).padStart(6, '0'), 92, 110, 1, '#c8ccd4', 'center');
+      if (p1 && p1.score > 0) drawText(c, String(p1.score).padStart(6, '0'), VW - 92, 110, 1, '#c8ccd4', 'center');
+      // the pot pulses at the center (gold heartbeat, never white)
+      const beat = Math.sin(frame / 9) * 0.5 + 0.5;
+      c.strokeStyle = beat > 0.5 ? GOLD : GOLD_DK;
+      c.lineWidth = 1;
+      const pr = 24 + Math.round(beat * 4);
+      c.strokeRect(VW / 2 - pr / 2 - 6 + 0.5, 56 + 0.5, pr + 12, 34);
+      this.coinPile(c, VW / 2 - 12, 72, card.stake, frame);
+      drawTextSh(c, fmtStake(card.pot), VW / 2, 92, 1, GOLD, 'center');
+
+      // status line (clear of the seals' name row)
+      const seatLine = card.players.length + '/' + card.seatsTotal + ' SEATS';
+      if (live) drawText(c, seatLine + ' - ' + fmtCountdown(card.deadline) + ' LEFT', VW / 2, 124, 1, GREEN, 'center');
+      else drawText(c, card.status.toUpperCase(), VW / 2, 124, 1, card.status === 'claimed' ? GOLD : RED, 'center');
+    }
 
     // ---- action zone ----
     if (this.busy) {
@@ -2070,6 +2136,13 @@ export class ArenaUI {
         drawText(c, 'SHARE IT OR CLOSE IT', VW / 2, ay + 14, 1, GRAY, 'center');
         ay += 26;
       } else if (live && !seated) {
+        // v15.2.6: a passerby sees the bar BEFORE staking (duels — tables
+        // already carry the SCORE TO BEAT line above the roster)
+        const beatScore = p0?.score ?? 0;
+        if (!isTable && beatScore > 0) {
+          drawTextSh(c, 'SCORE TO BEAT: ' + String(beatScore).padStart(6, '0'), VW / 2, ay, 1, FLUO, 'center', '#0a3d00');
+          ay += 10;
+        }
         drawText(c, 'NETWORK FEE: ' + feeLine('join', acct, testnet), VW / 2, ay, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
         ay += 12;
         this.btn(c, frame, { id: 'accept', x: 92, y: ay, w: 200, h: 20 }, 'ACCEPT & STAKE ' + fmtStake(card.stake), { gold: true });
