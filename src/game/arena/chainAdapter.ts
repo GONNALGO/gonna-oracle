@@ -29,6 +29,11 @@ export interface ChallengeConfig {
   stake: number; // $GONNA display units per seat
   fighter: FighterPick;
   sealedScore?: number; // v11: the run score sealed BEFORE signing (testnet)
+  // v15.2.7b (cid-race guard): the challenge id the sealed run was PLAYED for
+  // ('PIT-' + runCid, stage runCid % 7). When set, createChallenge REFUSES to
+  // build/sign under any other id (CidMovedError) — a card created at cid !=
+  // runCid would hand joiners a different seed/stage than the creator played.
+  runCid?: number;
   // v14.4: no continueRefId here — creator replays are FREE pre-commitment;
   // the 5 ALGO continue receipt exists ONLY on the joiner submitScore path
 }
@@ -54,8 +59,8 @@ export interface Challenge {
   seatsTotal: number;
   durationSecs: number;
   stageMode: StageMode;
-  stageIdx: number | null; // resolved stage (random resolves at create/join)
-  stake: number;
+  stageIdx: number | null; // resolved stage (v15.2.7: single = cid % 7 on testnet)
+  stake: number; // $GONNA per seat — NaN on a terminal card with no card memory (UNKNOWN, renders '-'; never an invented number)
   createdAt: number; // ms epoch
   deadline: number; // ms epoch — REAL timer
   status: ChallengeStatus;
@@ -117,8 +122,9 @@ export interface ArenaAdapter {
   legacyStats(address: string): Promise<LegacyStats>;
   // v10.4: deep-link lookup (?duel=<id>) — any visibility. v15.2.4: on
   // testnet a CLOSED cid resolves to its terminal card (v2 event log + card
-  // memory) — settled battles are never a 404.
-  getChallenge(id: number): Promise<Challenge | null>;
+  // memory) — settled battles are never a 404. v15.2.7: deepLink retries the
+  // event fetch (indexer lag) before rendering the terminal unknown card.
+  getChallenge(id: number, opts?: { deepLink?: boolean }): Promise<Challenge | null>;
   // v15: the id the NEXT create will get — a creator's DESCENT run is seeded
   // by it, so the joiner later fights the exact same waves. Read-only.
   peekNextId?(): Promise<number | null>;
@@ -139,6 +145,9 @@ export function fmtFee(accountType: AccountType): string {
 
 // ---------- $GONNA formatting (10M / 100M / 1B degen style) ----------
 export function fmtStake(n: number): string {
+  // v15.2.7: a terminal card whose stake the chain never told us carries NaN —
+  // render '-' (honest unknown), NEVER an invented number
+  if (!Number.isFinite(n)) return '—';
   if (n >= 1_000_000_000) return trim1(n / 1_000_000_000) + 'B';
   if (n >= 1_000_000) return trim1(n / 1_000_000) + 'M';
   if (n >= 1_000) return trim1(n / 1_000) + 'K';
@@ -163,12 +172,45 @@ export function fmtAmount(n: number): string {
   return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
 }
 
+// v15.2.7 (BUG-2): the v2 contract has NO stage field — the level is derived
+// deterministically from the challenge id, so every player of the same card
+// plays the same stage and resolve() binds the SAME idx into the oracle
+// verdict (the contract asserts verdict stage_idx == the resolve arg).
+export function stageIdxFromCid(cid: number): number {
+  return cid % 7; // 7 stages, idx 0-6
+}
+
+// v15.2.7b (cid-race guard): a creator's DESCENT run is seeded 'PIT-' + the
+// hinted id and played at stage hint % 7. If next_challenge_id has moved by
+// SIGN time, creating under the NEW id would silently mismatch every joiner
+// (different seed, different stage). The oracle sig is cid-bound so the chain
+// would 400 it anyway — this guard fires BEFORE the wallet prompt instead.
+export const CID_MOVED_MSG = 'THE PIT MOVED WHILE YOU PLAYED - RE-SEAL YOUR RUN';
+export class CidMovedError extends Error {
+  readonly code = 'CID_MOVED';
+  readonly runCid: number; // the id the sealed run was played for
+  readonly actualCid: number; // the id the chain would create under now
+  constructor(runCid: number, actualCid: number) {
+    super(CID_MOVED_MSG);
+    this.name = 'CidMovedError';
+    this.runCid = runCid;
+    this.actualCid = actualCid;
+  }
+}
+export function isCidMovedError(e: unknown): boolean {
+  return (e as { code?: string } | null)?.code === 'CID_MOVED';
+}
+
 // settlement math (the contract takes the 5% treasury fee INSIDE resolve):
 // pool = stake x seats taken, fee = 5% of the pool, winner takes the rest.
-// `pot` from older records may only carry the creator stake — the pool is
-// never smaller than stake x seats actually taken.
+// Contract truth (contract.py:128): seats_taken counts JOINER seats only —
+// the real pot is stake x players.length (creator is seat 0 of the roster).
+// Callers pass players.length as `seatsTaken`; `pot` from older records may
+// only carry the creator stake, so the pool is never smaller than stake x
+// the seated roster. No Math.max(1, ...) flavor: the roster count IS the
+// truth (an empty roster adds nothing, never a phantom seat).
 export function splitPot(stake: number, pot: number, seatsTaken: number): { pool: number; fee: number; takes: number } {
-  const pool = Math.max(pot, stake * Math.max(1, seatsTaken));
+  const pool = Math.max(pot, stake * Math.max(0, seatsTaken));
   const fee = pool * 0.05;
   return { pool, fee, takes: pool - fee };
 }
@@ -338,7 +380,8 @@ function seed(s: Store): void {
       status: seatsTaken >= seatsTotal ? 'full' : 'open',
       players,
       winner: null,
-      pot: stake * seatsTaken,
+      // v15.2.7: pot = stake x roster length (creator included), same as the chain
+      pot: stake * players.length,
     };
   };
   s.challenges.push(
@@ -367,20 +410,23 @@ function seedHistory(s: Store): void {
   ): void => {
     const winner = mockAddr(name);
     const loser = mockAddr(DEGEN_NAMES[(name.length + 3) % DEGEN_NAMES.length]);
+    const players = [
+      { address: winner, name, score: 9000 + (name.length * 137) % 4000 },
+      { address: loser, name: DEGEN_NAMES[(name.length + 3) % DEGEN_NAMES.length], score: 7000 },
+    ];
     s.history!.push({
       id: s.nextId++,
       stake,
-      pot: stake * Math.min(seats, 2), // duels pay 2x, tables approx for flavor
+      // v15.2.7: pot = stake x roster length — the chain pays from the players
+      // box, so the mock history carries the same semantics (no duel-only /2s)
+      pot: stake * players.length,
       format,
       stageMode,
       stageIdx,
       seats,
       winner,
       winnerName: name,
-      players: [
-        { address: winner, name, score: 9000 + (name.length * 137) % 4000 },
-        { address: loser, name: DEGEN_NAMES[(name.length + 3) % DEGEN_NAMES.length], score: 7000 },
-      ],
+      players,
       resolvedAt: now - hrsAgo * 3600_000,
       claimed,
     });
@@ -446,8 +492,13 @@ export class MockArenaAdapter implements ArenaAdapter {
   async createChallenge(cfg: ChallengeConfig, creator: ChallengePlayer): Promise<Challenge> {
     const s = this.store();
     const now = Date.now();
+    // v15.2.7b (cid-race guard): the mock mirrors the testnet create guard —
+    // a sealed run played for runCid is NEVER committed under a different id
+    // (same CidMovedError the chain adapter throws before the wallet prompt).
+    if (cfg.runCid !== undefined && cfg.runCid !== s.nextId) throw new CidMovedError(cfg.runCid, s.nextId);
+    const id = s.nextId++;
     const c: Challenge = {
-      id: s.nextId++,
+      id,
       creator: creator.address,
       creatorName: creator.name,
       creatorType: creator.accountType,
@@ -456,7 +507,9 @@ export class MockArenaAdapter implements ArenaAdapter {
       seatsTotal: cfg.format === 'duel' ? 2 : cfg.seatsTotal,
       durationSecs: cfg.durationSecs,
       stageMode: cfg.stageMode,
-      stageIdx: cfg.stageMode === 'random' ? Math.floor(Math.random() * 7) : cfg.stageIdx,
+      // v15.2.7 (BUG-2): the mock mirrors the chain — the level is id % 7,
+      // dealt by the counter, never Math.random and never hand-picked
+      stageIdx: cfg.stageMode === 'full' ? null : stageIdxFromCid(id),
       stake: cfg.stake,
       createdAt: now,
       deadline: now + cfg.durationSecs * 1000,
@@ -465,7 +518,7 @@ export class MockArenaAdapter implements ArenaAdapter {
       // (testnet or mock) rides inside the create, same as the contract
       players: [{ ...creator, score: cfg.sealedScore ?? 0 }],
       winner: null,
-      pot: cfg.stake,
+      pot: cfg.stake, // stake x roster length (1 seat so far — the creator)
     };
     // a mock card with a pre-sealed creator gets its rival instantly (same
     // honest rule as submitScore: the rival CAN beat you)
@@ -477,7 +530,7 @@ export class MockArenaAdapter implements ArenaAdapter {
         fighter: { skin: 'snek', assetId: null, name: 'SNEK' },
         accountType: 'ed25519',
       });
-      c.pot += c.stake;
+      c.pot = c.stake * c.players.length; // pot = stake x roster length (v15.2.7)
       if (c.players.length >= c.seatsTotal) c.status = 'full';
     }
     s.challenges.unshift(c);
@@ -493,7 +546,7 @@ export class MockArenaAdapter implements ArenaAdapter {
     if (c.players.some((p) => p.address === player.address)) throw new Error('already seated');
     if (c.players.length >= c.seatsTotal) throw new Error('table is full');
     c.players.push({ ...player, score: 0 });
-    c.pot += c.stake;
+    c.pot = c.stake * c.players.length; // pot = stake x roster length (v15.2.7)
     if (c.players.length >= c.seatsTotal) c.status = 'full';
     lsSave(s);
     return c;
@@ -517,7 +570,7 @@ export class MockArenaAdapter implements ArenaAdapter {
         fighter: { skin: 'snek', assetId: null, name: 'SNEK' },
         accountType: 'ed25519',
       });
-      c.pot += c.stake;
+      c.pot = c.stake * c.players.length; // pot = stake x roster length (v15.2.7)
       if (c.players.length >= c.seatsTotal) c.status = 'full';
     }
     // mock opponents play back instantly so the flow resolves end-to-end
@@ -582,6 +635,12 @@ export class MockArenaAdapter implements ArenaAdapter {
     s.challenges = s.challenges.filter((x) => x.id !== id); // sealed cards leave the square
     lsSave(s);
     return c;
+  }
+
+  // v15: the id the NEXT create will get — mock counter, so the wizard's
+  // chain-dealt level (id % 7) matches the card the mock actually creates
+  async peekNextId(): Promise<number | null> {
+    return this.store().nextId;
   }
 
   // v10.4: deep-link (?duel=<id>) — live cards of ANY visibility
@@ -722,6 +781,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const status: ChallengeStatus =
       statusCode === 3 || statusCode === 4 ? 'closed' : statusCode === 2 ? 'resolved' : expired ? 'expired' : statusCode === 1 || seatsTaken >= seatsTotal ? 'full' : 'open';
     const creator = encOpt(meta.creator);
+    const stageMode: StageMode = Number(meta.stageMode) === 0 ? 'full' : Number(meta.stageMode) === 1 ? 'single' : 'random';
     return {
       id: cid,
       creator,
@@ -731,8 +791,10 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       format: Number(meta.seatsTotal) <= 1 ? 'duel' : 'open',
       seatsTotal,
       durationSecs: 0, // not stored on-chain; deadline is the truth
-      stageMode: Number(meta.stageMode) === 0 ? 'full' : Number(meta.stageMode) === 1 ? 'single' : 'random',
-      stageIdx: null,
+      stageMode,
+      // v15.2.7 (BUG-2): v2 ChallengeMeta has NO stage field — the DESCENT
+      // level is cid % 7, trustless and identical for every player of the card
+      stageIdx: stageMode === 'single' ? stageIdxFromCid(cid) : null,
       stake: Number(meta.stake) / 1e6, // base units -> $GONNA display units
       createdAt: Number(meta.deadline) * 1000 - 12 * 3600_000,
       deadline: Number(meta.deadline) * 1000,
@@ -747,7 +809,10 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         seatedAt: Number(p.seatedAt) * 1000,
       })),
       winner: statusCode === 2 && meta.winner.length === 32 ? enc(meta.winner) : null,
-      pot: (Number(meta.stake) * seatsTaken) / 1e6,
+      // v15.2.7 (BUG-1): seats_taken counts JOINER seats only — the contract
+      // pays stake x roster length (creator is seat 0), so the players box
+      // length IS the pot truth (proven on-chain: cid 21, 5 x 1 GONNA -> pot 5)
+      pot: (Number(meta.stake) * players.length) / 1e6,
       forfeited: statusCode === 4,
     };
   }
@@ -798,6 +863,14 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     let builtCid = -1;
     const build = async () => {
       const cid = await kit.nextChallengeId(); // oracle score sig is cid-bound
+      // v15.2.7b (cid-race guard): the sealed run was played for cfg.runCid —
+      // NEVER build/sign a create under a different id (joiners would get a
+      // different seed/stage than the creator played). Throws BEFORE the
+      // oracle sign + wallet prompt; the 400 auto-retry below stays as
+      // belt&braces for a genuine POST-sign race, and it is safe: the rebuild
+      // re-reads the counter, so it either re-signs for the SAME runCid or
+      // dies right here with CID_MOVED — a mismatched card can never exist.
+      if (cfg.runCid !== undefined && cid !== cfg.runCid) throw new CidMovedError(cfg.runCid, cid);
       const sig = await devOracleSignScore(kit.scoreMsg(cid, 0, myPk, score));
       builtCid = cid;
       return kit.buildCreateGroup({
@@ -866,10 +939,14 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       .filter((p) => p.signed);
     if (entries.length === 0) throw new Error('no signed scores yet');
     // verdict payload: FULL -> 32 zero bytes; STAGE_IDX -> 24 zeros + stage idx
+    // v15.2.7 (BUG-2): the chosen stage is cid % 7 — deterministic, identical
+    // for every player, and the contract asserts the verdict's stage_idx
+    // equals the resolve arg, so BOTH legs use the same value.
+    const chosenStage = Number(meta.stageMode) === 1 ? stageIdxFromCid(id) : 0;
     let extra = new Uint8Array(32);
     if (Number(meta.stageMode) === 1) {
       extra = new Uint8Array(32);
-      new DataView(extra.buffer).setBigUint64(24, BigInt(0), false); // TODO(mainnet): real chosen stage
+      new DataView(extra.buffer).setBigUint64(24, BigInt(chosenStage), false);
     }
     const vsig = await devOracleSign(await kit.verdictMsg(id, Number(meta.stageMode), extra, entries));
     let best = entries[0];
@@ -884,7 +961,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const txns = await kit.buildResolveGroup({
       caller: me.address,
       cid: id,
-      stageIdx: 0, // TODO(mainnet): chosen stage for MODE_STAGE_IDX
+      stageIdx: chosenStage, // v15.2.7: cid % 7 for MODE_STAGE_IDX (0 for FULL)
       seedReveal: new Uint8Array(0), // MODE_FULL: empty reveal
       verdictSig: vsig,
       winner: a.encodeAddress(best.addr), // tie: contract ignores it, refunds all
@@ -893,7 +970,9 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     kit.recordResolveAt(id, Date.now()); // honest "x AGO" for the HISTORY
     // card memory for the event-paired history (BUG-3): exact settlement math
     // (protocol_fee = floor(pot * 500 / 10_000))
-    const potMicro = Number(meta.stake) * Number(meta.seatsTaken);
+    // v15.2.7 (BUG-1): pot = stake x roster length (creator included) — the
+    // same legs the contract pays: fee 5% floor, winner takes the rest.
+    const potMicro = Number(meta.stake) * players.length;
     const feeMicro = tie ? 0 : Math.floor(potMicro * 0.05);
     kit.rememberCard({
       cid: id,
@@ -981,22 +1060,34 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     throw new Error('closed on-chain');
   }
 
-  async getChallenge(id: number): Promise<Challenge | null> {
+  async getChallenge(id: number, opts?: { deepLink?: boolean }): Promise<Challenge | null> {
     const [meta, players] = await Promise.all([kit.readMeta(id), kit.readPlayers(id)]);
     if (meta) return this.toChallenge(id, meta, players);
     // v15.2.4 (BUG-3): v2 deletes BOTH boxes on every terminal transition, so
     // a missing box means SETTLED — never a 404. Rebuild the terminal card
     // from the v2 event log (winner/payout/fee + real round-time), paired with
     // this browser's card memory for stake/format/roster. Indexer down ->
-    // memory alone; fresh browser -> event alone; neither -> honest notfound.
+    // memory alone; fresh browser -> event alone.
     const mem = kit.rememberedCard(id);
     let ev: kit.ArenaCloseEvent | null = null;
-    try {
-      const events = await this.closeEvents(true);
-      ev = events.filter((e) => e.cid === id).sort((x, y) => y.round - x.round)[0] ?? null;
-    } catch { /* indexer unreachable — memory below still renders */ }
+    // v15.2.7 (BUG-3c): a deep-link can outrun the indexer — retry the event
+    // fetch up to 3 times over ~6s (bounded backoff) before rendering.
+    const waits = opts?.deepLink ? [0, 2000, 4000] : [0];
+    for (let i = 0; i < waits.length && !ev; i++) {
+      if (waits[i] > 0) await new Promise((r) => setTimeout(r, waits[i]));
+      try {
+        const events = await this.closeEvents(true);
+        ev = events.filter((e) => e.cid === id).sort((x, y) => y.round - x.round)[0] ?? null;
+      } catch { /* indexer unreachable — memory below still renders */ }
+    }
     if (ev) return this.terminalChallenge(id, ev.kind, ev, mem);
     if (mem && mem.closedKind) return this.terminalChallenge(id, mem.closedKind, null, mem);
+    // v15.2.7: boxes gone = the card IS terminal even when neither the event
+    // log nor this browser remembers it — render the honest unknown terminal
+    // card ('SETTLED - DATA ON CHAIN'), never a 404 and never invented numbers.
+    // Post-op callers (create/join/close) keep the null contract so their
+    // 'box unreadable' guards still fire — only deep-links opt in.
+    if (opts?.deepLink) return this.terminalChallenge(id, 'resolved', null, null);
     return null; // truly unknown card
   }
 
@@ -1005,7 +1096,11 @@ export class TestnetArenaAdapter implements ArenaAdapter {
   // (v14.4 convention: refunded cards render 'closed').
   private terminalChallenge(id: number, kind: 'resolved' | 'forfeited' | 'refunded', ev: kit.ArenaCloseEvent | null, mem: kit.CardMemory | null): Challenge {
     const winner = (kind !== 'refunded' ? (ev?.winner ?? null) : null) ?? mem?.winner ?? null;
-    const settled = kind === 'resolved' && winner !== null;
+    // v15.2.7: ev+mem BOTH missing = terminal-unknown — the boxes are gone so
+    // the card IS settled on-chain, but no numbers survive locally. It renders
+    // the resolved terminal block ('SETTLED - DATA ON CHAIN'), never a refund.
+    const unknown = !ev && !mem;
+    const settled = kind === 'resolved' && (winner !== null || unknown);
     const potMicro = ev ? ev.payout + ev.fee : mem ? Math.round((mem.payout + mem.fee) * 1e6) : 0;
     const at = ev?.at ?? mem?.closedAt ?? Date.now();
     const players =
@@ -1033,9 +1128,11 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       durationSecs: 0,
       stageMode: mem?.stageMode ?? 'full',
       stageIdx: mem?.stageIdx ?? null,
-      // event-only cards know the POT, not the per-seat stake — show half the
-      // pot (duel) rather than inventing a number the chain never said
-      stake: mem?.stake ?? potMicro / 1e6 / 2,
+      // v15.2.7 (BUG-3a): the stake comes from card memory ONLY — the chain
+      // event names pot/winner/fee, never the per-seat stake. No memory =
+      // stake UNKNOWN (NaN -> fmtStake renders '-'), never pot/2 (that was a
+      // duel-only guess, wrong for tables — inventing numbers is banned).
+      stake: mem?.stake ?? NaN,
       createdAt: at - 3600_000, // unknown — the settle time is the real record
       deadline: mem?.deadline ?? at,
       status: settled ? 'resolved' : 'closed',

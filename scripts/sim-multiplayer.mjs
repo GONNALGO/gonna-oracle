@@ -91,10 +91,16 @@ async function send(txns, signers) {
 const signScore = (cid, seat, acct, score) =>
   nacl.sign.detached(kit.scoreMsg(cid, seat, acct.addr.publicKey, score), oracleKp.secretKey);
 
-async function signVerdict(cid, mode, entries /* [{seat, addr(bytes), score}] */) {
-  const msg = await kit.verdictMsg(cid, mode, ZERO32, entries);
+async function signVerdict(cid, mode, entries /* [{seat, addr(bytes), score}] */, extra = ZERO32) {
+  const msg = await kit.verdictMsg(cid, mode, extra, entries);
   return nacl.sign.detached(msg, oracleKp.secretKey);
 }
+
+// v15.2.7b: the v2 contract has NO stage field — the DESCENT level is dealt
+// by the counter (same one-liner as chainAdapter.stageIdxFromCid). Resolve
+// must pass it AND bind it into the verdict payload (the contract asserts
+// verdict stage_idx == the resolve arg) or single-mode cards 400 in sims.
+const stageIdxFromCid = (cid) => cid % 7; // 7 stages, idx 0-6
 
 // decode ChallengeResolved / ChallengeForfeited / ChallengeRefunded from a
 // confirmed appl txn's logs (no indexer lag). Returns [] when none.
@@ -185,8 +191,14 @@ async function resolveChallenge(cid, callerRole, expectWinnerRole /* string addr
   const tie = signed.filter((e) => e.score === top.score).length > 1;
   const winner = enc(top.addr);
   console.log(`  resolve cid=${cid}: pot=${Number(meta.paidTotal)} winner=${short(winner)} score=${top.score} tie=${tie} caller=${callerRole}`);
-  const vSig = await signVerdict(cid, Number(meta.stageMode), signed);
-  const txns = await kit.buildResolveGroup({ caller: addr(callerRole), cid, stageIdx: 0, seedReveal: new Uint8Array(0), verdictSig: vSig, winner });
+  // v15.2.7b: MODE_STAGE_IDX resolves at cid % 7 (was hardcoded 0) — the
+  // verdict extra carries the SAME idx (24 zeros + uint64) the resolve arg
+  // passes, because the contract asserts the two agree. MODE_FULL pins 0.
+  const chosenStage = Number(meta.stageMode) === 1 ? stageIdxFromCid(cid) : 0;
+  const extra = new Uint8Array(32);
+  if (Number(meta.stageMode) === 1) new DataView(extra.buffer).setBigUint64(24, BigInt(chosenStage), false);
+  const vSig = await signVerdict(cid, Number(meta.stageMode), signed, extra);
+  const txns = await kit.buildResolveGroup({ caller: addr(callerRole), cid, stageIdx: chosenStage, seedReveal: new Uint8Array(0), verdictSig: vSig, winner });
   const pot = Number(meta.paidTotal);
   const fee = Math.floor(pot / 10000) * 500 + Math.floor(((pot % 10000) * 500) / 10000);
   const payout = pot - fee;

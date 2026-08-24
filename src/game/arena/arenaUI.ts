@@ -21,7 +21,7 @@ import type { Art } from '../sprites';
 import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait } from '../skins';
 import type { SkinId } from '../skins';
-import { getArenaAdapter, arenaMode, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, splitPot } from './chainAdapter';
+import { getArenaAdapter, arenaMode, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot, stageIdxFromCid } from './chainAdapter';
 import { activeSignOp, explorerTxUrl, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
 import type { SignOpView } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
@@ -57,6 +57,14 @@ type Screen = 'board' | 'create' | 'versus' | 'history' | 'histcard' | 'legacy' 
 type WizardStep = 'visibility' | 'format' | 'battle' | 'stake' | 'fighter' | 'confirm';
 
 const STAGE_NAMES = ['GHETTO GONNA', 'PUMP HARBOR', 'WALL STREET', 'CONSENSUS', 'THE HOUSE', 'LAUNCHPAD', 'THRONE ROOM'];
+// v15.2.7: the level is written EVERYWHERE — 'LV6 GHETTO GONNA' style for a
+// single-stage DESCENT, the full banner for a FULL RUN. The level itself is
+// dealt by the chain (stageIdxFromCid), never hand-picked.
+export function stageLabel(stageMode: string, stageIdx: number | null): string {
+  if (stageMode === 'full') return 'FULL RUN - ALL 7 STAGES';
+  const idx = stageIdx ?? 0;
+  return 'LV' + (idx + 1) + ' ' + STAGE_NAMES[idx];
+}
 const SEAT_OPTS = [4, 8, 12];
 const DUR_OPTS: { label: string; secs: number }[] = [
   { label: '4H', secs: 4 * 3600 },
@@ -99,6 +107,10 @@ export class ArenaUI {
   private sealRuns = 0;
   private sealDraftId = ''; // creator pre-create payment ref
   private nextIdHint: number | null = null; // v15: upcoming challenge id (DESCENT seed)
+  // v15.2.7b (cid-race guard): the id the SEALED creator run was played for
+  // ('PIT-' + sealRunCid, stage sealRunCid % 7). Rides the create config as
+  // runCid so chainAdapter can refuse a mismatched sign BEFORE the wallet.
+  private sealRunCid: number | null = null;
   private pendingRun = false; // set after a paid continue; engine polls it
   private continuePaying = false;
   private hots: Hot[] = [];
@@ -137,6 +149,7 @@ export class ArenaUI {
   private cfg: ChallengeConfig = this.defaultCfg();
   private shuffleT = -1; // -1 = idle; >=0 frames into the SHUFFLE animation
   private shuffleTarget = 0;
+  private shufflePending = false; // v15.2.7: waiting on peekNextId — the chain hasn't dealt the level yet
   private fighterOpts: FighterOpt[] = MOCK_SHELF;
   // versus
   private current: Challenge | null = null;
@@ -240,9 +253,11 @@ export class ArenaUI {
       })
       .catch(() => undefined);
     // v10.4 deep-link: ?duel=<id> lands straight on the card detail
+    // v15.2.7: deepLink opts into the event-log retry (indexer lag) before the
+    // terminal card renders — settled battles never 404, never invent numbers
     if (deepDuel != null) {
       void this.adapter()
-        .getChallenge(deepDuel)
+        .getChallenge(deepDuel, { deepLink: true })
         .then((ch) => {
           if (ch) {
             this.current = ch;
@@ -440,6 +455,26 @@ export class ArenaUI {
     this.errT = 240;
     this.errKind = 'note';
     return { act: 'none' };
+  }
+
+  // v15.2.7b (cid-race guard): next_challenge_id moved between the sealed run
+  // and SIGN — the adapter threw CID_MOVED BEFORE the wallet prompt, so the
+  // stake never left the wallet. RUN DISCARDED semantics (same draft wipe as
+  // the seal-screen DISCARD), amber note (never red), then back to the wizard
+  // CONFIRM step so RE-SEAL is one tap away. The counter is re-hinted so the
+  // next run is seeded/staged by the NEW id. Log-free, no white flash.
+  private cidMovedDiscard(): ArenaAction {
+    this.resetSeal();
+    this.screen = 'create';
+    this.step = 'confirm';
+    this.focus = 0;
+    void this.adapter()
+      .peekNextId?.()
+      .then((n) => {
+        if (typeof n === 'number') this.nextIdHint = n;
+      })
+      .catch(() => undefined);
+    return this.note(CID_MOVED_MSG);
   }
 
   // word-wrap the toast into at most two <=48-char lines (6px font, VW-80 strip)
@@ -948,27 +983,24 @@ export class ArenaUI {
       return { act: 'move' };
     }
     if (id === 'bat:single') {
-      this.cfg.stageMode = 'single'; // reveals the stage picker
+      // v15.2.7: no stage picker — THE DESCENT shuffles onto the level the
+      // CHAIN deals for the upcoming card id (stageIdxFromCid), provably fair
+      this.cfg.stageMode = 'single';
+      this.startChainShuffle();
       return { act: 'move' };
     }
     if (id === 'bat:next') {
-      this.step = 'stake';
-      this.focus = 0;
-      return { act: 'move' };
-    }
-    if (id.startsWith('bat:stage:')) {
-      this.cfg.stageMode = 'single';
-      this.cfg.stageIdx = Number(id.slice(10));
+      if (this.shufflePending) return { act: 'none' }; // the chain hasn't dealt yet
       this.step = 'stake';
       this.focus = 0;
       return { act: 'move' };
     }
     if (id === 'bat:random') {
-      // SHUFFLE: slot-machine reels, the target is drawn NOW and the reels
-      // brake onto it (staggered stops, no white flash — gold spark burst)
+      // SHUFFLE: slot-machine reels brake onto the dealt stage (staggered
+      // stops, no white flash — gold spark burst). v15.2.7: the target is
+      // deterministic (cid % 7) — the mock mirrors the chain exactly.
       this.cfg.stageMode = 'random';
-      this.shuffleTarget = Math.floor(Math.random() * 7);
-      this.shuffleT = 0;
+      this.startChainShuffle();
       return { act: 'move' };
     }
     // v10.2: EXACT stake ids FIRST — 'stake:minus'/'stake:plus' used to fall
@@ -1022,7 +1054,7 @@ export class ArenaUI {
       return {
         act: 'run',
         stageMode: this.cfg.stageMode === 'full' ? 'full' : 'stage',
-        stageIdx: this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0),
+        stageIdx: this.creatorStageIdx(),
         seedTag: this.descentSeedTag(),
         target: 0,
       };
@@ -1045,7 +1077,7 @@ export class ArenaUI {
       return {
         act: 'run',
         stageMode: this.cfg.stageMode === 'full' ? 'full' : 'stage',
-        stageIdx: this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0),
+        stageIdx: this.creatorStageIdx(),
         seedTag: this.descentSeedTag(),
         target: 0,
       };
@@ -1127,6 +1159,11 @@ export class ArenaUI {
         // amber note instead of the red toast, replay stays possible
         console.debug('[arena] signing cancelled by the degen — sealed draft intact');
         this.note(SIGN_CANCEL_MSG);
+      } else if (isCidMovedError(e)) {
+        // v15.2.7b: the pit moved mid-run — the adapter REFUSED to sign, so
+        // the stake never left the wallet. Discard the stale draft and land
+        // back on the wizard CONFIRM to re-seal (log-free, no red toast).
+        this.cidMovedDiscard();
       } else {
         // v14.2: EVERY failure is visible — console breadcrumb + red UI line
         console.debug('[arena] op failed:', e);
@@ -1142,6 +1179,9 @@ export class ArenaUI {
   onRunFinished(score: number): void {
     const s = Math.max(0, Math.floor(score));
     this.sealedScore = s;
+    // v15.2.7b: pin the cid this run was played for (creator runs only) —
+    // if the counter moves before SIGN, the create must NOT go out (CID_MOVED)
+    this.sealRunCid = this.sealRole === 'creator' ? this.nextIdHint : null;
     this.sealRuns++;
     if (s > this.sealBest) this.sealBest = s;
     this.pendingRun = false;
@@ -1166,7 +1206,7 @@ export class ArenaUI {
       ? (this.cfg.stageMode === 'full' ? 'full' : 'stage')
       : (this.current?.stageMode === 'full' ? 'full' : 'stage');
     const stageIdx = this.sealRole === 'creator'
-      ? (this.cfg.stageMode === 'full' ? 0 : (this.cfg.stageIdx ?? 0))
+      ? this.creatorStageIdx()
       : (this.current?.stageMode === 'full' ? 0 : (this.current?.stageIdx ?? 0));
     // v15: seed + TARGET for DESCENT runs (harmless on FULL RUN cards)
     const seedTag = this.sealRole === 'creator'
@@ -1184,6 +1224,15 @@ export class ArenaUI {
     return this.nextIdHint !== null ? 'PIT-' + this.nextIdHint : 'DRAFT-' + this.sealDraftId;
   }
 
+  // v15.2.7 (BUG-2): the DESCENT run's stage derives from the SAME cid
+  // variable that seeds the run (nextIdHint -> 'PIT-N'), so a card created as
+  // cid N was PLAYED at stage N % 7 and its resolve passes N % 7. Only when
+  // the counter is unreachable (DRAFT seed) does the wizard-locked idx rule.
+  private creatorStageIdx(): number {
+    if (this.cfg.stageMode === 'full') return 0;
+    return this.nextIdHint !== null ? stageIdxFromCid(this.nextIdHint) : (this.cfg.stageIdx ?? 0);
+  }
+
   // v15: the TARGET bar score for a joiner run — the creator's sealed score
   private descentTarget(card: Challenge): number {
     const creator = card.players.find((p) => p.address === card.creator);
@@ -1194,6 +1243,7 @@ export class ArenaUI {
     this.sealedScore = null;
     this.sealBest = 0;
     this.sealRuns = 0;
+    this.sealRunCid = null;
     this.pendingRun = false;
     this.continuePaying = false;
   }
@@ -1213,7 +1263,8 @@ export class ArenaUI {
 
   private doSign(): ArenaAction {
     const cfg: ChallengeConfig = { ...this.cfg };
-    if (cfg.stageMode === 'random' && this.shuffleT >= 0) cfg.stageIdx = this.shuffleTarget;
+    // v15.2.7: the dealt level (chain shuffle target) rides the create config
+    if (cfg.stageMode !== 'full' && this.shuffleT >= 0 && !this.shufflePending) cfg.stageIdx = this.shuffleTarget;
     // never a dead click: on testnet a real create NEEDS a sealed run score
     if (this.adapter().mode === 'testnet' && !qaActive() && this.sealedScore === null) {
       return this.fail('PLAY YOUR RUN FIRST');
@@ -1223,6 +1274,8 @@ export class ArenaUI {
     // ALGO oracle-verified CONTINUE is joiner-only now, see doSubmit).
     const best = this.sealBest > 0 ? this.sealBest : this.sealedScore;
     if (best !== null) cfg.sealedScore = best;
+    // v15.2.7b: the create must land under the SAME id the run was played for
+    if (this.sealRunCid !== null) cfg.runCid = this.sealRunCid;
     const player = arenaPlayer(cfg.fighter);
     console.debug('[arena] SIGN & STAKE — create start (score ' + (cfg.sealedScore ?? 'none') + ')');
     void this.run(
@@ -1350,14 +1403,17 @@ export class ArenaUI {
     if (!c) return { act: 'none' };
     this.rematchOf = c.id;
     // same rules, fresh card — the wizard pre-fills from the last battle
+    // v15.2.7: a terminal-unknown card (stake NaN) never poisons the new
+    // wizard; a single-stage rematch is re-dealt by the chain (new cid % 7),
+    // so stageIdx follows the current hint, not the old card's level
     this.cfg = {
       visibility: c.visibility,
       format: c.format,
       seatsTotal: c.seatsTotal,
       durationSecs: c.durationSecs,
       stageMode: c.stageMode,
-      stageIdx: c.stageIdx,
-      stake: c.stake,
+      stageIdx: c.stageMode === 'single' ? (this.nextIdHint !== null ? stageIdxFromCid(this.nextIdHint) : c.stageIdx) : c.stageIdx,
+      stake: Number.isFinite(c.stake) ? c.stake : this.cfg.stake,
       fighter: { ...this.cfg.fighter },
     };
     this.verdict = false;
@@ -1395,7 +1451,9 @@ export class ArenaUI {
       this.feedT = 0;
       if (this.feedLines.length > 1) this.feedLines.push(this.feedLines.shift()!);
     }
-    if (this.shuffleT >= 0 && this.shuffleT < 200) this.shuffleT++;
+    // v15.2.7: while the chain hasn't dealt the level (peekNextId in flight),
+    // hold the reels BEFORE the first stop — the shuffle never locks early
+    if (this.shuffleT >= 0 && this.shuffleT < (this.shufflePending ? 60 : 200)) this.shuffleT++;
     for (const c of this.coinRain) {
       c.y += c.vy;
       c.vy += 0.03;
@@ -1656,7 +1714,7 @@ export class ArenaUI {
       const statusTxt = live ? '' : card.status.toUpperCase();
       const statusX = claimable ? VW - 102 : VW - 40;
       const maxChars = Math.max(8, Math.floor(((statusTxt ? statusX - textWidth(statusTxt, 1) - 10 : VW - 40) - tx) / 6));
-      const stage = card.stageMode === 'full' ? 'FULL RUN' : 'THE DESCENT - ' + STAGE_NAMES[card.stageIdx ?? 0];
+      const stage = card.stageMode === 'full' ? 'FULL RUN' : 'THE DESCENT - ' + stageLabel(card.stageMode, card.stageIdx);
       const byLine = stage + ' - BY ' + card.creatorName;
       drawText(c, byLine.length > maxChars ? byLine.slice(0, maxChars) : byLine, tx, y + 24, 1, DIM);
       if (statusTxt) {
@@ -1754,22 +1812,38 @@ export class ArenaUI {
     this.btn(c, frame, { id: 'bat:full', x: 42, y: 50, w: 300, h: 20 }, 'FULL RUN - ALL 7 STAGES', { gold: this.cfg.stageMode === 'full' });
     this.btn(c, frame, { id: 'bat:single', x: 42, y: 74, w: 300, h: 20 }, 'THE DESCENT - INFINITE WAVES', { gold: this.cfg.stageMode === 'single' });
     this.btn(c, frame, { id: 'bat:random', x: 42, y: 98, w: 300, h: 20 }, 'RANDOM - TRUST THE SHUFFLE', { gold: this.cfg.stageMode === 'random' });
-    if (this.cfg.stageMode === 'single') {
-      for (let i = 0; i < 7; i++) {
-        const x = 66 + (i % 4) * 64;
-        const y = 126 + Math.floor(i / 4) * 40;
-        const r = { id: 'bat:stage:' + i, x, y, w: 32, h: 32 };
-        const lit = this.hots.length === this.focus;
-        this.hots.push(r);
-        this.stageIcon(c, art, i, x, y, 32);
-        if (lit) {
-          c.strokeStyle = '#ffffff';
-          c.strokeRect(x - 1.5, y - 1.5, 35, 35);
-        }
-      }
+    // v15.2.7: NO manual stage picking — the chain deals the level (cid % 7),
+    // provably fair. THE DESCENT runs the same SHUFFLE as RANDOM, but the
+    // reels brake onto stageIdxFromCid(next challenge id), not a local draw.
+    if ((this.cfg.stageMode === 'single' || this.cfg.stageMode === 'random') && this.shuffleT >= 0) this.drawShuffle(c, frame, art);
+  }
+
+  // v15.2.7: the SHUFFLE's target is DEALT BY THE CHAIN — stageIdxFromCid of
+  // the id the next create will get (the same id that seeds the DESCENT run).
+  // If the prefetch hasn't landed yet, the reels keep spinning (SHUFFLING...)
+  // while peekNextId is fetched on demand; NEXT only arms once the
+  // deterministic target is known — the wizard can never lock an invented level.
+  private startChainShuffle(): void {
+    this.shuffleT = 0;
+    if (this.nextIdHint !== null) {
+      this.shuffleTarget = stageIdxFromCid(this.nextIdHint);
+      this.shufflePending = false;
       return;
     }
-    if (this.cfg.stageMode === 'random' && this.shuffleT >= 0) this.drawShuffle(c, frame, art);
+    this.shufflePending = true;
+    const p = this.adapter().peekNextId?.();
+    if (!p) return; // adapter without a counter: reels spin until BACK
+    void p
+      .then((n) => {
+        if (typeof n === 'number') {
+          this.nextIdHint = n;
+          if (this.shufflePending) {
+            this.shuffleTarget = stageIdxFromCid(n);
+            this.shufflePending = false;
+          }
+        }
+      })
+      .catch(() => undefined);
   }
 
   // slot-machine SHUFFLE: 3 reels brake onto the drawn stage (staggered stops)
@@ -1787,10 +1861,11 @@ export class ArenaUI {
       c.strokeRect(x - 1.5, y - 1.5, 43, 43);
       if (stopped) this.pixelCoin(c, x + 17, y - 8, frame + r * 5); // gold sparkle on lock
     }
-    if (t >= 140) {
+    if (!this.shufflePending && t >= 140) {
       this.cfg.stageIdx = this.shuffleTarget;
-      drawTextSh(c, 'LOCKED: ' + STAGE_NAMES[this.shuffleTarget], VW / 2, 176, 1, GOLD, 'center');
-      this.btn(c, frame, { id: 'bat:next', x: 122, y: 192, w: 140, h: 16 }, 'NEXT', { green: true });
+      drawTextSh(c, 'LOCKED: ' + stageLabel('single', this.shuffleTarget), VW / 2, 172, 1, GOLD, 'center');
+      drawText(c, 'THE CHAIN DEALS THE LEVEL - PROVABLY FAIR', VW / 2, 183, 1, DIM, 'center');
+      this.btn(c, frame, { id: 'bat:next', x: 122, y: 194, w: 140, h: 16 }, 'NEXT', { green: true });
     } else if ((frame & 8) !== 0) {
       drawText(c, 'SHUFFLING...', VW / 2, 176, 1, FLUO, 'center');
     }
@@ -1870,7 +1945,7 @@ export class ArenaUI {
     const lines: [string, string][] = [
       ['CARD', this.cfg.visibility === 'public' ? 'PUBLIC - THE PIT' : 'PRIVATE - LINK ONLY'],
       ['FORMAT', this.cfg.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN ' + this.cfg.seatsTotal + ' SEATS - ' + Math.round(this.cfg.durationSecs / 3600) + 'H'],
-      ['BATTLE', this.cfg.stageMode === 'full' ? 'FULL RUN - 7 STAGES' : 'THE DESCENT - ' + STAGE_NAMES[this.cfg.stageIdx ?? 0]],
+      ['BATTLE', this.cfg.stageMode === 'full' ? 'FULL RUN - 7 STAGES' : 'THE DESCENT - ' + stageLabel(this.cfg.stageMode, this.cfg.stageIdx)],
       ['STAKE', fmtStake(this.cfg.stake) + ' $GONNA A SEAT'],
       ['FIGHTER', this.cfg.fighter.name],
     ];
@@ -1995,8 +2070,14 @@ export class ArenaUI {
     const me = arenaAddress();
     const seated = me !== null && card.players.some((p) => p.address === me);
     const live = card.status === 'open' || card.status === 'full';
+    // v15.2.7 (BUG-3): a terminal card with NO event and NO card memory knows
+    // nothing but "settled on-chain" — stake is NaN, pot is 0. Render the
+    // unknowns honestly ('—' / 'SETTLED - DATA ON CHAIN'), NEVER '0 $GONNA
+    // POT' or 'TOOK 0'.
+    const stakeKnown = Number.isFinite(card.stake);
+    const potUnknown = !stakeKnown && card.pot <= 0;
     const title = fmtStake(card.stake) + (card.format === 'duel' ? ' DUEL' : ' OPEN TABLE');
-    const stage = card.stageMode === 'full' ? 'FULL RUN - ALL 7 STAGES' : 'THE DESCENT - ' + STAGE_NAMES[card.stageIdx ?? 0];
+    const stage = card.stageMode === 'full' ? stageLabel('full', null) : 'THE DESCENT - ' + stageLabel(card.stageMode, card.stageIdx);
     this.drawHeader(c, title, stage);
     // v10.1: the PRIVATE tag lives bottom-left — never next to the card title
     if (card.visibility === 'private') drawText(c, 'PRIVATE - LINK ONLY', 10, VH - 11, 1, '#b45aff');
@@ -2010,10 +2091,10 @@ export class ArenaUI {
     const isTable = card.format !== 'duel' || card.players.length > 2;
     if (isTable) {
       // pot line: coin pile + gold pot, stake/seat dim, seats+countdown right
-      const potStr = fmtStake(card.pot) + ' $GONNA POT';
-      this.coinPile(c, VW / 2 - Math.floor(textWidth(potStr, 1) / 2) - 26, 56, card.stake, frame);
+      const potStr = potUnknown ? 'POT PAID - DATA ON CHAIN' : fmtStake(card.pot) + ' $GONNA POT';
+      if (stakeKnown) this.coinPile(c, VW / 2 - Math.floor(textWidth(potStr, 1) / 2) - 26, 56, card.stake, frame);
       drawTextSh(c, potStr, VW / 2, 52, 1, GOLD, 'center', GOLD_DK);
-      drawText(c, 'STAKE ' + fmtStake(card.stake) + '/SEAT', 16, 62, 1, DIM);
+      if (stakeKnown) drawText(c, 'STAKE ' + fmtStake(card.stake) + '/SEAT', 16, 62, 1, DIM);
       const seatLine = card.players.length + '/' + card.seatsTotal + ' SEATS';
       if (live) drawText(c, seatLine + ' - ' + fmtCountdown(card.deadline) + ' LEFT', VW - 16, 62, 1, GREEN, 'right');
       else drawText(c, card.status.toUpperCase(), VW - 16, 62, 1, card.status === 'claimed' ? GOLD : RED, 'right');
@@ -2093,8 +2174,8 @@ export class ArenaUI {
       c.lineWidth = 1;
       const pr = 24 + Math.round(beat * 4);
       c.strokeRect(VW / 2 - pr / 2 - 6 + 0.5, 56 + 0.5, pr + 12, 34);
-      this.coinPile(c, VW / 2 - 12, 72, card.stake, frame);
-      drawTextSh(c, fmtStake(card.pot), VW / 2, 92, 1, GOLD, 'center');
+      this.coinPile(c, VW / 2 - 12, 72, stakeKnown ? card.stake : 0, frame);
+      drawTextSh(c, potUnknown ? '—' : fmtStake(card.pot), VW / 2, 92, 1, GOLD, 'center');
 
       // status line (clear of the seals' name row)
       const seatLine = card.players.length + '/' + card.seatsTotal + ' SEATS';
@@ -2206,12 +2287,20 @@ export class ArenaUI {
         this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM YOUR STAKE BACK', { gold: true });
         ay += 24;
       } else if (card.status === 'resolved' || card.status === 'claimed') {
-        // v14.4: reopened after settlement — say what happened on-chain
-        // instead of dropping the degen into a dead action zone
-        drawTextSh(c, 'SETTLED - POT PAID ON-CHAIN', VW / 2, ay + 4, 1, GOLD, 'center', '#4a3005');
-        const wname = card.players.find((p) => p.address === card.winner)?.name ?? '???';
-        drawText(c, wname + ' TOOK ' + fmtStake(card.pot) + ' $GONNA', VW / 2, ay + 16, 1, GRAY, 'center');
-        ay += 28;
+        if (potUnknown) {
+          // v15.2.7 (BUG-3c): terminal card, event log AND memory both missing
+          // — the chain settled it but no numbers survived locally. Say exactly
+          // that; NEVER print 'TOOK 0' or a '0 $GONNA POT'.
+          drawTextSh(c, 'SETTLED - DATA ON CHAIN', VW / 2, ay + 4, 1, GOLD, 'center', '#4a3005');
+          ay += 20;
+        } else {
+          // v14.4: reopened after settlement — say what happened on-chain
+          // instead of dropping the degen into a dead action zone
+          drawTextSh(c, 'SETTLED - POT PAID ON-CHAIN', VW / 2, ay + 4, 1, GOLD, 'center', '#4a3005');
+          const wname = card.players.find((p) => p.address === card.winner)?.name ?? '???';
+          drawText(c, wname + ' TOOK ' + fmtStake(card.pot) + ' $GONNA', VW / 2, ay + 16, 1, GRAY, 'center');
+          ay += 28;
+        }
         if (getTxid(card.id)) {
           this.btn(c, frame, { id: 'viewchain', x: 92, y: Math.min(ay, 182), w: 200, h: 12 }, 'VIEW ON CHAIN', { gold: true });
           ay += 16;
@@ -2243,7 +2332,7 @@ export class ArenaUI {
   // back (STATUS_REFUNDED on-chain). Render the truth, never the live duel.
   private drawClosedCard(c: CanvasRenderingContext2D, frame: number, card: Challenge): void {
     const title = fmtStake(card.stake) + (card.format === 'duel' ? ' DUEL' : ' OPEN TABLE');
-    const stage = card.stageMode === 'full' ? 'FULL RUN - ALL 7 STAGES' : 'THE DESCENT - ' + STAGE_NAMES[card.stageIdx ?? 0];
+    const stage = card.stageMode === 'full' ? stageLabel('full', null) : 'THE DESCENT - ' + stageLabel(card.stageMode, card.stageIdx);
     this.drawHeader(c, title, stage);
     if (card.forfeited) {
       // v2 STATUS_FORFEIT (terminal): an unsigned duel seat ran out its 1h
@@ -2371,7 +2460,7 @@ export class ArenaUI {
 
   // ---------- HISTORY (v10.3) ----------
   private stageLabel(stageMode: string, stageIdx: number | null): string {
-    return stageMode === 'full' ? 'FULL RUN' : 'DESCENT - ' + STAGE_NAMES[stageIdx ?? 0];
+    return stageLabel(stageMode, stageIdx); // v15.2.7: 'LV6 GHETTO GONNA' style
   }
 
   // v14: the contract pays INSIDE resolve (winner + 5% treasury fee, one
