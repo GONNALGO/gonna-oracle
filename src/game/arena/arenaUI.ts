@@ -197,6 +197,15 @@ export class ArenaUI {
       const e = wallet.getEligibility();
       const opts: FighterOpt[] = [{ pick: { skin: 'gonna', assetId: null, name: 'GONNA' }, owned: true }];
       for (const n of e.nfts) opts.push({ pick: { skin: n.skin, assetId: n.id, name: n.name }, owned: true });
+      // TESTNET TEST FIXTURES — remove at mainnet (mainnet path never includes them)
+      if (arenaMode() === 'testnet') {
+        const fixtures: FighterOpt[] = [
+          { pick: { skin: 'fire', assetId: 7007, name: 'GONNA 7' }, owned: true },
+          { pick: { skin: 'rainbow', assetId: 7042, name: 'GONNA 42' }, owned: true },
+        ];
+        // dedup vs real holdings: never list the same assetId twice
+        for (const f of fixtures) if (!opts.some((o) => o.pick.assetId === f.pick.assetId)) opts.push(f);
+      }
       return opts;
     }
     return MOCK_SHELF; // no wallet: demo shelf, owned flags drive the QA flow
@@ -469,12 +478,16 @@ export class ArenaUI {
     el.style.padding = '0';
     el.style.outline = 'none';
     el.style.caretColor = '#39FF14';
+    // v15.2.5: the canvas echo is panned away under the iOS keyboard — the
+    // input itself must carry the stake info (a11y label + live title)
+    el.setAttribute('aria-label', 'STAKE $GONNA');
     this.stakeInputPrev = this.cfg.stake;
     el.addEventListener('input', () => {
       // digits only, live sync into the wizard config
       const digits = el.value.replace(/\D/g, '').slice(0, 12); // max 1T
       if (el.value !== digits) el.value = digits;
       this.cfg.stake = digits === '' ? 0 : Math.min(1_000_000_000_000, Number(digits));
+      el.title = 'STAKE: ' + digits + ' $GONNA'; // live echo ON the input (keyboard-safe)
     });
     el.addEventListener('keydown', (ev) => {
       ev.stopPropagation(); // keep the game Input handler out while typing
@@ -527,6 +540,25 @@ export class ArenaUI {
     const el = this.stakeInput;
     const f = this.fitRef;
     if (!el || !f) return;
+    // v15.2.5 mobile-first: on touch the iOS keyboard shrinks/pans the visual
+    // viewport and the canvas-aligned field ends up hidden UNDER it (blind
+    // typing). Pin the input to the VISUAL VIEWPORT, just above the keyboard —
+    // recomputed every call (stepStake calls this every frame; no listeners).
+    const vv = this.touchRef ? window.visualViewport : null;
+    if (vv) {
+      const w = Math.round(Math.min(vv.width * 0.84, 420));
+      const h = 44;
+      el.style.left = Math.round(vv.offsetLeft + (vv.width - w) / 2) + 'px';
+      el.style.top = Math.round(vv.offsetTop + vv.height - h - 10) + 'px';
+      el.style.width = w + 'px';
+      el.style.height = h + 'px';
+      el.style.fontSize = '22px';
+      // keyboard-safe visibility: panel bg + FLUO frame, zIndex stays 9999
+      el.style.background = '#0d1118';
+      el.style.border = '2px solid #39FF14';
+      el.style.borderRadius = '6px';
+      return;
+    }
     el.style.left = Math.round(f.fitOffX + 126 * f.fitScale) + 'px';
     el.style.top = Math.round(f.fitOffY + 114 * f.fitScale) + 'px';
     el.style.width = Math.round(132 * f.fitScale) + 'px';

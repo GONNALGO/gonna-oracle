@@ -16,9 +16,11 @@
 //     "NO WORD FROM THE WALLET?" strip; RETRY re-issues; CANCEL lands back on
 //     the sealed card with the draft INTACT (replay still possible). Same
 //     strip on the JOIN flow.
-//   PART C (browser, shelf truth): connected wallet with 0 NFTs sees ONLY the
-//     base GONNA (never the mock GONNA 7/42); mock shelf stays for wallet-less
-//     demo mode; mock NFTs still show when injected.
+//   PART C (browser, shelf truth): connected MOCK-mode wallet with 0 NFTs sees
+//     ONLY the base GONNA (never the mock GONNA 7/42); mock shelf stays for
+//     wallet-less demo mode; mock NFTs still show when injected.
+//     v15.2.5: a TESTNET-connected wallet ALSO gets the GONNA 7/42 test
+//     fixtures OWNED (deduped) — remove at mainnet.
 // The QA keys are read from the GITIGNORED deploy/testnet.secrets.json and
 // never printed.
 // Run: node test-v1522.mjs   (needs the vite preview serving dist on :4173)
@@ -435,7 +437,14 @@ async function fighterStep(page) {
   await page.waitForFunction(() => window.__gonna.arenaInfo.screen === 'board', null, { timeout: 15000 });
   await sleep(300);
   const i = await info(page);
-  ok(i.shelf.length === 1 && i.shelf[0].name === 'GONNA', 'testnet-connected + 0 NFTs: ONLY the base GONNA (never the mock shelf)');
+  // v15.2.5 (FIX-A): TESTNET TEST FIXTURES — a connected testnet wallet now
+  // ALSO gets GONNA 7/42 OWNED (deduped vs real holdings); mainnet and
+  // wallet-less paths are unchanged. Remove at mainnet.
+  const names = i.shelf.map((s) => s.name);
+  ok(
+    i.shelf.length === 3 && names[0] === 'GONNA' && i.shelf.filter((s) => s.name === 'GONNA 7' && s.owned).length === 1 && i.shelf.filter((s) => s.name === 'GONNA 42' && s.owned).length === 1,
+    'testnet-connected + 0 NFTs: base GONNA + v15.2.5 TESTNET fixtures GONNA 7/42 OWNED, exactly once each',
+  );
   await ctx.close();
 }
 
