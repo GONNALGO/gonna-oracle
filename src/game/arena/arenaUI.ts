@@ -21,7 +21,7 @@ import type { Art } from '../sprites';
 import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait } from '../skins';
 import type { SkinId } from '../skins';
-import { getArenaAdapter, arenaMode, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
+import { getArenaAdapter, arenaMode, closeGate, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
 import { activeSignOp, explorerTxUrl, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
 import type { SignOpView } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
@@ -2313,11 +2313,16 @@ export class ArenaUI {
         this.btn(c, frame, { id: 'resolve', x: 92, y: ay, w: 200, h: 20 }, 'RESOLVE THE BATTLE', { gold: true });
         ay += 24;
       } else if (live && seated) {
-        // committed but nobody can resolve yet — wait it out (or shill it)
+        // committed but nobody can resolve yet — wait it out (or shill it).
+        // v15.3.0 (FIX-A): with a joiner seated the creator CANNOT close any
+        // more (contract early_close asserts seats_taken == 0) — say so,
+        // never invite a tx the chain would reject.
         const waitLine = tableFull
           ? 'WAITING FOR SCORES...'
           : card.creator === me
-            ? 'YOUR CARD, DEGEN - SHARE IT OR CLOSE IT'
+            ? joiners.length === 0
+              ? 'YOUR CARD, DEGEN - SHARE IT OR CLOSE IT'
+              : 'TABLE LOCKED - SCORES OR THE TIMER SETTLE IT'
             : 'WAITING FOR A CHALLENGER...';
         if ((frame & 16) !== 0) drawTextSh(c, waitLine, VW / 2, ay + 4, 1, FLUO, 'center', '#0a3d00');
         ay += 18;
@@ -2326,8 +2331,27 @@ export class ArenaUI {
         this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM THE POT', { gold: true });
         ay += 24;
       } else if (card.status === 'expired' && seated) {
-        this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM YOUR STAKE BACK', { gold: true });
-        ay += 24;
+        // v15.3.0 (FIX-A): the timer passed with nobody resolving. The
+        // contract claim() refund asserts seats_taken == 0 AND creator — so
+        // with joiners seated a 'CLAIM YOUR STAKE BACK' button would offer a
+        // tx the chain REJECTS. Gate on the chain truth: a silent duel seat
+        // pays via claim_forfeit (no deadline check on-chain); everything
+        // else waits for a signed score (RESOLVE, above) or the +7d sweep.
+        const gate = closeGate(card, me);
+        if (gate?.kind === 'forfeit') {
+          drawTextSh(c, 'OPPONENT NEVER SIGNED - CLOCK EXPIRED', VW / 2, ay, 1, RED, 'center', '#4a0505');
+          ay += 12;
+          this.btn(c, frame, { id: 'forfeit', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM FORFEIT', { red: true });
+          ay += 24;
+        } else if (joiners.length > 0) {
+          drawTextSh(c, 'TABLE LOCKED - NO SCORES SEALED', VW / 2, ay, 1, '#ff8a3c', 'center');
+          ay += 12;
+          drawText(c, 'A SIGNED SCORE SETTLES IT - ELSE THE +7D SWEEP REFUNDS ALL', VW / 2, ay, 1, GRAY, 'center');
+          ay += 14;
+        } else {
+          this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM YOUR STAKE BACK', { gold: true });
+          ay += 24;
+        }
       } else if (card.status === 'resolved' || card.status === 'claimed') {
         if (potUnknown) {
           // v15.2.7 (BUG-3c): terminal card, event log AND memory both missing
@@ -2348,9 +2372,20 @@ export class ArenaUI {
           ay += 16;
         }
       }
-      // creator emergency brake on an open card
-      if (live && card.creator === me) {
+      // creator emergency brake on an open card — v15.3.0 (FIX-A): gated by
+      // CHAIN truth via closeGate (contract early_close asserts
+      // seats_taken == 0). With a joiner seated the table is LOCKED: all
+      // scores (RESOLVE), the timer, the duel seat clock (CLAIM FORFEIT) or
+      // the +7d sweep settle it — NEVER a creator cancel. No closeGate
+      // 'cancel', no button: the chain would reject the tx.
+      const gate = closeGate(card, me);
+      if (live && gate?.kind === 'cancel') {
         this.btn(c, frame, { id: 'close', x: 122, y: Math.min(ay, 190), w: 140, h: 12 }, 'EARLY CLOSE', { dim: true });
+      } else if (live && gate?.kind === 'locked' && !seated) {
+        // defensive: a creator somehow NOT on his own roster still gets the
+        // honest line instead of a dead button (seated creators see it as
+        // the wait line in the action zone above)
+        drawText(c, 'TABLE LOCKED - SCORES OR THE TIMER SETTLE IT', VW / 2, Math.min(ay, 190) + 4, 1, DIM, 'center');
       }
     }
     // v11.1: SHARE — owner only, while live, PUBLIC and PRIVATE alike
@@ -2543,7 +2578,12 @@ export class ArenaUI {
           ? h.stake + (h.payout as number)
           : (h.payout as number)
         : splitPot(h.stake, h.pot, h.players.length).takes;
-      const head = (h.winnerName + ' TOOK ' + fmtAmount(takes)).slice(0, 34);
+      // v15.3.0 (FIX-B): every history amount carries its UNIT — 'WON x
+      // $GONNA', never a bare number. A tie/refund row (no winner) says what
+      // it is: 'TIE - REFUND x $GONNA EACH'.
+      const head = (!h.winner
+        ? 'TIE - REFUND ' + (Number.isFinite(h.stake) ? fmtAmount(h.stake) : '—') + ' $GONNA EACH'
+        : h.winnerName + ' WON ' + fmtAmount(takes) + ' $GONNA').slice(0, 40);
       drawText(c, head, 40, y + 4, 1, GOLD);
       if (this.histPaid(h)) drawText(c, 'PAID', VW - 14, y + 4, 1, GOLD, 'right');
       else if ((frame & 16) !== 0) drawText(c, 'UNCLAIMED', VW - 14, y + 4, 1, '#ff8a3c', 'right');
@@ -2565,7 +2605,8 @@ export class ArenaUI {
     if (!h) { this.screen = 'history'; return; }
     this.drawHeader(c, 'BATTLE #' + h.id, h.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN TABLE - ' + h.seats + ' SEATS');
     let y = 44;
-    drawTextSh(c, h.winnerName + ' TOOK THE POT', VW / 2, y, 1, GOLD, 'center', '#4a3005');
+    // v15.3.0 (FIX-B): a tie has no winner — say REFUNDED, never 'TOOK'
+    drawTextSh(c, h.winner ? h.winnerName + ' WON THE POT' : 'TIE - ALL REFUNDED', VW / 2, y, 1, GOLD, 'center', '#4a3005');
     y += 12;
     // contenders + scores
     for (const p of h.players.slice(0, 4)) {

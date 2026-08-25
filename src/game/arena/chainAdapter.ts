@@ -167,13 +167,20 @@ export function fmtStake(n: number): string {
   // v15.2.7: a terminal card whose stake the chain never told us carries NaN —
   // render '-' (honest unknown), NEVER an invented number
   if (!Number.isFinite(n)) return '—';
+  // v15.3.0 (FIX-C): compact degen tiers K/M/B/T, max 1 decimal, trailing
+  // '.0' trimmed. The value is TRUNCATED, never rounded up: 999,999 renders
+  // '999.9K' (a rounded '1000K' would fake the next tier) and the tier only
+  // flips at the exact power (1M from 1,000,000; 1B from 1e9; 1T from 1e12 —
+  // beyond T there is no tier, 1e15 renders '1000T'). DISPLAY ONLY: this is
+  // never fed into contract math (micro-units do that).
+  if (n >= 1e12) return trim1(n / 1e12) + 'T';
   if (n >= 1_000_000_000) return trim1(n / 1_000_000_000) + 'B';
   if (n >= 1_000_000) return trim1(n / 1_000_000) + 'M';
   if (n >= 1_000) return trim1(n / 1_000) + 'K';
   return String(n);
 }
 function trim1(v: number): string {
-  const s = v.toFixed(1);
+  const s = (Math.floor(v * 10) / 10).toFixed(1); // truncate toward zero — display only
   return s.endsWith('.0') ? s.slice(0, -2) : s;
 }
 // thousands-separated integer — the CUSTOM stake field / typed amounts
@@ -382,15 +389,21 @@ export type ForfeitInfo =
 // Pure + headless-testable: given a card and the viewer address, what does
 // the seat clock demand RIGHT NOW? Mock cards carry no seatedAt/signed —
 // they return null (the seat clock is a testnet-contract feature).
-export function duelForfeitInfo(card: Challenge, me: string | null, nowMs = Date.now()): ForfeitInfo {
+// v15.3.0 (FIX-A): opts.includeExpired also inspects deadline-passed cards —
+// the contract's claim_forfeit has NO deadline check (contract.py), so a
+// silent seat stays forfeitable after the timer. An EXPIRED card never
+// reports 'own-clock': submit_score is dead past the deadline, there is
+// nothing left to count down.
+export function duelForfeitInfo(card: Challenge, me: string | null, nowMs = Date.now(), opts?: { includeExpired?: boolean }): ForfeitInfo {
   if (card.format !== 'duel') return null;
-  if (card.status !== 'open' && card.status !== 'full') return null;
+  if (card.status !== 'open' && card.status !== 'full' && !(opts?.includeExpired === true && card.status === 'expired')) return null;
   if (me === null) return null;
   const myIdx = card.players.findIndex((p) => p.address === me);
   if (myIdx < 0) return null;
   const mine = card.players[myIdx];
   if (mine.seatedAt === undefined || mine.signed === undefined) return null;
   if (!mine.signed) {
+    if (card.status === 'expired') return null; // deadline passed: no score left to sign
     const expiresAt = mine.seatedAt + SEAT_TTL_MS;
     return { kind: 'own-clock', remainingMs: Math.max(0, expiresAt - nowMs), expiresAt };
   }
@@ -402,6 +415,37 @@ export function duelForfeitInfo(card: Challenge, me: string | null, nowMs = Date
   const expiredAt = other.seatedAt + SEAT_TTL_MS;
   if (nowMs > expiredAt) return { kind: 'claimable', seat: otherIdx, expiredAt };
   return null;
+}
+
+// ---------- v15.3.0 (FIX-A): the creator's close control mirrors the CHAIN ----------
+// contract.py early_close asserts `seats_taken == 0`: the moment ONE joiner
+// sits down the card can NEVER be cancelled again — it settles by all scores
+// (full + all signed -> resolve), by the timer (deadline + a signed joiner ->
+// resolve), by the duel seat clock (claim_forfeit), or by the +7d catastrophe
+// sweep. The UI must NEVER offer a tx the contract would reject, so this gate
+// derives from the on-chain card state (seats taken / deadline / signed
+// scores), never from local wishes. Pure + headless-testable.
+export type CloseGate =
+  | { kind: 'cancel' } // zero joiners, live: early_close (1 ALGO anti-spam fee, stake back)
+  | { kind: 'claim' } // zero joiners, expired: claim() full refund, zero fee
+  | { kind: 'resolve' } // resolvable NOW (full + all signed, or expired with a signed joiner)
+  | { kind: 'forfeit' } // duel: the silent unsigned seat's clock lapsed -> claim_forfeit
+  | { kind: 'locked' }; // joiners seated, nothing settles it yet — scores or the timer
+
+export function closeGate(card: Challenge, me: string | null, nowMs = Date.now()): CloseGate | null {
+  if (me === null || card.creator !== me) return null; // not the creator's call
+  const live = card.status === 'open' || card.status === 'full';
+  if (!live && card.status !== 'expired') return null; // terminal card: nothing to gate
+  const joiners = card.players.slice(1); // seat 0 is the creator — joiners are seats_taken
+  const tableFull = card.players.length >= card.seatsTotal;
+  const allSigned = card.players.length > 0 && card.players.every((p) => p.score > 0);
+  const joinerSigned = joiners.some((p) => p.score > 0);
+  // contract resolve: (full && all signed) || (deadline passed && a joiner signed)
+  if ((live && tableFull && allSigned) || (card.status === 'expired' && joinerSigned)) return { kind: 'resolve' };
+  // duel seat clock (live, and post-deadline too — claim_forfeit has no deadline check)
+  if (duelForfeitInfo(card, me, nowMs, { includeExpired: true })?.kind === 'claimable') return { kind: 'forfeit' };
+  if (joiners.length === 0) return live ? { kind: 'cancel' } : { kind: 'claim' };
+  return { kind: 'locked' };
 }
 
 // ======================================================================
@@ -757,6 +801,10 @@ export class MockArenaAdapter implements ArenaAdapter {
     if (c.creator !== address) throw new Error('only the creator can early-close');
     this.refresh(c);
     if (c.status !== 'open') throw new Error('card is not open');
+    // v15.3.0 (FIX-A): mirror the contract — early_close asserts
+    // seats_taken == 0. With a joiner seated the table is LOCKED (scores or
+    // the timer settle it); the mock refuses the tx exactly like the chain.
+    if (c.players.length > 1) throw new Error('TABLE LOCKED - SCORES OR THE TIMER SETTLE IT');
     c.status = 'closed';
     s.challenges = s.challenges.filter((x) => x.id !== id); // sealed cards leave the square
     lsSave(s);
