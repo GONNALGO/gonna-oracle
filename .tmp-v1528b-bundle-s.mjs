@@ -1,3 +1,31 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// .tmp-v1528b-oraclestub.ts
+var tmp_v1528b_oraclestub_exports = {};
+__export(tmp_v1528b_oraclestub_exports, {
+  armDevOracle: () => armDevOracle,
+  devOracleSign: () => devOracleSign,
+  devOracleSignScore: () => devOracleSignScore,
+  hasDevOracle: () => hasDevOracle
+});
+var armDevOracle, hasDevOracle, devOracleSign, devOracleSignScore;
+var init_tmp_v1528b_oraclestub = __esm({
+  ".tmp-v1528b-oraclestub.ts"() {
+    armDevOracle = () => void 0;
+    hasDevOracle = () => true;
+    devOracleSign = async () => new Uint8Array(64);
+    devOracleSignScore = async () => new Uint8Array(64);
+  }
+});
+
 // .tmp-v1528b-kitstub.ts
 var H = () => globalThis.__KIT;
 var GONNA_ASA_TESTNET = 769688287;
@@ -34,10 +62,224 @@ var rememberCard = (m) => H().rememberCard && H().rememberCard(m);
 var rememberedCard = (cid) => H().rememberedCard(cid);
 var rememberedCards = () => H().rememberedCards ? H().rememberedCards() : [];
 
-// .tmp-v1528b-oraclestub.ts
-var hasDevOracle = () => true;
-var devOracleSign = async () => new Uint8Array(64);
-var devOracleSignScore = async () => new Uint8Array(64);
+// src/game/b64.ts
+var T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var R = /* @__PURE__ */ new Map();
+for (let i = 0; i < 64; i++) R.set(T[i], i);
+function b64ToBytes(s) {
+  const clean = s.replace(/[\s=]+/g, "");
+  const out = [];
+  for (let i = 0; i < clean.length; i += 4) {
+    const c0 = R.get(clean[i]);
+    const c1 = R.get(clean[i + 1]);
+    if (c0 === void 0 || c1 === void 0) throw new Error("bad base64");
+    const c2 = R.get(clean[i + 2]);
+    const c3 = R.get(clean[i + 3]);
+    const n = c0 << 18 | c1 << 12 | (c2 ?? 0) << 6 | (c3 ?? 0);
+    out.push(n >> 16 & 255);
+    if (c2 !== void 0) out.push(n >> 8 & 255);
+    if (c3 !== void 0) out.push(n & 255);
+  }
+  return new Uint8Array(out);
+}
+
+// src/game/arena/oracleClient.ts
+var ORACLE_BASE_URL_TESTNET = "http://localhost:8787";
+var LS_ORACLE_URL = "gonna.arena.oracleurl";
+var ORACLE_DEV = "dev";
+function oracleBaseUrl() {
+  try {
+    const q = new URLSearchParams(window.location.search).get("oracle");
+    if (q) {
+      window.localStorage.setItem(LS_ORACLE_URL, q);
+      return q;
+    }
+    const stored = window.localStorage.getItem(LS_ORACLE_URL);
+    if (stored) return stored;
+  } catch {
+  }
+  return ORACLE_BASE_URL_TESTNET;
+}
+function oracleIsDev() {
+  return oracleBaseUrl() === ORACLE_DEV;
+}
+var OracleError = class extends Error {
+  status;
+  // 0 = network/timeout (no HTTP answer at all)
+  constructor(message, status = 0) {
+    super(message);
+    this.name = "OracleError";
+    this.status = status;
+  }
+};
+var TIMEOUT_MS = 8e3;
+var MAX_ATTEMPTS = 2;
+async function postJson(path, body, opts) {
+  const base = oracleBaseUrl();
+  let lastErr = new OracleError("THE ORACLE IS UNREACHABLE - CHECK THE LINE AND RETRY");
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(base + path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ctrl.signal
+      });
+    } catch (e) {
+      const aborted = e instanceof Error && e.name === "AbortError";
+      lastErr = new OracleError(aborted ? "THE ORACLE IS SILENT - TIMED OUT, RETRY" : "THE ORACLE IS UNREACHABLE - CHECK THE LINE AND RETRY");
+      clearTimeout(timer);
+      continue;
+    }
+    clearTimeout(timer);
+    if (res.ok) {
+      try {
+        return await res.json();
+      } catch {
+        throw new OracleError("THE ORACLE TALKS GIBBERISH - BAD JSON");
+      }
+    }
+    let reason = "HTTP " + res.status;
+    try {
+      const j = await res.json();
+      if (j && typeof j.error === "string" && j.error) reason = j.error;
+    } catch {
+    }
+    if (res.status === 429) throw new OracleError("THE ORACLE IS BUSY - RETRY IN A BREATH", 429);
+    if (res.status >= 500) {
+      lastErr = new OracleError("THE ORACLE SAYS NO - " + reason, res.status);
+      continue;
+    }
+    throw new OracleError("THE ORACLE SAYS NO - " + reason, res.status);
+  }
+  throw lastErr;
+}
+async function signScore(req, opts) {
+  const j = await postJson("/v1/sign-score", req, opts);
+  if (typeof j.sigB64 !== "string" || typeof j.oracleAddr !== "string") {
+    throw new OracleError("THE ORACLE TALKS GIBBERISH - BAD SIGN RECEIPT");
+  }
+  return { sigB64: j.sigB64, oracleAddr: j.oracleAddr };
+}
+async function fetchVerdict(cid, opts) {
+  const j = await postJson("/v1/verdict", { cid }, opts);
+  if (typeof j.verdictSigB64 !== "string" || typeof j.digestB64 !== "string" || typeof j.extraB64 !== "string") {
+    throw new OracleError("THE ORACLE TALKS GIBBERISH - BAD VERDICT");
+  }
+  return j;
+}
+async function postContinueReceipt(refId, addr, txid, opts) {
+  await postJson("/v1/continue/receipt", { refId, addr, txid }, opts);
+}
+async function oracleScoreSig(req, dev) {
+  if (oracleIsDev()) {
+    const d = await Promise.resolve().then(() => (init_tmp_v1528b_oraclestub(), tmp_v1528b_oraclestub_exports));
+    return d.devOracleSignScore(dev.msg, dev.proof);
+  }
+  const r = await signScore(req);
+  return b64ToBytes(r.sigB64);
+}
+async function oracleVerdictSig(cid, devMsg) {
+  if (oracleIsDev()) {
+    const d = await Promise.resolve().then(() => (init_tmp_v1528b_oraclestub(), tmp_v1528b_oraclestub_exports));
+    return d.devOracleSign(devMsg);
+  }
+  const r = await fetchVerdict(cid);
+  return b64ToBytes(r.verdictSigB64);
+}
+async function registerContinueReceipt(refId, addr) {
+  if (oracleIsDev()) return;
+  let txid = null;
+  try {
+    txid = window.localStorage.getItem("gonna.continue|" + refId + "|" + addr);
+  } catch {
+  }
+  if (!txid) throw new OracleError("CONTINUE NOT PAID - PAY 5 ALGO FIRST");
+  await postContinueReceipt(refId, addr, txid);
+}
+
+// src/game/font.ts
+var GLYPH_ROWS = {
+  A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+  B: ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
+  C: ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
+  D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+  E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+  F: ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+  G: ["01110", "10001", "10000", "10111", "10001", "10001", "01111"],
+  H: ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
+  I: ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
+  J: ["00111", "00010", "00010", "00010", "00010", "10010", "01100"],
+  K: ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
+  L: ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+  M: ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+  N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+  O: ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+  P: ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+  Q: ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
+  R: ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+  S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+  T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+  U: ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+  V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+  W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
+  X: ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
+  Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+  Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
+  "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
+  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+  "2": ["01110", "10001", "00001", "00110", "01000", "10000", "11111"],
+  "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+  "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+  "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
+  "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
+  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+  "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
+  " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
+  "!": ["00100", "00100", "00100", "00100", "00100", "00000", "00100"],
+  "?": ["01110", "10001", "00001", "00110", "00100", "00000", "00100"],
+  ".": ["00000", "00000", "00000", "00000", "00000", "00110", "00110"],
+  ",": ["00000", "00000", "00000", "00000", "00110", "00110", "01100"],
+  ":": ["00000", "00110", "00110", "00000", "00110", "00110", "00000"],
+  $: ["00100", "01111", "10100", "01110", "00101", "11110", "00100"],
+  "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+  "\u2014": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+  // v15.2.7: em dash = honest UNKNOWN value (terminal card stake)
+  "'": ["00100", "00100", "01000", "00000", "00000", "00000", "00000"],
+  "/": ["00001", "00001", "00010", "00100", "01000", "10000", "10000"],
+  ">": ["10000", "01000", "00100", "00010", "00100", "01000", "10000"],
+  "<": ["00001", "00010", "00100", "01000", "00100", "00010", "00001"],
+  "%": ["11001", "11010", "00010", "00100", "01000", "01011", "10011"],
+  "+": ["00000", "00100", "00100", "11111", "00100", "00100", "00000"],
+  "(": ["00010", "00100", "01000", "01000", "01000", "00100", "00010"],
+  ")": ["01000", "00100", "00010", "00010", "00010", "00100", "01000"],
+  "=": ["00000", "00000", "11111", "00000", "11111", "00000", "00000"],
+  "*": ["00000", "10101", "01110", "11111", "01110", "10101", "00000"],
+  "&": ["01100", "10010", "10100", "01000", "10101", "10010", "01101"],
+  // v10: SIGN & STAKE
+  "_": ["00000", "00000", "00000", "00000", "00000", "00000", "11111"]
+};
+var GLYPHS = /* @__PURE__ */ new Map();
+for (const ch of Object.keys(GLYPH_ROWS)) {
+  const rows = GLYPH_ROWS[ch];
+  const pts = [];
+  for (let y = 0; y < 7; y++) {
+    for (let x = 0; x < 5; x++) {
+      if (rows[y].charCodeAt(x) === 49) pts.push(x, y);
+    }
+  }
+  GLYPHS.set(ch, new Uint8Array(pts));
+}
+
+// src/game/ver.ts
+function buildVer() {
+  const v = globalThis.__GONNA_VER;
+  return typeof v === "string" && v ? v : "DEV";
+}
 
 // .tmp-v1528b-qastub.ts
 var qaScore = () => 4200;
@@ -200,9 +442,6 @@ var TestnetArenaAdapter = class {
       forfeited: statusCode === 4
     };
   }
-  async requireOracle() {
-    if (!hasDevOracle()) throw new Error("ORACLE OFFLINE - testnet dev oracle key not injected");
-  }
   // v15.2.8: the committed level for a single-mode card — (a) on-chain note
   // via the indexer scan, (b) this browser's card memory, (c) the deep-link
   // ?st= hint (v15.2.8b: fills the stage, verified FALSE — caller-controlled),
@@ -224,7 +463,6 @@ var TestnetArenaAdapter = class {
   }
   async createChallenge(cfg, _creator) {
     const me = await this.id();
-    await this.requireOracle();
     const a = await sdk();
     if (cfg.stageMode === "random") throw new Error("RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY");
     const stakeBase = Math.round(cfg.stake * 1e6);
@@ -245,7 +483,20 @@ var TestnetArenaAdapter = class {
     const build = async () => {
       const cid = await nextChallengeId();
       if (cfg.runCid !== void 0 && cid !== cfg.runCid) throw new CidMovedError(cfg.runCid, cid);
-      const sig = await devOracleSignScore(scoreMsg(cid, 0, myPk, score));
+      const sig = await oracleScoreSig(
+        {
+          cid,
+          seat: 0,
+          addr: me.address,
+          score,
+          stageMode: cfg.stageMode === "full" ? "full" : "stage",
+          stageIdx: cfg.stageMode === "single" ? cfg.stageIdx ?? void 0 : void 0,
+          build: cfg.sealedRun?.build ?? buildVer(),
+          run: cfg.sealedRun ?? { seedLabel: "NO-RUN-LOG", frames: 0, durationSec: 0 }
+        },
+        { msg: scoreMsg(cid, 0, myPk, score) }
+        // explicit ?oracle=dev QA path only
+      );
       builtCid = cid;
       return buildCreateGroup({
         creator: me.address,
@@ -302,15 +553,33 @@ var TestnetArenaAdapter = class {
   }
   async submitScore(id, address, score, opts) {
     const me = await this.id();
-    await this.requireOracle();
     const a = await sdk();
+    const meta = await readMeta(id);
+    if (!meta) throw new Error("card not found on chain");
     const players = await readPlayers(id);
     const myPk = a.decodeAddress(address).publicKey;
     const seat = players.findIndex((p) => sameAddr(p.addr, myPk));
     if (seat < 0) throw new Error("not seated at this table");
-    const sig = await devOracleSignScore(
-      scoreMsg(id, seat, myPk, score),
-      opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : void 0
+    const stageMode = Number(meta.stageMode) === 1 ? "stage" : "full";
+    const stageIdx = stageMode === "stage" ? (await this.cardStage(id, "single")).stageIdx ?? void 0 : void 0;
+    if (opts?.continueRefId) await registerContinueReceipt(opts.continueRefId, address);
+    const sig = await oracleScoreSig(
+      {
+        cid: id,
+        seat,
+        addr: address,
+        score,
+        stageMode,
+        stageIdx,
+        build: opts?.sealedRun?.build ?? buildVer(),
+        run: opts?.sealedRun ?? { seedLabel: "NO-RUN-LOG", frames: 0, durationSec: 0 },
+        continueRef: opts?.continueRefId
+      },
+      {
+        msg: scoreMsg(id, seat, myPk, score),
+        // explicit ?oracle=dev QA path only
+        proof: opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : void 0
+      }
     );
     const txns = await buildSubmitGroup({ player: me.address, cid: id, score, sig });
     recordTxid(id, await signSend(me.sign, txns, { label: "SIGN SCORE" }));
@@ -320,7 +589,6 @@ var TestnetArenaAdapter = class {
   }
   async resolve(id) {
     const me = await this.id();
-    await this.requireOracle();
     const a = await sdk();
     const meta = await readMeta(id);
     if (!meta) throw new Error("card not found on chain");
@@ -333,7 +601,7 @@ var TestnetArenaAdapter = class {
       extra = new Uint8Array(32);
       new DataView(extra.buffer).setBigUint64(24, BigInt(chosenStage), false);
     }
-    const vsig = await devOracleSign(await verdictMsg(id, Number(meta.stageMode), extra, entries));
+    const vsig = await oracleVerdictSig(id, await verdictMsg(id, Number(meta.stageMode), extra, entries));
     let best = entries[0];
     for (const e of entries) if (e.score > best.score) best = e;
     const tie = entries.filter((e) => e.score === best.score).length > 1;
@@ -711,80 +979,6 @@ var TestnetArenaAdapter = class {
     return { played, wins, losses, open, winRate: played > 0 ? Math.round(wins / played * 100) : 0, won, lost, net, bestWin };
   }
 };
-
-// src/game/font.ts
-var GLYPH_ROWS = {
-  A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
-  B: ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
-  C: ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
-  D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
-  E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
-  F: ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
-  G: ["01110", "10001", "10000", "10111", "10001", "10001", "01111"],
-  H: ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
-  I: ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
-  J: ["00111", "00010", "00010", "00010", "00010", "10010", "01100"],
-  K: ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
-  L: ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
-  M: ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
-  N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
-  O: ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
-  P: ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
-  Q: ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
-  R: ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
-  S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
-  T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
-  U: ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
-  V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
-  W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
-  X: ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
-  Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
-  Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
-  "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
-  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
-  "2": ["01110", "10001", "00001", "00110", "01000", "10000", "11111"],
-  "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
-  "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
-  "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
-  "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
-  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
-  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
-  "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
-  " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
-  "!": ["00100", "00100", "00100", "00100", "00100", "00000", "00100"],
-  "?": ["01110", "10001", "00001", "00110", "00100", "00000", "00100"],
-  ".": ["00000", "00000", "00000", "00000", "00000", "00110", "00110"],
-  ",": ["00000", "00000", "00000", "00000", "00110", "00110", "01100"],
-  ":": ["00000", "00110", "00110", "00000", "00110", "00110", "00000"],
-  $: ["00100", "01111", "10100", "01110", "00101", "11110", "00100"],
-  "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
-  "\u2014": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
-  // v15.2.7: em dash = honest UNKNOWN value (terminal card stake)
-  "'": ["00100", "00100", "01000", "00000", "00000", "00000", "00000"],
-  "/": ["00001", "00001", "00010", "00100", "01000", "10000", "10000"],
-  ">": ["10000", "01000", "00100", "00010", "00100", "01000", "10000"],
-  "<": ["00001", "00010", "00100", "01000", "00100", "00010", "00001"],
-  "%": ["11001", "11010", "00010", "00100", "01000", "01011", "10011"],
-  "+": ["00000", "00100", "00100", "11111", "00100", "00100", "00000"],
-  "(": ["00010", "00100", "01000", "01000", "01000", "00100", "00010"],
-  ")": ["01000", "00100", "00010", "00010", "00010", "00100", "01000"],
-  "=": ["00000", "00000", "11111", "00000", "11111", "00000", "00000"],
-  "*": ["00000", "10101", "01110", "11111", "01110", "10101", "00000"],
-  "&": ["01100", "10010", "10100", "01000", "10101", "10010", "01101"],
-  // v10: SIGN & STAKE
-  "_": ["00000", "00000", "00000", "00000", "00000", "00000", "11111"]
-};
-var GLYPHS = /* @__PURE__ */ new Map();
-for (const ch of Object.keys(GLYPH_ROWS)) {
-  const rows = GLYPH_ROWS[ch];
-  const pts = [];
-  for (let y = 0; y < 7; y++) {
-    for (let x = 0; x < 5; x++) {
-      if (rows[y].charCodeAt(x) === 49) pts.push(x, y);
-    }
-  }
-  GLYPHS.set(ch, new Uint8Array(pts));
-}
 
 // src/game/arena/shareCard.ts
 var STAGE_NAMES = ["GHETTO GONNA", "PUMP HARBOR", "WALL STREET", "CONSENSUS", "THE HOUSE", "LAUNCHPAD", "THRONE ROOM"];

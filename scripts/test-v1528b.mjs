@@ -67,6 +67,7 @@ const esbuild = await import('esbuild');
 // ================= bundle S: shareCard + chainAdapter (kit stubbed) =========
 const KITSTUB = join(ROOT, '.tmp-v1528b-kitstub.ts');
 const ORACLESTUB = join(ROOT, '.tmp-v1528b-oraclestub.ts');
+const OCSTUB = join(ROOT, '.tmp-v1528b-ocstub.ts'); // v16: server-oracle client stub
 const QASTUB = join(ROOT, '.tmp-v1528b-qastub.ts');
 const ENTRY_S = join(ROOT, '.tmp-v1528b-entry-s.ts');
 const BUNDLE_S = join(ROOT, '.tmp-v1528b-bundle-s.mjs');
@@ -139,6 +140,16 @@ writeFileSync(
     'export const hasDevOracle = () => true;\n' +
     'export const devOracleSign = async () => new Uint8Array(64);\n' +
     'export const devOracleSignScore = async () => new Uint8Array(64);\n',
+);
+// v16: the testnet adapter signs via ./oracleClient (SERVER ORACLE, SPEC
+// §3/§7) — stub the module so no HTTP ever leaves the test process.
+writeFileSync(
+  OCSTUB,
+  'export const oracleScoreSig = async () => new Uint8Array(64);\n' +
+    'export const oracleVerdictSig = async () => new Uint8Array(64);\n' +
+    'export const registerContinueReceipt = async () => undefined;\n' +
+    "export const oracleBaseUrl = () => 'stub';\n" +
+    "export const oracleLine = () => 'STUB ORACLE';\n",
 );
 writeFileSync(QASTUB, 'export const qaMode = () => false;\nexport const qaActive = () => false;\nexport const qaScore = () => 4200;\n');
 writeFileSync(

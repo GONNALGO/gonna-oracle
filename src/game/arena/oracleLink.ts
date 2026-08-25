@@ -8,9 +8,25 @@
 // linger in the address bar, screenshots or copy-pasted links.
 // HARD GUARD: adoption happens ONLY when arenaMode()==='testnet'. On any
 // mock/mainnet context the hash is ignored (and left untouched).
+// v16 HARD GUARD #2 (SPEC-oracle §7): the oracle key LIVES ON THE SERVER now.
+// The master link arms the QA dev-oracle ONLY in builds compiled with
+// VITE_QA_ORACLE=1 (local QA harness). Every served bundle refuses it with an
+// honest line — the key must never ride the shipped client again.
 // ============================================================================
 import { arenaMode } from './chainAdapter';
 import { armDevOracle } from './devOracle';
+
+export const ORACLE_LINK_REFUSED_MSG = 'ORACLE KEY LIVES ON THE SERVER NOW';
+
+// build-time gate: vite statically replaces import.meta.env.VITE_*; any other
+// bundler (esbuild test kits) leaves it undefined and the try/catch keeps it OFF
+function qaOracleBuild(): boolean {
+  try {
+    return import.meta.env.VITE_QA_ORACLE === '1';
+  } catch {
+    return false;
+  }
+}
 
 function decodeToken(tok: string): string | null {
   // base64url of the mnemonic (preferred — no spaces/escaping issues)
@@ -37,6 +53,11 @@ export function adoptOracleFromHash(): boolean {
     // break the HashRouter even when we refuse to arm (mock/mainnet)
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
     if (arenaMode() !== 'testnet') return false; // HARD GUARD — never arm outside testnet
+    if (!qaOracleBuild()) {
+      // v16: served bundles never adopt a key — the SERVER oracle signs now
+      console.warn('[arena] #oracle= master link refused: ' + ORACLE_LINK_REFUSED_MSG);
+      return false;
+    }
     const mn = decodeToken(m[1]);
     if (!mn) return false;
     armDevOracle(mn);

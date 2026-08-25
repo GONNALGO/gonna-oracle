@@ -785,7 +785,7 @@ function resolveCloseTxid(cid, events) {
 function hex4(b5) {
   return [...b5.slice(0, 4)].map((x4) => x4.toString(16).padStart(2, "0")).join("");
 }
-function b64ToBytes(s4) {
+function b64ToBytes2(s4) {
   return Uint8Array.from(atob(s4), (ch) => ch.charCodeAt(0));
 }
 function u64At(b5, off) {
@@ -803,7 +803,7 @@ async function fetchArenaCloseEvents(maxPages = 5) {
     const j4 = await r4.json();
     for (const t3 of j4.transactions ?? []) {
       for (const log of t3.logs ?? []) {
-        const b5 = b64ToBytes(log);
+        const b5 = b64ToBytes2(log);
         if (b5.length < 12) continue;
         const sel = hex4(b5);
         const at = (t3["round-time"] ?? 0) * 1e3;
@@ -885,7 +885,7 @@ async function fetchArenaCreateStages(opts = {}) {
         if (typeof t3["confirmed-round"] !== "number") continue;
         const args = t3["application-transaction"]?.["application-args"];
         if (!args || args.length === 0) continue;
-        const first = b64ToBytes(args[0]);
+        const first = b64ToBytes2(args[0]);
         if (!eq(first, selCreate) && !eq(first, selSpawn)) continue;
         if (skipped > 0) {
           skipped--;
@@ -894,7 +894,7 @@ async function fetchArenaCreateStages(opts = {}) {
         hits.push({
           round: t3["confirmed-round"],
           offset: t3["intra-round-offset"] ?? 0,
-          stage: typeof t3.note === "string" ? parseStageNote(b64ToBytes(t3.note)) : null
+          stage: typeof t3.note === "string" ? parseStageNote(b64ToBytes2(t3.note)) : null
         });
         if (hits.length >= need) break;
       }
@@ -3230,6 +3230,85 @@ var require_nacl_fast = __commonJS({
         }
       })();
     })(typeof module2 !== "undefined" && module2.exports ? module2.exports : self.nacl = self.nacl || {});
+  }
+});
+
+// src/game/arena/devOracle.ts
+var devOracle_exports = {};
+__export(devOracle_exports, {
+  ARENA_APP_ID: () => ARENA_APP_ID,
+  armDevOracle: () => armDevOracle,
+  devOracleAddress: () => devOracleAddress,
+  devOracleSign: () => devOracleSign,
+  devOracleSignScore: () => devOracleSignScore,
+  hasDevOracle: () => hasDevOracle
+});
+function armDevOracle(mnemonic) {
+  try {
+    window.localStorage.setItem(LS_ORACLE, mnemonic);
+  } catch {
+  }
+}
+function hasDevOracle() {
+  try {
+    return !!window.localStorage.getItem(LS_ORACLE);
+  } catch {
+    return false;
+  }
+}
+async function oracleSecret() {
+  const mn = window.localStorage.getItem(LS_ORACLE);
+  if (!mn) throw new Error("dev oracle key not injected (QA only)");
+  const algosdk = await import("algosdk");
+  const sk = algosdk.mnemonicToSecretKey(mn).sk;
+  return sk.slice(0, 32);
+}
+async function devOracleSign(msg) {
+  const seed2 = await oracleSecret();
+  const nacl = (await Promise.resolve().then(() => __toESM(require_nacl_fast(), 1))).default;
+  const kp = nacl.sign.keyPair.fromSeed(seed2);
+  return nacl.sign.detached(msg, kp.secretKey);
+}
+async function devOracleSignScore(msg, proof) {
+  if (proof) {
+    let txid = null;
+    try {
+      txid = window.localStorage.getItem("gonna.continue|" + proof.refId + "|" + proof.addr);
+    } catch {
+    }
+    if (!txid) throw new Error("CONTINUE NOT PAID - PAY 5 ALGO FIRST");
+    let used = [];
+    try {
+      used = JSON.parse(window.localStorage.getItem(LS_CONTINUE_USED) ?? "[]");
+    } catch {
+    }
+    if (used.includes(txid)) throw new Error("CONTINUE RECEIPT ALREADY SPENT");
+    const ok = await verifyContinuePayment(txid, proof.refId, proof.addr);
+    if (!ok) throw new Error("CONTINUE PAYMENT NOT VERIFIED ON-CHAIN");
+    used.push(txid);
+    try {
+      window.localStorage.setItem(LS_CONTINUE_USED, JSON.stringify(used.slice(-64)));
+    } catch {
+    }
+  }
+  return devOracleSign(msg);
+}
+async function devOracleAddress() {
+  try {
+    const mn = window.localStorage.getItem(LS_ORACLE);
+    if (!mn) return null;
+    const algosdk = await import("algosdk");
+    return algosdk.mnemonicToSecretKey(mn).addr.toString();
+  } catch {
+    return null;
+  }
+}
+var LS_ORACLE, LS_CONTINUE_USED;
+var init_devOracle = __esm({
+  "src/game/arena/devOracle.ts"() {
+    init_testnetKit();
+    LS_ORACLE = "gonna.qa.oracle.mn";
+    LS_CONTINUE_USED = "gonna.continue.used";
   }
 });
 
@@ -51924,53 +52003,160 @@ function drawTextSh2(ctx, str, x4, y5, scale2, color, align, shadow) {
   return drawTextSh(ctx, str, x4, y5, scale2, color, align, shadow);
 }
 
-// src/game/arena/devOracle.ts
-init_testnetKit();
-var LS_ORACLE = "gonna.qa.oracle.mn";
-function hasDevOracle() {
+// src/game/b64.ts
+var T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var R = /* @__PURE__ */ new Map();
+for (let i3 = 0; i3 < 64; i3++) R.set(T[i3], i3);
+function b64ToBytes(s4) {
+  const clean = s4.replace(/[\s=]+/g, "");
+  const out = [];
+  for (let i3 = 0; i3 < clean.length; i3 += 4) {
+    const c0 = R.get(clean[i3]);
+    const c1 = R.get(clean[i3 + 1]);
+    if (c0 === void 0 || c1 === void 0) throw new Error("bad base64");
+    const c22 = R.get(clean[i3 + 2]);
+    const c3 = R.get(clean[i3 + 3]);
+    const n3 = c0 << 18 | c1 << 12 | (c22 ?? 0) << 6 | (c3 ?? 0);
+    out.push(n3 >> 16 & 255);
+    if (c22 !== void 0) out.push(n3 >> 8 & 255);
+    if (c3 !== void 0) out.push(n3 & 255);
+  }
+  return new Uint8Array(out);
+}
+function bytesToB64(bytes) {
+  let s4 = "";
+  for (let i3 = 0; i3 < bytes.length; i3 += 3) {
+    const b1 = bytes[i3] ?? 0;
+    const b22 = bytes[i3 + 1];
+    const b32 = bytes[i3 + 2];
+    const n3 = b1 << 16 | (b22 ?? 0) << 8 | (b32 ?? 0);
+    s4 += (T[n3 >> 18 & 63] ?? "") + (T[n3 >> 12 & 63] ?? "");
+    s4 += b22 === void 0 ? "=" : T[n3 >> 6 & 63] ?? "";
+    s4 += b32 === void 0 ? "=" : T[n3 & 63] ?? "";
+  }
+  return s4;
+}
+
+// src/game/arena/oracleClient.ts
+var ORACLE_BASE_URL_TESTNET = "http://localhost:8787";
+var LS_ORACLE_URL = "gonna.arena.oracleurl";
+var ORACLE_DEV = "dev";
+function oracleBaseUrl() {
   try {
-    return !!window.localStorage.getItem(LS_ORACLE);
+    const q4 = new URLSearchParams(window.location.search).get("oracle");
+    if (q4) {
+      window.localStorage.setItem(LS_ORACLE_URL, q4);
+      return q4;
+    }
+    const stored = window.localStorage.getItem(LS_ORACLE_URL);
+    if (stored) return stored;
   } catch {
-    return false;
   }
+  return ORACLE_BASE_URL_TESTNET;
 }
-async function oracleSecret() {
-  const mn = window.localStorage.getItem(LS_ORACLE);
-  if (!mn) throw new Error("dev oracle key not injected (QA only)");
-  const algosdk = await import("algosdk");
-  const sk = algosdk.mnemonicToSecretKey(mn).sk;
-  return sk.slice(0, 32);
+function oracleIsDev() {
+  return oracleBaseUrl() === ORACLE_DEV;
 }
-async function devOracleSign(msg) {
-  const seed2 = await oracleSecret();
-  const nacl = (await Promise.resolve().then(() => __toESM(require_nacl_fast(), 1))).default;
-  const kp = nacl.sign.keyPair.fromSeed(seed2);
-  return nacl.sign.detached(msg, kp.secretKey);
+function oracleLine() {
+  if (oracleIsDev()) return "QA DEV ORACLE - LOCAL KEY (NEVER SHIPPED)";
+  return "SERVER ORACLE - " + oracleBaseUrl().replace(/^https?:\/\//, "");
 }
-var LS_CONTINUE_USED = "gonna.continue.used";
-async function devOracleSignScore(msg, proof) {
-  if (proof) {
-    let txid = null;
-    try {
-      txid = window.localStorage.getItem("gonna.continue|" + proof.refId + "|" + proof.addr);
-    } catch {
-    }
-    if (!txid) throw new Error("CONTINUE NOT PAID - PAY 5 ALGO FIRST");
-    let used = [];
-    try {
-      used = JSON.parse(window.localStorage.getItem(LS_CONTINUE_USED) ?? "[]");
-    } catch {
-    }
-    if (used.includes(txid)) throw new Error("CONTINUE RECEIPT ALREADY SPENT");
-    const ok = await verifyContinuePayment(txid, proof.refId, proof.addr);
-    if (!ok) throw new Error("CONTINUE PAYMENT NOT VERIFIED ON-CHAIN");
-    used.push(txid);
-    try {
-      window.localStorage.setItem(LS_CONTINUE_USED, JSON.stringify(used.slice(-64)));
-    } catch {
-    }
+var OracleError = class extends Error {
+  status;
+  // 0 = network/timeout (no HTTP answer at all)
+  constructor(message, status = 0) {
+    super(message);
+    this.name = "OracleError";
+    this.status = status;
   }
-  return devOracleSign(msg);
+};
+var TIMEOUT_MS = 8e3;
+var MAX_ATTEMPTS = 2;
+async function postJson(path, body, opts) {
+  const base = oracleBaseUrl();
+  let lastErr = new OracleError("THE ORACLE IS UNREACHABLE - CHECK THE LINE AND RETRY");
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(base + path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ctrl.signal
+      });
+    } catch (e3) {
+      const aborted = e3 instanceof Error && e3.name === "AbortError";
+      lastErr = new OracleError(aborted ? "THE ORACLE IS SILENT - TIMED OUT, RETRY" : "THE ORACLE IS UNREACHABLE - CHECK THE LINE AND RETRY");
+      clearTimeout(timer);
+      continue;
+    }
+    clearTimeout(timer);
+    if (res.ok) {
+      try {
+        return await res.json();
+      } catch {
+        throw new OracleError("THE ORACLE TALKS GIBBERISH - BAD JSON");
+      }
+    }
+    let reason = "HTTP " + res.status;
+    try {
+      const j4 = await res.json();
+      if (j4 && typeof j4.error === "string" && j4.error) reason = j4.error;
+    } catch {
+    }
+    if (res.status === 429) throw new OracleError("THE ORACLE IS BUSY - RETRY IN A BREATH", 429);
+    if (res.status >= 500) {
+      lastErr = new OracleError("THE ORACLE SAYS NO - " + reason, res.status);
+      continue;
+    }
+    throw new OracleError("THE ORACLE SAYS NO - " + reason, res.status);
+  }
+  throw lastErr;
+}
+async function signScore(req, opts) {
+  const j4 = await postJson("/v1/sign-score", req, opts);
+  if (typeof j4.sigB64 !== "string" || typeof j4.oracleAddr !== "string") {
+    throw new OracleError("THE ORACLE TALKS GIBBERISH - BAD SIGN RECEIPT");
+  }
+  return { sigB64: j4.sigB64, oracleAddr: j4.oracleAddr };
+}
+async function fetchVerdict(cid, opts) {
+  const j4 = await postJson("/v1/verdict", { cid }, opts);
+  if (typeof j4.verdictSigB64 !== "string" || typeof j4.digestB64 !== "string" || typeof j4.extraB64 !== "string") {
+    throw new OracleError("THE ORACLE TALKS GIBBERISH - BAD VERDICT");
+  }
+  return j4;
+}
+async function postContinueReceipt(refId, addr, txid, opts) {
+  await postJson("/v1/continue/receipt", { refId, addr, txid }, opts);
+}
+async function oracleScoreSig(req, dev) {
+  if (oracleIsDev()) {
+    const d3 = await Promise.resolve().then(() => (init_devOracle(), devOracle_exports));
+    return d3.devOracleSignScore(dev.msg, dev.proof);
+  }
+  const r4 = await signScore(req);
+  return b64ToBytes(r4.sigB64);
+}
+async function oracleVerdictSig(cid, devMsg) {
+  if (oracleIsDev()) {
+    const d3 = await Promise.resolve().then(() => (init_devOracle(), devOracle_exports));
+    return d3.devOracleSign(devMsg);
+  }
+  const r4 = await fetchVerdict(cid);
+  return b64ToBytes(r4.verdictSigB64);
+}
+async function registerContinueReceipt(refId, addr) {
+  if (oracleIsDev()) return;
+  let txid = null;
+  try {
+    txid = window.localStorage.getItem("gonna.continue|" + refId + "|" + addr);
+  } catch {
+  }
+  if (!txid) throw new OracleError("CONTINUE NOT PAID - PAY 5 ALGO FIRST");
+  await postContinueReceipt(refId, addr, txid);
 }
 
 // src/game/types.ts
@@ -52428,42 +52614,17 @@ if (false) {
   };
 }
 
-// src/game/b64.ts
-var T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-var R = /* @__PURE__ */ new Map();
-for (let i3 = 0; i3 < 64; i3++) R.set(T[i3], i3);
-function b64ToBytes2(s4) {
-  const clean = s4.replace(/[\s=]+/g, "");
-  const out = [];
-  for (let i3 = 0; i3 < clean.length; i3 += 4) {
-    const c0 = R.get(clean[i3]);
-    const c1 = R.get(clean[i3 + 1]);
-    if (c0 === void 0 || c1 === void 0) throw new Error("bad base64");
-    const c22 = R.get(clean[i3 + 2]);
-    const c3 = R.get(clean[i3 + 3]);
-    const n3 = c0 << 18 | c1 << 12 | (c22 ?? 0) << 6 | (c3 ?? 0);
-    out.push(n3 >> 16 & 255);
-    if (c22 !== void 0) out.push(n3 >> 8 & 255);
-    if (c3 !== void 0) out.push(n3 & 255);
-  }
-  return new Uint8Array(out);
-}
-function bytesToB64(bytes) {
-  let s4 = "";
-  for (let i3 = 0; i3 < bytes.length; i3 += 3) {
-    const b1 = bytes[i3] ?? 0;
-    const b22 = bytes[i3 + 1];
-    const b32 = bytes[i3 + 2];
-    const n3 = b1 << 16 | (b22 ?? 0) << 8 | (b32 ?? 0);
-    s4 += (T[n3 >> 18 & 63] ?? "") + (T[n3 >> 12 & 63] ?? "");
-    s4 += b22 === void 0 ? "=" : T[n3 >> 6 & 63] ?? "";
-    s4 += b32 === void 0 ? "=" : T[n3 & 63] ?? "";
-  }
-  return s4;
-}
-
 // src/game/arena/chainAdapter.ts
 init_testnetKit();
+
+// src/game/ver.ts
+function buildVer() {
+  const v5 = globalThis.__GONNA_VER;
+  return typeof v5 === "string" && v5 ? v5 : "DEV";
+}
+function drawVerBadge(ctx, y5, color = "#5a5f6c") {
+  drawText2(ctx, buildVer(), VW - 8, y5, 1, color, "right");
+}
 
 // src/game/arena/qaSigner.ts
 var LS_QA = "gonna.qa";
@@ -53109,9 +53270,6 @@ var TestnetArenaAdapter = class {
       forfeited: statusCode === 4
     };
   }
-  async requireOracle() {
-    if (!hasDevOracle()) throw new Error("ORACLE OFFLINE - testnet dev oracle key not injected");
-  }
   // v15.2.8: the committed level for a single-mode card — (a) on-chain note
   // via the indexer scan, (b) this browser's card memory, (c) the deep-link
   // ?st= hint (v15.2.8b: fills the stage, verified FALSE — caller-controlled),
@@ -53133,7 +53291,6 @@ var TestnetArenaAdapter = class {
   }
   async createChallenge(cfg, _creator) {
     const me2 = await this.id();
-    await this.requireOracle();
     const a3 = await sdk();
     if (cfg.stageMode === "random") throw new Error("RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY");
     const stakeBase = Math.round(cfg.stake * 1e6);
@@ -53154,7 +53311,20 @@ var TestnetArenaAdapter = class {
     const build = async () => {
       const cid = await nextChallengeId();
       if (cfg.runCid !== void 0 && cid !== cfg.runCid) throw new CidMovedError(cfg.runCid, cid);
-      const sig = await devOracleSignScore(scoreMsg(cid, 0, myPk, score));
+      const sig = await oracleScoreSig(
+        {
+          cid,
+          seat: 0,
+          addr: me2.address,
+          score,
+          stageMode: cfg.stageMode === "full" ? "full" : "stage",
+          stageIdx: cfg.stageMode === "single" ? cfg.stageIdx ?? void 0 : void 0,
+          build: cfg.sealedRun?.build ?? buildVer(),
+          run: cfg.sealedRun ?? { seedLabel: "NO-RUN-LOG", frames: 0, durationSec: 0 }
+        },
+        { msg: scoreMsg(cid, 0, myPk, score) }
+        // explicit ?oracle=dev QA path only
+      );
       builtCid = cid;
       return buildCreateGroup({
         creator: me2.address,
@@ -53211,15 +53381,33 @@ var TestnetArenaAdapter = class {
   }
   async submitScore(id, address, score, opts) {
     const me2 = await this.id();
-    await this.requireOracle();
     const a3 = await sdk();
+    const meta = await readMeta(id);
+    if (!meta) throw new Error("card not found on chain");
     const players = await readPlayers(id);
     const myPk = a3.decodeAddress(address).publicKey;
     const seat = players.findIndex((p4) => sameAddr(p4.addr, myPk));
     if (seat < 0) throw new Error("not seated at this table");
-    const sig = await devOracleSignScore(
-      scoreMsg(id, seat, myPk, score),
-      opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : void 0
+    const stageMode = Number(meta.stageMode) === 1 ? "stage" : "full";
+    const stageIdx = stageMode === "stage" ? (await this.cardStage(id, "single")).stageIdx ?? void 0 : void 0;
+    if (opts?.continueRefId) await registerContinueReceipt(opts.continueRefId, address);
+    const sig = await oracleScoreSig(
+      {
+        cid: id,
+        seat,
+        addr: address,
+        score,
+        stageMode,
+        stageIdx,
+        build: opts?.sealedRun?.build ?? buildVer(),
+        run: opts?.sealedRun ?? { seedLabel: "NO-RUN-LOG", frames: 0, durationSec: 0 },
+        continueRef: opts?.continueRefId
+      },
+      {
+        msg: scoreMsg(id, seat, myPk, score),
+        // explicit ?oracle=dev QA path only
+        proof: opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : void 0
+      }
     );
     const txns = await buildSubmitGroup({ player: me2.address, cid: id, score, sig });
     recordTxid(id, await signSend(me2.sign, txns, { label: "SIGN SCORE" }));
@@ -53229,7 +53417,6 @@ var TestnetArenaAdapter = class {
   }
   async resolve(id) {
     const me2 = await this.id();
-    await this.requireOracle();
     const a3 = await sdk();
     const meta = await readMeta(id);
     if (!meta) throw new Error("card not found on chain");
@@ -53242,7 +53429,7 @@ var TestnetArenaAdapter = class {
       extra = new Uint8Array(32);
       new DataView(extra.buffer).setBigUint64(24, BigInt(chosenStage), false);
     }
-    const vsig = await devOracleSign(await verdictMsg(id, Number(meta.stageMode), extra, entries));
+    const vsig = await oracleVerdictSig(id, await verdictMsg(id, Number(meta.stageMode), extra, entries));
     let best = entries[0];
     for (const e3 of entries) if (e3.score > best.score) best = e3;
     const tie = entries.filter((e3) => e3.score === best.score).length > 1;
@@ -53870,7 +54057,7 @@ async function primaryAppId(addr) {
     if (!r4.ok) return null;
     const d3 = await r4.json();
     if (!d3?.value) return null;
-    const vb = b64ToBytes2(d3.value);
+    const vb = b64ToBytes(d3.value);
     if (vb.length < 8) return null;
     let id = 0;
     for (let i3 = 0; i3 < 8; i3++) id = id * 256 + (vb[i3] ?? 0);
@@ -54210,15 +54397,6 @@ var BG_CANDLES = (() => {
 // src/game/descent.ts
 var ZONE_ADV = Math.round(VW * 1.5);
 
-// src/game/ver.ts
-function buildVer() {
-  const v5 = globalThis.__GONNA_VER;
-  return typeof v5 === "string" && v5 ? v5 : "DEV";
-}
-function drawVerBadge(ctx, y5, color = "#5a5f6c") {
-  drawText2(ctx, buildVer(), VW - 8, y5, 1, color, "right");
-}
-
 // src/game/screens.ts
 function mosaicBorder(ctx) {
   for (let x4 = 0; x4 < VW; x4 += 8) {
@@ -54526,6 +54704,12 @@ var ArenaUI = class {
   // ('PIT-' + sealRunCid, stage sealRunCid % 7). Rides the create config as
   // runCid so chainAdapter can refuse a mismatched sign BEFORE the wallet.
   sealRunCid = null;
+  // v16 (SPEC-oracle §5): the sealed run's telemetry (input log bitmask,
+  // frames, build) — travels inside the oracle sign-score body. sealBestRun
+  // is the run that produced sealBest: a CONTINUE retry can only RAISE the
+  // score, and the log must always match the score it proofs.
+  sealedRun = null;
+  sealBestRun = null;
   pendingRun = false;
   // set after a paid continue; engine polls it
   continuePaying = false;
@@ -55488,12 +55672,16 @@ var ArenaUI = class {
   }
   // v11: the engine calls this when the ARENA run ends — the score is SEALED
   // v12: best-of-2 — a CONTINUE retry can only RAISE the sealed score
-  onRunFinished(score) {
+  onRunFinished(score, run) {
     const s4 = Math.max(0, Math.floor(score));
     this.sealedScore = s4;
+    this.sealedRun = run ?? null;
     this.sealRunCid = this.sealRole === "creator" ? this.nextIdHint : null;
     this.sealRuns++;
-    if (s4 > this.sealBest) this.sealBest = s4;
+    if (s4 > this.sealBest) {
+      this.sealBest = s4;
+      this.sealBestRun = this.sealedRun;
+    }
     this.pendingRun = false;
     this.screen = "seal";
     this.err = "";
@@ -55540,6 +55728,8 @@ var ArenaUI = class {
     this.sealBest = 0;
     this.sealRuns = 0;
     this.sealRunCid = null;
+    this.sealedRun = null;
+    this.sealBestRun = null;
     this.pendingRun = false;
     this.continuePaying = false;
   }
@@ -55566,6 +55756,8 @@ var ArenaUI = class {
     }
     const best = this.sealBest > 0 ? this.sealBest : this.sealedScore;
     if (best !== null) cfg.sealedScore = best;
+    const bestRun = this.sealBest > 0 ? this.sealBestRun : this.sealedRun;
+    if (bestRun) cfg.sealedRun = bestRun;
     if (this.sealRunCid !== null) cfg.runCid = this.sealRunCid;
     const player = arenaPlayer(cfg.fighter);
     console.debug("[arena] SIGN & STAKE \u2014 create start (score " + (cfg.sealedScore ?? "none") + ")");
@@ -55602,10 +55794,14 @@ var ArenaUI = class {
     if (!c3) return { act: "none" };
     const me2 = arenaAddress();
     const score = this.sealBest > 0 ? this.sealBest : qaActive() ? qaScore() : this.myScore > 0 ? this.myScore : 4200 + Math.floor(Math.random() * 900);
-    const opts = this.sealRuns >= 2 ? { continueRefId: String(c3.id) } : void 0;
+    const bestRun = this.sealBest > 0 ? this.sealBestRun : this.sealedRun;
+    const opts = {
+      ...this.sealRuns >= 2 ? { continueRefId: String(c3.id) } : {},
+      ...bestRun ? { sealedRun: bestRun } : {}
+    };
     console.debug("[arena] SIGN SCORE \u2014 submit start (card #" + c3.id + ", score " + score + ")");
     void this.run(
-      () => this.adapter().submitScore(c3.id, me2, score, opts),
+      () => this.adapter().submitScore(c3.id, me2, score, Object.keys(opts).length > 0 ? opts : void 0),
       (nc) => {
         this.current = nc;
         this.resetSeal();
@@ -56189,8 +56385,8 @@ var ArenaUI = class {
     }
     if (this.rematchOf !== null) drawText2(c3, "REMATCH OF CARD #" + this.rematchOf, VW / 2, 144, 1, "#ff8a3c", "center");
     if (this.adapter().mode === "testnet") {
-      const armed = hasDevOracle();
-      drawTextSh2(c3, armed ? "ORACLE ARMED - TESTNET DEV KEY" : "ORACLE OFFLINE - USE THE MASTER LINK", VW / 2, 152, 1, armed ? FLUO2 : "#ff4444", "center", armed ? "#0a3d00" : "#2a0505");
+      const dev = oracleLine().startsWith("QA DEV");
+      drawTextSh2(c3, oracleLine(), VW / 2, 152, 1, dev ? "#ff8a3c" : FLUO2, "center", dev ? "#2a1503" : "#0a3d00");
     }
     this.btn(c3, frame, { id: "playrun", x: 92, y: 162, w: 200, h: 22 }, "PLAY YOUR RUN", { green: true });
     drawText2(c3, "YOUR SCORE GETS SEALED - YOU SIGN AFTER", VW / 2, 190, 1, GRAY2, "center");

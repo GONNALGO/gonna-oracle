@@ -34,10 +34,90 @@ var rememberCard = (m) => H().rememberCard && H().rememberCard(m);
 var rememberedCard = (cid) => H().rememberedCard(cid);
 var rememberedCards = () => H().rememberedCards ? H().rememberedCards() : [];
 
-// .tmp-v1528-oraclestub.ts
-var hasDevOracle = () => true;
-var devOracleSign = async () => new Uint8Array(64);
-var devOracleSignScore = async () => new Uint8Array(64);
+// .tmp-v1528-ocstub.ts
+var oracleScoreSig = async () => new Uint8Array(64);
+var oracleVerdictSig = async () => new Uint8Array(64);
+var registerContinueReceipt = async () => void 0;
+
+// src/game/font.ts
+var GLYPH_ROWS = {
+  A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+  B: ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
+  C: ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
+  D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+  E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+  F: ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+  G: ["01110", "10001", "10000", "10111", "10001", "10001", "01111"],
+  H: ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
+  I: ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
+  J: ["00111", "00010", "00010", "00010", "00010", "10010", "01100"],
+  K: ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
+  L: ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+  M: ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+  N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+  O: ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+  P: ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+  Q: ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
+  R: ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+  S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+  T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+  U: ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+  V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+  W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
+  X: ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
+  Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+  Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
+  "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
+  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+  "2": ["01110", "10001", "00001", "00110", "01000", "10000", "11111"],
+  "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+  "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+  "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
+  "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
+  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+  "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
+  " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
+  "!": ["00100", "00100", "00100", "00100", "00100", "00000", "00100"],
+  "?": ["01110", "10001", "00001", "00110", "00100", "00000", "00100"],
+  ".": ["00000", "00000", "00000", "00000", "00000", "00110", "00110"],
+  ",": ["00000", "00000", "00000", "00000", "00110", "00110", "01100"],
+  ":": ["00000", "00110", "00110", "00000", "00110", "00110", "00000"],
+  $: ["00100", "01111", "10100", "01110", "00101", "11110", "00100"],
+  "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+  "\u2014": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+  // v15.2.7: em dash = honest UNKNOWN value (terminal card stake)
+  "'": ["00100", "00100", "01000", "00000", "00000", "00000", "00000"],
+  "/": ["00001", "00001", "00010", "00100", "01000", "10000", "10000"],
+  ">": ["10000", "01000", "00100", "00010", "00100", "01000", "10000"],
+  "<": ["00001", "00010", "00100", "01000", "00100", "00010", "00001"],
+  "%": ["11001", "11010", "00010", "00100", "01000", "01011", "10011"],
+  "+": ["00000", "00100", "00100", "11111", "00100", "00100", "00000"],
+  "(": ["00010", "00100", "01000", "01000", "01000", "00100", "00010"],
+  ")": ["01000", "00100", "00010", "00010", "00010", "00100", "01000"],
+  "=": ["00000", "00000", "11111", "00000", "11111", "00000", "00000"],
+  "*": ["00000", "10101", "01110", "11111", "01110", "10101", "00000"],
+  "&": ["01100", "10010", "10100", "01000", "10101", "10010", "01101"],
+  // v10: SIGN & STAKE
+  "_": ["00000", "00000", "00000", "00000", "00000", "00000", "11111"]
+};
+var GLYPHS = /* @__PURE__ */ new Map();
+for (const ch of Object.keys(GLYPH_ROWS)) {
+  const rows = GLYPH_ROWS[ch];
+  const pts = [];
+  for (let y = 0; y < 7; y++) {
+    for (let x = 0; x < 5; x++) {
+      if (rows[y].charCodeAt(x) === 49) pts.push(x, y);
+    }
+  }
+  GLYPHS.set(ch, new Uint8Array(pts));
+}
+
+// src/game/ver.ts
+function buildVer() {
+  const v = globalThis.__GONNA_VER;
+  return typeof v === "string" && v ? v : "DEV";
+}
 
 // .tmp-v1528-qastub.ts
 var qaScore = () => 4200;
@@ -543,9 +623,6 @@ var TestnetArenaAdapter = class {
       forfeited: statusCode === 4
     };
   }
-  async requireOracle() {
-    if (!hasDevOracle()) throw new Error("ORACLE OFFLINE - testnet dev oracle key not injected");
-  }
   // v15.2.8: the committed level for a single-mode card — (a) on-chain note
   // via the indexer scan, (b) this browser's card memory, (c) the deep-link
   // ?st= hint (v15.2.8b: fills the stage, verified FALSE — caller-controlled),
@@ -567,7 +644,6 @@ var TestnetArenaAdapter = class {
   }
   async createChallenge(cfg, _creator) {
     const me = await this.id();
-    await this.requireOracle();
     const a = await sdk();
     if (cfg.stageMode === "random") throw new Error("RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY");
     const stakeBase = Math.round(cfg.stake * 1e6);
@@ -588,7 +664,20 @@ var TestnetArenaAdapter = class {
     const build = async () => {
       const cid = await nextChallengeId();
       if (cfg.runCid !== void 0 && cid !== cfg.runCid) throw new CidMovedError(cfg.runCid, cid);
-      const sig = await devOracleSignScore(scoreMsg(cid, 0, myPk, score));
+      const sig = await oracleScoreSig(
+        {
+          cid,
+          seat: 0,
+          addr: me.address,
+          score,
+          stageMode: cfg.stageMode === "full" ? "full" : "stage",
+          stageIdx: cfg.stageMode === "single" ? cfg.stageIdx ?? void 0 : void 0,
+          build: cfg.sealedRun?.build ?? buildVer(),
+          run: cfg.sealedRun ?? { seedLabel: "NO-RUN-LOG", frames: 0, durationSec: 0 }
+        },
+        { msg: scoreMsg(cid, 0, myPk, score) }
+        // explicit ?oracle=dev QA path only
+      );
       builtCid = cid;
       return buildCreateGroup({
         creator: me.address,
@@ -645,15 +734,33 @@ var TestnetArenaAdapter = class {
   }
   async submitScore(id, address, score, opts) {
     const me = await this.id();
-    await this.requireOracle();
     const a = await sdk();
+    const meta = await readMeta(id);
+    if (!meta) throw new Error("card not found on chain");
     const players = await readPlayers(id);
     const myPk = a.decodeAddress(address).publicKey;
     const seat = players.findIndex((p) => sameAddr(p.addr, myPk));
     if (seat < 0) throw new Error("not seated at this table");
-    const sig = await devOracleSignScore(
-      scoreMsg(id, seat, myPk, score),
-      opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : void 0
+    const stageMode = Number(meta.stageMode) === 1 ? "stage" : "full";
+    const stageIdx = stageMode === "stage" ? (await this.cardStage(id, "single")).stageIdx ?? void 0 : void 0;
+    if (opts?.continueRefId) await registerContinueReceipt(opts.continueRefId, address);
+    const sig = await oracleScoreSig(
+      {
+        cid: id,
+        seat,
+        addr: address,
+        score,
+        stageMode,
+        stageIdx,
+        build: opts?.sealedRun?.build ?? buildVer(),
+        run: opts?.sealedRun ?? { seedLabel: "NO-RUN-LOG", frames: 0, durationSec: 0 },
+        continueRef: opts?.continueRefId
+      },
+      {
+        msg: scoreMsg(id, seat, myPk, score),
+        // explicit ?oracle=dev QA path only
+        proof: opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : void 0
+      }
     );
     const txns = await buildSubmitGroup({ player: me.address, cid: id, score, sig });
     recordTxid(id, await signSend(me.sign, txns, { label: "SIGN SCORE" }));
@@ -663,7 +770,6 @@ var TestnetArenaAdapter = class {
   }
   async resolve(id) {
     const me = await this.id();
-    await this.requireOracle();
     const a = await sdk();
     const meta = await readMeta(id);
     if (!meta) throw new Error("card not found on chain");
@@ -676,7 +782,7 @@ var TestnetArenaAdapter = class {
       extra = new Uint8Array(32);
       new DataView(extra.buffer).setBigUint64(24, BigInt(chosenStage), false);
     }
-    const vsig = await devOracleSign(await verdictMsg(id, Number(meta.stageMode), extra, entries));
+    const vsig = await oracleVerdictSig(id, await verdictMsg(id, Number(meta.stageMode), extra, entries));
     let best = entries[0];
     for (const e of entries) if (e.score > best.score) best = e;
     const tie = entries.filter((e) => e.score === best.score).length > 1;

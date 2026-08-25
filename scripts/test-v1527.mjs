@@ -97,6 +97,7 @@ globalThis.performance = globalThis.performance ?? { now: () => Date.now() };
 const { writeFileSync, rmSync } = await import('node:fs');
 const KITSTUB = join(ROOT, '.tmp-v1527-kitstub.ts');
 const ORACLESTUB = join(ROOT, '.tmp-v1527-oraclestub.ts');
+const OCSTUB = join(ROOT, '.tmp-v1527-ocstub.ts'); // v16: server-oracle client stub
 const QASTUB = join(ROOT, '.tmp-v1527-qastub.ts');
 const ENTRY_A = join(ROOT, '.tmp-v1527-entry-a.ts');
 const BUNDLE_A = join(ROOT, '.tmp-v1527-bundle-a.mjs');
@@ -172,6 +173,17 @@ writeFileSync(
     'export const devOracleSign = async () => new Uint8Array(64);\n' +
     'export const devOracleSignScore = async () => new Uint8Array(64);\n',
 );
+// v16: the testnet adapter signs via ./oracleClient (SERVER ORACLE, SPEC
+// §3/§7) — stub the module so no HTTP ever leaves the test process. The dev
+// stub above stays for oracleLink/devOracle themselves (QA-only paths).
+writeFileSync(
+  OCSTUB,
+  'export const oracleScoreSig = async () => new Uint8Array(64);\n' +
+    'export const oracleVerdictSig = async () => new Uint8Array(64);\n' +
+    'export const registerContinueReceipt = async () => undefined;\n' +
+    "export const oracleBaseUrl = () => 'stub';\n" +
+    "export const oracleLine = () => 'STUB ORACLE';\n",
+);
 writeFileSync(QASTUB, 'export const qaMode = () => false;\nexport const qaActive = () => false;\nexport const qaScore = () => 4200;\n');
 writeFileSync(
   ENTRY_A,
@@ -193,6 +205,7 @@ await esbuild.build({
       setup(build) {
         build.onResolve({ filter: /(^|\/)testnetKit$/ }, () => ({ path: KITSTUB }));
         build.onResolve({ filter: /(^|\/)devOracle$/ }, () => ({ path: ORACLESTUB }));
+        build.onResolve({ filter: /(^|\/)oracleClient$/ }, () => ({ path: OCSTUB })); // v16
         build.onResolve({ filter: /(^|\/)qaSigner$/ }, () => ({ path: QASTUB }));
       },
     },
@@ -610,6 +623,6 @@ console.log('\n[5] BUG-3 UI: the terminal-unknown card never prints invented num
 
 console.log('\n=================================================');
 console.log('RESULT: ' + passed + '/' + total + ' passed');
-for (const f of [ENTRY_A, BUNDLE_A, ENTRY_B, WRAP_B, BUNDLE_B, KITSTUB, ORACLESTUB, QASTUB]) rmSync(f, { force: true });
+for (const f of [ENTRY_A, BUNDLE_A, ENTRY_B, WRAP_B, BUNDLE_B, KITSTUB, ORACLESTUB, OCSTUB, QASTUB]) rmSync(f, { force: true });
 if (fails.length > 0) console.log('FAILURES:\n - ' + fails.join('\n - '));
 process.exit(fails.length === 0 ? 0 : 1);

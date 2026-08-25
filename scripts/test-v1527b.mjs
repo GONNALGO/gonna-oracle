@@ -54,8 +54,10 @@ console.log('\n[0] SOURCE: the cid-race guard is wired end to end');
     'testnet build(): guard fires right after nextChallengeId(), BEFORE the oracle sign + wallet prompt',
   );
   const guardIdx = ca.indexOf('if (cfg.runCid !== undefined && cid !== cfg.runCid) throw new CidMovedError');
-  const signIdx = ca.indexOf('devOracleSignScore(kit.scoreMsg(cid, 0, myPk, score))');
-  ok(guardIdx > 0 && signIdx > guardIdx, 'guard is textually BEFORE devOracleSignScore / buildCreateGroup');
+  // v16: the sig ask is oracleScoreSig(...) (server oracle) — the cid-bound
+  // scoreMsg payload rides inside it; the guard must still fire FIRST
+  const signIdx = ca.indexOf('kit.scoreMsg(cid, 0, myPk, score)');
+  ok(guardIdx > 0 && signIdx > guardIdx, 'guard is textually BEFORE the oracle sig ask / buildCreateGroup');
   ok(
     ca.includes('if (cfg.runCid !== undefined && cfg.runCid !== s.nextId) throw new CidMovedError(cfg.runCid, s.nextId);'),
     'mock mirrors the guard (same typed error, counter NOT bumped on a mismatch)',
@@ -125,6 +127,7 @@ function writeVisible(path, content) {
 }
 const KITSTUB = join(ROOT, '.tmp-v1527b-kitstub.ts');
 const ORACLESTUB = join(ROOT, '.tmp-v1527b-oraclestub.ts');
+const OCSTUB = join(ROOT, '.tmp-v1527b-ocstub.ts'); // v16: server-oracle client stub
 const QASTUB = join(ROOT, '.tmp-v1527b-qastub.ts');
 const ENTRY_A = join(ROOT, '.tmp-v1527b-entry-a.ts');
 const BUNDLE_A = join(ROOT, '.tmp-v1527b-bundle-a.mjs');
@@ -214,6 +217,16 @@ writeVisible(ORACLESTUB,
     'export const devOracleSign = async () => { (globalThis.__ORACLE ||= { signs: 0 }).signs++; return new Uint8Array(64); };\n' +
     'export const devOracleSignScore = async () => { (globalThis.__ORACLE ||= { signs: 0 }).signs++; return new Uint8Array(64); };\n',
 );
+// v16: the testnet adapter signs via ./oracleClient (SERVER ORACLE, SPEC
+// §3/§7) — the stub keeps the __ORACLE.signs meter the cid-race asserts read,
+// and no HTTP ever leaves the test process.
+writeVisible(OCSTUB,
+  'export const oracleScoreSig = async () => { (globalThis.__ORACLE ||= { signs: 0 }).signs++; return new Uint8Array(64); };\n' +
+    'export const oracleVerdictSig = async () => new Uint8Array(64);\n' +
+    'export const registerContinueReceipt = async () => undefined;\n' +
+    "export const oracleBaseUrl = () => 'stub';\n" +
+    "export const oracleLine = () => 'STUB ORACLE';\n",
+);
 writeVisible(QASTUB, 'export const qaMode = () => false;\nexport const qaActive = () => false;\nexport const qaScore = () => 4200;\n');
 writeVisible(ENTRY_A,
   "export { TestnetArenaAdapter, MockArenaAdapter, stageIdxFromCid, CidMovedError, isCidMovedError, CID_MOVED_MSG, setTestnetIdentityProvider } from './src/game/arena/chainAdapter';\n",
@@ -234,6 +247,7 @@ await esbuild.build({
       setup(build) {
         build.onResolve({ filter: /(^|\/)testnetKit$/ }, () => ({ path: KITSTUB }));
         build.onResolve({ filter: /(^|\/)devOracle$/ }, () => ({ path: ORACLESTUB }));
+        build.onResolve({ filter: /(^|\/)oracleClient$/ }, () => ({ path: OCSTUB })); // v16
         build.onResolve({ filter: /(^|\/)qaSigner$/ }, () => ({ path: QASTUB }));
       },
     },
@@ -493,6 +507,11 @@ const { ArenaUI, setMock, getArenaAdapter, MSG } = modB;
 
 console.log('\n=================================================');
 console.log('RESULT: ' + passed + '/' + total + ' passed');
-for (const f of [ENTRY_A, BUNDLE_A, ENTRY_B, BUNDLE_B, KITSTUB, ORACLESTUB, QASTUB]) rmSync(f, { force: true });
+for (const f of [ENTRY_A, BUNDLE_A, ENTRY_B, BUNDLE_B, KITSTUB, ORACLESTUB, OCSTUB, QASTUB]) rmSync(f, { force: true });
 if (fails.length > 0) console.log('FAILURES:\n - ' + fails.join('\n - '));
+process.exit(fails.length === 0 ? 0 : 1);
+;
+process.exit(fails.length === 0 ? 0 : 1);
+rocess.exit(fails.length === 0 ? 0 : 1);
+;
 process.exit(fails.length === 0 ? 0 : 1);

@@ -50,7 +50,10 @@ import { captureInstallPrompt, FsGuide } from './fsguide';
 import { ArenaUI } from './arena/arenaUI';
 import type { ArenaAction } from './arena/arenaUI';
 import { arenaMode, setLinkStageHint } from './arena/chainAdapter';
+import type { SealedRunInfo } from './arena/chainAdapter';
 import { adoptOracleFromHash } from './arena/oracleLink';
+import { encodeInputLogB64, INPUT_LOG_CAP, maskFromDown } from './arena/inputLog';
+import { buildVer } from './ver';
 // v10.4: ?duel=<id> parsed once per page load (StrictMode double-boot safe)
 // v15.2.8: ?st=<0-6> rides single-mode share links — the committed level hint
 let bootDuelParam: number | null | undefined;
@@ -490,11 +493,20 @@ export class Game implements GameCtx {
   // seal screen instead of the campaign flow. No pending tx state survives
   // an abandoned run: nothing was signed, nothing to clean up.
   private arenaRun: { stageMode: 'full' | 'stage'; stageIdx: number } | null = null;
+  // v16 (SPEC-oracle §5): INPUT LOG v1 — one button-bitmask byte per frame,
+  // recorded ONLY while a sealed arena run is live. Capped at INPUT_LOG_CAP
+  // frames; an overrun is honestly flagged `truncated`, never silently cut.
+  private inputLogMasks: Uint8Array | null = null;
+  private inputLogFrames = 0;
+  private inputLogTruncated = false;
 
   // v15: stage cards run THE DESCENT (seeded by the challenge id — same card,
   // same waves for creator & joiner). seedTag/target come from the ARENA UI.
   private startArenaRun(stageMode: 'full' | 'stage', stageIdx: number, opts?: { seedTag?: string; target?: number }): void {
     this.arenaRun = { stageMode, stageIdx };
+    this.inputLogMasks = new Uint8Array(INPUT_LOG_CAP); // v16: fresh input log per run
+    this.inputLogFrames = 0;
+    this.inputLogTruncated = false;
     this.startNewGame(); // fresh run: score/lives/stage 0
     if (stageMode === 'stage') {
       this.stageIdx = stageIdx;
@@ -504,12 +516,37 @@ export class Game implements GameCtx {
 
   private finishArenaRun(): void {
     if (!this.arenaRun) return;
+    // v16: seal the input log WITH the score — header build/seedLabel/frames,
+    // base64, attached to the oracle sign-score body by the ARENA UI. The
+    // FULL RUN campaign is honestly 'UNSEEDED' (SPEC §6: seeding is an M2
+    // decision, M1 changes nothing).
+    const seedLabel = this.descent ? this.descent.seedLabel : 'UNSEEDED';
+    let run: SealedRunInfo | null = null;
+    if (this.inputLogMasks && this.inputLogFrames > 0) {
+      const build = buildVer();
+      const frames = this.inputLogFrames;
+      run = {
+        seedLabel,
+        frames,
+        durationSec: frames / 60,
+        build,
+        inputLogB64: encodeInputLogB64({
+          v: 1,
+          build,
+          seedLabel,
+          frames,
+          truncated: this.inputLogTruncated,
+          masks: this.inputLogMasks.subarray(0, frames),
+        }),
+      };
+    }
+    this.inputLogMasks = null;
     if (this.descent) {
       saveBestWave(this.descent.wave, this.descent.seedLabel); // v15
       this.descent = null; // the seal screen owns the score now
     }
     this.arenaRun = null;
-    this.arena.onRunFinished(this.score);
+    this.arena.onRunFinished(this.score, run);
     this.setScene('arena');
     this.audio.uiSelect();
   }
@@ -2141,6 +2178,16 @@ export class Game implements GameCtx {
     }
     this.frame++;
     const inp = this.input;
+    // v16 (SPEC-oracle §5): input log — snapshot the 8 button levels, one
+    // byte per frame, ONLY while a sealed arena run is live (paused frames
+    // never reach here: the sim is frozen, so nothing is recorded)
+    if (this.arenaRun && this.inputLogMasks) {
+      if (this.inputLogFrames < INPUT_LOG_CAP) {
+        this.inputLogMasks[this.inputLogFrames++] = maskFromDown(inp.down);
+      } else {
+        this.inputLogTruncated = true; // honest cut at the 300k cap
+      }
+    }
     // v9.2: SEAL-during-countdown pixel burst (short-lived overlay particles)
     if (this.sealBurst.length > 0) {
       for (const p of this.sealBurst) {

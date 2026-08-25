@@ -1,10 +1,16 @@
 // ============================================================================
-// ⚠⚠⚠  TESTNET ONLY — NEVER SHIP TO MAINNET  ⚠⚠⚠
+// ⚠⚠⚠  QA ONLY — NEVER A PRODUCTION SIGNING PATH  ⚠⚠⚠
 // DEV ORACLE SIGNER: signs creator_score / score / verdict messages with the
 // throwaway TESTNET oracle key. The mnemonic is NEVER in the repo — the QA
 // harness injects it into localStorage at runtime (from the gitignored
-// deploy/testnet.secrets.json). On mainnet this role is a server-side oracle
-// service; this module must be compiled OUT of any mainnet build.
+// deploy/testnet.secrets.json).
+// v16 (SPEC-oracle §7): the SERVER ORACLE (./oracleClient.ts) is the DEFAULT
+// signer on testnet — the key no longer lives in the served client. This
+// module signs ONLY when ALL of these hold:
+//   1. the build was compiled with VITE_QA_ORACLE=1 (oracleLink.ts gate),
+//   2. the degen explicitly passed ?oracle=dev (persisted override),
+//   3. a key was armed via the #oracle= master link / harness injection.
+// A network failure against the HTTP oracle NEVER falls back here silently.
 // ============================================================================
 import { ARENA_APP_ID, verifyContinuePayment } from './testnetKit';
 

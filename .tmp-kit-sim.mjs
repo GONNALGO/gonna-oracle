@@ -34221,11 +34221,12 @@ var TESTNET_FEES = {
   // axfer + call
   submit: 3e3 + 4 * 1e3,
   // call + 4 opup
-  resolve: 6e3 + 4 * 1e3,
-  // call + 4 opup
-  claim: 2e3,
+  resolve: 1e3 * (1 + 3) + 4 * 1e3,
+  // NON-TIE call (1 outer + 3 inner) + 4 opup; ties scale with the roster — buildResolveGroup computes it dynamically
+  claim: 1e3 + 2 * 1e3,
+  // call + 2 inner (stake axfer + MBR payback) — v15.3.2 BUG-1: was 2000, chain rejects it
   close: 1e3 + 4e3,
-  // pay + call
+  // pay + call (2 inner covered by the call's 4000)
   forfeit: 5e3
   // call + 4 inner (2 axfer winner + fee axfer + MBR payback)
 };
@@ -34486,6 +34487,8 @@ async function buildResolveGroup(o) {
   const meta = await readMeta(o.cid);
   if (!meta) throw new Error("card not found on chain (already settled?)");
   const roster = await readPlayers(o.cid);
+  const innerLegs = o.tie === false ? 3 : roster.length + 1;
+  const callFee = 1e3 * (1 + innerLegs);
   const enc = (pk) => a.encodeAddress(pk instanceof Uint8Array ? pk : Uint8Array.from(pk));
   const creator = enc(meta.creator);
   const accounts = [.../* @__PURE__ */ new Set([o.winner, creator, TREASURY_ADDR, ...roster.map((p) => enc(p.addr))])].filter((x) => x !== o.caller).slice(0, 4);
@@ -34502,7 +34505,7 @@ async function buildResolveGroup(o) {
     accounts,
     foreignAssets: [GONNA_ASA_TESTNET],
     boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
-    suggestedParams: await baseParams(6e3)
+    suggestedParams: await baseParams(callFee)
   });
   return [call, ...await opupTxns(o.caller, o.cid)];
 }
@@ -34572,7 +34575,10 @@ async function buildClaimGroup(o) {
     appArgs: [await methodSelector(a, "claim(uint64)void"), await appArg(a, "uint64", o.cid)],
     foreignAssets: [GONNA_ASA_TESTNET],
     boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
-    suggestedParams: await baseParams(2e3)
+    // v15.3.2 BUG-1: claim emits 2 inner txns (_refund_all on a roster of 1:
+    // stake axfer back + exact MBR payback) => 1000 x (1 outer + 2 inner).
+    // The old 2000 was rejected by the chain ("group fee too small").
+    suggestedParams: await baseParams(TESTNET_FEES.claim)
   });
   return [call];
 }
@@ -34599,7 +34605,7 @@ async function buildClaimForfeitGroup(o) {
   const a = await sdk();
   const meta = await readMeta(o.cid);
   if (!meta) throw new Error("card not found on chain (already settled?)");
-  const creator = a.encodeAddress(meta.creator);
+  const creator = a.encodeAddress(meta.creator instanceof Uint8Array ? meta.creator : Uint8Array.from(meta.creator));
   const call = a.makeApplicationNoOpTxnFromObject({
     sender: o.caller,
     appIndex: ARENA_APP_ID,
@@ -34870,8 +34876,40 @@ function getResolveAt(cid) {
     return null;
   }
 }
+var ARENA_NETWORK = "testnet";
+function explorerTxUrlFor(network, txid) {
+  return "https://lora.algokit.io/" + network + "/transaction/" + txid;
+}
 function explorerTxUrl(txid) {
-  return "https://testnet.explorer.perawallet.app/tx/" + txid;
+  return explorerTxUrlFor(ARENA_NETWORK, txid);
+}
+var CLOSE_TX_KEY = "gonna.arena.closetx";
+function recordCloseTxid(cid, txid) {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(CLOSE_TX_KEY) ?? "{}");
+    m[String(cid)] = txid;
+    window.localStorage.setItem(CLOSE_TX_KEY, JSON.stringify(m));
+  } catch {
+  }
+}
+function getCloseTxid(cid) {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(CLOSE_TX_KEY) ?? "{}");
+    return m[String(cid)] ?? null;
+  } catch {
+    return null;
+  }
+}
+function pickCloseTxid(cid, events) {
+  const ev = events.filter((e) => e.cid === cid).sort((x, y) => y.round - x.round)[0];
+  return ev ? ev.txid : null;
+}
+function resolveCloseTxid(cid, events) {
+  const mem = getCloseTxid(cid);
+  if (mem) return mem;
+  const txid = pickCloseTxid(cid, events);
+  if (txid) recordCloseTxid(cid, txid);
+  return txid;
 }
 var INDEXER_TESTNET = "https://testnet-idx.algonode.cloud";
 var EV_RESOLVED = "ae488dc6";
@@ -35046,6 +35084,7 @@ function rememberedCards() {
 export {
   ALGOD_TESTNET,
   ARENA_APP_ID,
+  ARENA_NETWORK,
   ARENA_VERSION,
   CONTINUE_FEE_MICRO,
   GONNA_ASA_TESTNET,
@@ -35078,8 +35117,10 @@ export {
   continueNote,
   contractVersion,
   explorerTxUrl,
+  explorerTxUrlFor,
   fetchArenaCloseEvents,
   fetchArenaCreateStages,
+  getCloseTxid,
   getResolveAt,
   getTxid,
   isCidRaceReject,
@@ -35087,14 +35128,17 @@ export {
   isWedgeError,
   nextChallengeId,
   parseStageNote,
+  pickCloseTxid,
   readMeta,
   readPlayers,
   readStageCache,
+  recordCloseTxid,
   recordResolveAt,
   recordTxid,
   rememberCard,
   rememberedCard,
   rememberedCards,
+  resolveCloseTxid,
   scanChallengeIds,
   scoreMsg,
   sdk,

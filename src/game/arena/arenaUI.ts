@@ -11,7 +11,7 @@
 //                 (NEVER white flashes — fades are black or gold)
 // All chain access goes through chainAdapter.ts (MOCK by default).
 import { drawText, drawTextSh, textWidth } from '../font';
-import { hasDevOracle } from './devOracle';
+import { oracleLine } from './oracleClient';
 import { mosaicBorder, drawCrown } from '../screens';
 import { drawVerBadge } from '../ver';
 import { VH, VW, clamp } from '../types';
@@ -26,7 +26,7 @@ import { activeSignOp, explorerTxUrl, getCloseTxid, getTxid, isSignCancel, SIGN_
 import type { SignOpView } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
 import { qaActive, qaScore } from './qaSigner';
-import type { Challenge, ChallengeConfig, FighterPick, HistoryEntry, LegacyStats, Visibility } from './chainAdapter';
+import type { Challenge, ChallengeConfig, FighterPick, HistoryEntry, LegacyStats, SealedRunInfo, Visibility } from './chainAdapter';
 import { arenaAddress, arenaPlayer, arenaSession } from './arenaWallet';
 import { renderShareCard, shareCardBlob, shareStageOf, shareText, shareUrl } from './shareCard';
 
@@ -125,6 +125,12 @@ export class ArenaUI {
   // ('PIT-' + sealRunCid, stage sealRunCid % 7). Rides the create config as
   // runCid so chainAdapter can refuse a mismatched sign BEFORE the wallet.
   private sealRunCid: number | null = null;
+  // v16 (SPEC-oracle §5): the sealed run's telemetry (input log bitmask,
+  // frames, build) — travels inside the oracle sign-score body. sealBestRun
+  // is the run that produced sealBest: a CONTINUE retry can only RAISE the
+  // score, and the log must always match the score it proofs.
+  private sealedRun: SealedRunInfo | null = null;
+  private sealBestRun: SealedRunInfo | null = null;
   private pendingRun = false; // set after a paid continue; engine polls it
   private continuePaying = false;
   private hots: Hot[] = [];
@@ -1238,14 +1244,19 @@ export class ArenaUI {
 
   // v11: the engine calls this when the ARENA run ends — the score is SEALED
   // v12: best-of-2 — a CONTINUE retry can only RAISE the sealed score
-  onRunFinished(score: number): void {
+  onRunFinished(score: number, run?: SealedRunInfo | null): void {
     const s = Math.max(0, Math.floor(score));
     this.sealedScore = s;
+    // v16: the run's input log seals WITH the score (oracle sign-score body)
+    this.sealedRun = run ?? null;
     // v15.2.7b: pin the cid this run was played for (creator runs only) —
     // if the counter moves before SIGN, the create must NOT go out (CID_MOVED)
     this.sealRunCid = this.sealRole === 'creator' ? this.nextIdHint : null;
     this.sealRuns++;
-    if (s > this.sealBest) this.sealBest = s;
+    if (s > this.sealBest) {
+      this.sealBest = s;
+      this.sealBestRun = this.sealedRun; // the log always matches the BEST score
+    }
     this.pendingRun = false;
     this.screen = 'seal';
     this.err = '';
@@ -1305,6 +1316,8 @@ export class ArenaUI {
     this.sealBest = 0;
     this.sealRuns = 0;
     this.sealRunCid = null;
+    this.sealedRun = null;
+    this.sealBestRun = null;
     this.pendingRun = false;
     this.continuePaying = false;
   }
@@ -1339,6 +1352,9 @@ export class ArenaUI {
     // ALGO oracle-verified CONTINUE is joiner-only now, see doSubmit).
     const best = this.sealBest > 0 ? this.sealBest : this.sealedScore;
     if (best !== null) cfg.sealedScore = best;
+    // v16: the oracle signs the score TOGETHER with its run telemetry
+    const bestRun = this.sealBest > 0 ? this.sealBestRun : this.sealedRun;
+    if (bestRun) cfg.sealedRun = bestRun;
     // v15.2.7b: the create must land under the SAME id the run was played for
     if (this.sealRunCid !== null) cfg.runCid = this.sealRunCid;
     const player = arenaPlayer(cfg.fighter);
@@ -1381,10 +1397,16 @@ export class ArenaUI {
     // on-chain payment ref (the oracle verifies the receipt before signing).
     // QA mode plays a DETERMINISTIC score so E2E verdicts are assertable.
     const score = this.sealBest > 0 ? this.sealBest : (qaActive() ? qaScore() : this.myScore > 0 ? this.myScore : 4200 + Math.floor(Math.random() * 900));
-    const opts = this.sealRuns >= 2 ? { continueRefId: String(c.id) } : undefined;
+    // v16: the sealed run telemetry rides the sign-score body (the log of the
+    // BEST run — the one whose score is actually submitted)
+    const bestRun = this.sealBest > 0 ? this.sealBestRun : this.sealedRun;
+    const opts = {
+      ...(this.sealRuns >= 2 ? { continueRefId: String(c.id) } : {}),
+      ...(bestRun ? { sealedRun: bestRun } : {}),
+    };
     console.debug('[arena] SIGN SCORE — submit start (card #' + c.id + ', score ' + score + ')');
     void this.run(
-      () => this.adapter().submitScore(c.id, me, score, opts),
+      () => this.adapter().submitScore(c.id, me, score, Object.keys(opts).length > 0 ? opts : undefined),
       (nc) => {
         this.current = nc;
         this.resetSeal();
@@ -2037,10 +2059,11 @@ export class ArenaUI {
       this.quantumSeal(c, x + 10, 120, frame);
     }
     if (this.rematchOf !== null) drawText(c, 'REMATCH OF CARD #' + this.rematchOf, VW / 2, 144, 1, '#ff8a3c', 'center');
-    // testnet oracle status — the master link (#oracle=) arms the dev key
+    // v16: the oracle key lives on the SERVER — the wizard honestly shows
+    // WHICH oracle will sign (the ?oracle=dev QA override says so out loud)
     if (this.adapter().mode === 'testnet') {
-      const armed = hasDevOracle();
-      drawTextSh(c, armed ? 'ORACLE ARMED - TESTNET DEV KEY' : 'ORACLE OFFLINE - USE THE MASTER LINK', VW / 2, 152, 1, armed ? FLUO : '#ff4444', 'center', armed ? '#0a3d00' : '#2a0505');
+      const dev = oracleLine().startsWith('QA DEV');
+      drawTextSh(c, oracleLine(), VW / 2, 152, 1, dev ? '#ff8a3c' : FLUO, 'center', dev ? '#2a1503' : '#0a3d00');
     }
     // v11: PLAY -> SEAL -> SIGN. The run comes FIRST — the oracle-sealed
     // score travels inside the atomic create group.

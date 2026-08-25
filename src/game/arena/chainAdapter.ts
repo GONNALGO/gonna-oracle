@@ -40,6 +40,20 @@ export interface ChallengeConfig {
   runCid?: number;
   // v14.4: no continueRefId here — creator replays are FREE pre-commitment;
   // the 5 ALGO continue receipt exists ONLY on the joiner submitScore path
+  // v16 (SPEC-oracle §5): the sealed run's telemetry — rides the server-oracle
+  // sign-score body (build pins the replayable build; inputLogB64 = bitmask v1).
+  // Absent on the QA instant-seal shortcut (no real run was played).
+  sealedRun?: SealedRunInfo;
+}
+
+// v16: run telemetry attached to a sealed score (SPEC-oracle §5). Structurally
+// the `run` leg of the oracle sign-score body + the top-level `build`.
+export interface SealedRunInfo {
+  seedLabel: string;
+  frames: number;
+  durationSec: number;
+  build: string;
+  inputLogB64?: string;
 }
 
 export interface ChallengePlayer {
@@ -128,7 +142,7 @@ export interface ArenaAdapter {
   readonly mode: 'mock' | 'testnet';
   createChallenge(cfg: ChallengeConfig, creator: ChallengePlayer): Promise<Challenge>;
   join(id: number, player: ChallengePlayer): Promise<Challenge>;
-  submitScore(id: number, address: string, score: number, opts?: { continueRefId?: string }): Promise<Challenge>;
+  submitScore(id: number, address: string, score: number, opts?: { continueRefId?: string; sealedRun?: SealedRunInfo }): Promise<Challenge>;
   resolve(id: number): Promise<Challenge>;
   claim(id: number, address: string): Promise<ClaimResult>;
   // v2: duel seat clock — claim the stake of an UNSIGNED opponent whose
@@ -891,10 +905,13 @@ export class MockArenaAdapter implements ArenaAdapter {
 // Exact atomic groups + OpUp donor calls live in ./testnetKit.ts.
 // Identity (Pera testnet via ./testnetWallet.ts, or the QA signer) is
 // INJECTED through setTestnetIdentityProvider by arenaWallet.ts (no
-// circular imports). Oracle sigs come from ./devOracle.ts (TESTNET ONLY).
+// circular imports). v16: oracle sigs come from the SERVER ORACLE via
+// ./oracleClient.ts (the key lives server-side now — SPEC-oracle §3/§7). The
+// armed QA dev-oracle key is used ONLY on the explicit ?oracle=dev override.
 // ======================================================================
 import * as kit from './testnetKit';
-import { devOracleSign, devOracleSignScore, hasDevOracle } from './devOracle';
+import { oracleScoreSig, oracleVerdictSig, registerContinueReceipt } from './oracleClient';
+import { buildVer } from '../ver';
 import { qaScore } from './qaSigner';
 export { ARENA_APP_ID, GONNA_ASA_TESTNET } from './testnetKit';
 
@@ -990,10 +1007,6 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     };
   }
 
-  private async requireOracle(): Promise<void> {
-    if (!hasDevOracle()) throw new Error('ORACLE OFFLINE - testnet dev oracle key not injected');
-  }
-
   // v15.2.8: the committed level for a single-mode card — (a) on-chain note
   // via the indexer scan, (b) this browser's card memory, (c) the deep-link
   // ?st= hint (v15.2.8b: fills the stage, verified FALSE — caller-controlled),
@@ -1016,7 +1029,6 @@ export class TestnetArenaAdapter implements ArenaAdapter {
 
   async createChallenge(cfg: ChallengeConfig, _creator: ChallengePlayer): Promise<Challenge> {
     const me = await this.id();
-    await this.requireOracle();
     const a = await kit.sdk();
     if (cfg.stageMode === 'random') throw new Error('RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY');
     const stakeBase = Math.round(cfg.stake * 1e6);
@@ -1042,8 +1054,8 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     // qaScore() remains the deterministic fallback for the QA harness
     const score = cfg.sealedScore ?? qaScore();
     // v14.4: creator replays are FREE pre-commitment — a create NEVER
-    // carries a continue receipt. The payment-verified devOracle continue
-    // path is JOINER-ONLY now (submitScore below).
+    // carries a continue receipt. The payment-verified continue path is
+    // JOINER-ONLY now (submitScore below → server oracle receipt DB, v16).
     const myPk = a.decodeAddress(me.address).publicKey;
     // v15.2.1: the oracle score sig is cid-bound and the cid is read BEFORE
     // the wallet signs. A concurrent create inside the manual-approval window
@@ -1064,7 +1076,22 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       // re-reads the counter, so it either re-signs for the SAME runCid or
       // dies right here with CID_MOVED — a mismatched card can never exist.
       if (cfg.runCid !== undefined && cid !== cfg.runCid) throw new CidMovedError(cfg.runCid, cid);
-      const sig = await devOracleSignScore(kit.scoreMsg(cid, 0, myPk, score));
+      // v16 (SPEC §3.2): the SERVER oracle re-verifies the cid against the
+      // on-chain next_challenge_id BEFORE it signs (seat 0 = create) — the
+      // sig ask carries the sealed run telemetry (input log, frames, build).
+      const sig = await oracleScoreSig(
+        {
+          cid,
+          seat: 0,
+          addr: me.address,
+          score,
+          stageMode: cfg.stageMode === 'full' ? 'full' : 'stage',
+          stageIdx: cfg.stageMode === 'single' ? (cfg.stageIdx ?? undefined) : undefined,
+          build: cfg.sealedRun?.build ?? buildVer(),
+          run: cfg.sealedRun ?? { seedLabel: 'NO-RUN-LOG', frames: 0, durationSec: 0 },
+        },
+        { msg: kit.scoreMsg(cid, 0, myPk, score) }, // explicit ?oracle=dev QA path only
+      );
       builtCid = cid;
       return kit.buildCreateGroup({
         creator: me.address,
@@ -1123,18 +1150,37 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     return ch;
   }
 
-  async submitScore(id: number, address: string, score: number, opts?: { continueRefId?: string }): Promise<Challenge> {
+  async submitScore(id: number, address: string, score: number, opts?: { continueRefId?: string; sealedRun?: SealedRunInfo }): Promise<Challenge> {
     const me = await this.id();
-    await this.requireOracle();
     const a = await kit.sdk();
+    const meta = await kit.readMeta(id); // stage binding for the oracle body (the server re-verifies it anyway)
+    if (!meta) throw new Error('card not found on chain');
     const players = await kit.readPlayers(id);
     const myPk = a.decodeAddress(address).publicKey;
     const seat = players.findIndex((p) => sameAddr(p.addr, myPk));
     if (seat < 0) throw new Error('not seated at this table');
-    // v12: a post-CONTINUE score needs the on-chain 5-ALGO receipt
-    const sig = await devOracleSignScore(
-      kit.scoreMsg(id, seat, myPk, score),
-      opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : undefined,
+    const stageMode: 'full' | 'stage' = Number(meta.stageMode) === 1 ? 'stage' : 'full';
+    const stageIdx = stageMode === 'stage' ? ((await this.cardStage(id, 'single')).stageIdx ?? undefined) : undefined;
+    // v12/v16: a post-CONTINUE score needs the on-chain 5-ALGO receipt —
+    // REGISTERED with the server oracle (single-use DB, SPEC §3.4) BEFORE the
+    // sig ask; the server consumes it atomically with the signature.
+    if (opts?.continueRefId) await registerContinueReceipt(opts.continueRefId, address);
+    const sig = await oracleScoreSig(
+      {
+        cid: id,
+        seat,
+        addr: address,
+        score,
+        stageMode,
+        stageIdx,
+        build: opts?.sealedRun?.build ?? buildVer(),
+        run: opts?.sealedRun ?? { seedLabel: 'NO-RUN-LOG', frames: 0, durationSec: 0 },
+        continueRef: opts?.continueRefId,
+      },
+      {
+        msg: kit.scoreMsg(id, seat, myPk, score), // explicit ?oracle=dev QA path only
+        proof: opts?.continueRefId ? { refId: opts.continueRefId, addr: address } : undefined,
+      },
     );
     const txns = await kit.buildSubmitGroup({ player: me.address, cid: id, score, sig });
     kit.recordTxid(id, await kit.signSend(me.sign, txns, { label: 'SIGN SCORE' }));
@@ -1145,7 +1191,6 @@ export class TestnetArenaAdapter implements ArenaAdapter {
 
   async resolve(id: number): Promise<Challenge> {
     const me = await this.id();
-    await this.requireOracle();
     const a = await kit.sdk();
     const meta = await kit.readMeta(id);
     if (!meta) throw new Error('card not found on chain');
@@ -1165,7 +1210,10 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       extra = new Uint8Array(32);
       new DataView(extra.buffer).setBigUint64(24, BigInt(chosenStage), false);
     }
-    const vsig = await devOracleSign(await kit.verdictMsg(id, Number(meta.stageMode), extra, entries));
+    // v16 (SPEC §3.3): the SERVER oracle reads the whole card from the chain,
+    // rebuilds entries/digest/extra itself and signs ONLY if resolvable — the
+    // local verdictMsg stays as the exact payload for the ?oracle=dev QA path.
+    const vsig = await oracleVerdictSig(id, await kit.verdictMsg(id, Number(meta.stageMode), extra, entries));
     let best = entries[0];
     for (const e of entries) if (e.score > best.score) best = e;
     const tie = entries.filter((e) => e.score === best.score).length > 1; // contract: perfect tie -> refund all, zero fee

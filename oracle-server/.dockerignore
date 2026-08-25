@@ -1,0 +1,15 @@
+node_modules
+dist
+test
+scripts
+data
+*.log
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore
+README.md
+RUNBOOK.md
+vitest.config.ts
+tsconfig.typecheck.json
