@@ -1182,6 +1182,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       seedReveal: new Uint8Array(0), // MODE_FULL: empty reveal
       verdictSig: vsig,
       winner: a.encodeAddress(best.addr), // tie: contract ignores it, refunds all
+      tie, // v15.3.2 BUG-2: ties refund the WHOLE roster — the resolve fee scales with it
     });
     const resolveTxid = await kit.signSend(me.sign, txns, { label: 'RESOLVE' });
     kit.recordTxid(id, resolveTxid);

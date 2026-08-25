@@ -52,13 +52,20 @@ const SCORE_DOMAIN = new TextEncoder().encode('QA-SCORE|');
 const VERDICT_DOMAIN = new TextEncoder().encode('QA-VERDICT|');
 
 // flat fees per txn kind (µALGO) — see smoke_testnet.py
+// v15.3.2 FEE RULE (audit vs contract.py): every group's fee pool must be
+// >= 1000 x (outer txns + inner txns the method emits). Inner counts:
+//   create/spawn/join/submit: 0 inner (state + events only)
+//   resolve: 3 inner non-tie (winner axfer + 5% fee axfer + MBR payback),
+//            n+1 inner on a tie (full refund per roster leg + MBR payback)
+//   claim/early_close: 2 inner (stake axfer back + MBR payback; roster=1)
+//   claim_forfeit: 4 inner (2 axfer caller + fee axfer treasury + MBR pay)
 export const TESTNET_FEES = {
   create: 1000 + 1000 + 3000 + 4 * 1000, // pay + axfer + call + 4 opup
   join: 1000 + 3000, // axfer + call
   submit: 3000 + 4 * 1000, // call + 4 opup
-  resolve: 6000 + 4 * 1000, // call + 4 opup
-  claim: 2000,
-  close: 1000 + 4000, // pay + call
+  resolve: 1000 * (1 + 3) + 4 * 1000, // NON-TIE call (1 outer + 3 inner) + 4 opup; ties scale with the roster — buildResolveGroup computes it dynamically
+  claim: 1000 + 2 * 1000, // call + 2 inner (stake axfer + MBR payback) — v15.3.2 BUG-1: was 2000, chain rejects it
+  close: 1000 + 4000, // pay + call (2 inner covered by the call's 4000)
   forfeit: 5000, // call + 4 inner (2 axfer winner + fee axfer + MBR payback)
 } as const;
 export type ArenaOp = keyof typeof TESTNET_FEES;
@@ -386,11 +393,29 @@ export async function buildSubmitGroup(o: { player: string; cid: number; score: 
 // receivers. Txn.accounts is capped at 4: winner + creator + treasury +
 // first roster player covers every duel (roster = {creator, winner-or-
 // joiner}); on bigger tables the caller and dedup squeeze out extra slots.
-export async function buildResolveGroup(o: { caller: string; cid: number; stageIdx: number; seedReveal: Uint8Array; verdictSig: Uint8Array; winner: string }): Promise<Txn[]> {
+export async function buildResolveGroup(o: {
+  caller: string;
+  cid: number;
+  stageIdx: number;
+  seedReveal: Uint8Array;
+  verdictSig: Uint8Array;
+  winner: string;
+  // v15.3.2 BUG-2: the caller knows the outcome (chainAdapter computes it
+  // from the signed scores). On a TIE the contract refunds EVERY roster leg
+  // (n axfers + 1 MBR pay = n+1 inner txns), so the fee pool must scale with
+  // the roster; the static 6000 broke ties of 5+ players (pool 10000 <
+  // 1000 x (5 outer + n+1 inner)). When omitted we fund the WORST case
+  // (full-roster refund) — safe for frozen legacy callers.
+  tie?: boolean;
+}): Promise<Txn[]> {
   const a = await sdk();
   const meta = await readMeta(o.cid);
   if (!meta) throw new Error('card not found on chain (already settled?)');
   const roster = await readPlayers(o.cid);
+  // inner legs: tie -> roster refund (n axfers) + MBR payback = n+1;
+  // non-tie -> winner axfer + 5% fee axfer + MBR payback = 3.
+  const innerLegs = o.tie === false ? 3 : roster.length + 1;
+  const callFee = 1000 * (1 + innerLegs); // 1 outer app call + inner legs
   const enc = (pk: Uint8Array | number[]) => a.encodeAddress(pk instanceof Uint8Array ? pk : Uint8Array.from(pk));
   const creator = enc(meta.creator);
   const accounts = [...new Set([o.winner, creator, TREASURY_ADDR, ...roster.map((p) => enc(p.addr))])]
@@ -408,7 +433,7 @@ export async function buildResolveGroup(o: { caller: string; cid: number; stageI
     accounts,
     foreignAssets: [GONNA_ASA_TESTNET],
     boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)],
-    suggestedParams: await baseParams(6000),
+    suggestedParams: await baseParams(callFee),
   });
   return [call, ...(await opupTxns(o.caller, o.cid))];
 }
@@ -489,7 +514,10 @@ export async function buildClaimGroup(o: { caller: string; cid: number }): Promi
     appArgs: [await methodSelector(a, 'claim(uint64)void'), await appArg(a, 'uint64', o.cid)],
     foreignAssets: [GONNA_ASA_TESTNET],
     boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)],
-    suggestedParams: await baseParams(2000),
+    // v15.3.2 BUG-1: claim emits 2 inner txns (_refund_all on a roster of 1:
+    // stake axfer back + exact MBR payback) => 1000 x (1 outer + 2 inner).
+    // The old 2000 was rejected by the chain ("group fee too small").
+    suggestedParams: await baseParams(TESTNET_FEES.claim),
   });
   return [call];
 }
@@ -519,7 +547,8 @@ export async function buildClaimForfeitGroup(o: { caller: string; cid: number; s
   const a = await sdk();
   const meta = await readMeta(o.cid);
   if (!meta) throw new Error('card not found on chain (already settled?)');
-  const creator = a.encodeAddress(meta.creator);
+  // algosdk ABI decodes box byte[] as number[] — normalize like resolve's enc()
+  const creator = a.encodeAddress(meta.creator instanceof Uint8Array ? meta.creator : Uint8Array.from(meta.creator));
   const call = a.makeApplicationNoOpTxnFromObject({
     sender: o.caller, appIndex: ARENA_APP_ID,
     appArgs: [
