@@ -111,6 +111,68 @@ export function drawAlgoLogo(ctx: CanvasRenderingContext2D, x: number, y: number
   }
 }
 
+// ---------- v16.0.2: OFFICIAL Algorand WORDMARK (Il Principe: "sostituisci la
+// parola ALGORAND con quella ufficiale"). Same delivery pattern as the v16.0.1
+// logo above: the official lockup (public/brand/algorand-wordmark.png, 152x42,
+// alpha = ink) is lazy-loaded once, tinted via an offscreen 'source-in' canvas
+// with a per-color cache, drawn pixel-crisp, skipped (never crashing) while in
+// flight or on 404 — the claim just shows [A] POWERED BY for those frames.
+export const ALGO_WORDMARK_SRC = 'brand/algorand-wordmark.png';
+// Draw metrics: 10px logical height (legible, verified against the 5x7 pixel
+// font); the source is 152x42 so the width stays proportional (36px).
+// Optical baseline: in the 42px source box the lowercase x-body lives in rows
+// ~16-32 (descender of the 'g' below), so the draw y must sit ABOVE the pixel
+// text top — see the call site for the y offset (text y 48 -> wordmark y 46
+// puts both baselines at 54; 45 floats, 47 sinks the 'g' into the line below).
+export const ALGO_WORDMARK_H = 10;
+export const ALGO_WORDMARK_W = Math.round((152 / 42) * ALGO_WORDMARK_H); // 36
+let algoWordmarkImg: HTMLImageElement | null = null;
+let algoWordmarkDead = false;
+const algoWordmarkTints = new Map<string, HTMLCanvasElement>();
+(function bootAlgoWordmark(): void {
+  if (typeof Image === 'undefined') return; // node/CI: no DOM
+  const img = new Image();
+  img.onload = () => {
+    algoWordmarkImg = img;
+  };
+  img.onerror = () => {
+    algoWordmarkDead = true; // 404/offline: row just keeps the pixel text
+  };
+  img.src = ALGO_WORDMARK_SRC;
+})();
+
+function algoWordmarkTinted(color: string): HTMLCanvasElement | null {
+  if (!algoWordmarkImg) return null;
+  const hit = algoWordmarkTints.get(color);
+  if (hit) return hit;
+  const c = document.createElement('canvas');
+  c.width = algoWordmarkImg.width;
+  c.height = algoWordmarkImg.height;
+  const x = c.getContext('2d');
+  if (!x) return null;
+  x.imageSmoothingEnabled = false;
+  x.drawImage(algoWordmarkImg, 0, 0);
+  x.globalCompositeOperation = 'source-in'; // keep alpha, take the tint color
+  x.fillStyle = color;
+  x.fillRect(0, 0, c.width, c.height);
+  algoWordmarkTints.set(color, c);
+  return c;
+}
+
+// Draws the official wordmark at (x, y); returns the advance width so callers
+// can lay out the row without duplicating the aspect math. No-op (grace) until
+// the PNG lands, and a silent no-op forever if the fetch failed.
+export function drawAlgoWordmark(ctx: CanvasRenderingContext2D, x: number, y: number, color: string): number {
+  const wm = algoWordmarkTinted(color);
+  if (wm) {
+    const smooth = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false; // pixel-crisp
+    ctx.drawImage(wm, x, y, ALGO_WORDMARK_W, ALGO_WORDMARK_H);
+    ctx.imageSmoothingEnabled = smooth;
+  }
+  return ALGO_WORDMARK_W;
+}
+
 export function fmtCompact(n: number): string {
   if (!Number.isFinite(n)) return 'ERR'; // v9.0.2: NaN must NEVER reach the canvas
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
@@ -649,8 +711,20 @@ export class GateUI {
   private drawConnect(ctx: CanvasRenderingContext2D, t: number): void {
     this.buttons = [];
     drawTextSh(ctx, 'THE GATE', VW / 2, 16, 3, '#f5c542', 'center', '#b8860b');
-    drawAlgoLogo(ctx, VW / 2 - 58, 44, 2, '#f2f2f2');
-    drawText(ctx, 'POWERED BY ALGORAND', VW / 2 - 40, 48, 1, '#8a8f9c');
+    // v16.0.2: [A logo] POWERED BY [official wordmark] — ONE centered row.
+    // The pixel 'ALGORAND' text is gone: the official lockup PNG takes its
+    // place, tinted '#8a8f9c' like the adjacent pixel text (white '#f2f2f2'
+    // was tried and reads louder than the claim itself — gray keeps the row
+    // one voice). Wordmark y=46 (not 48): its lowercase x-body sits in the
+    // lower half of the source box, so +46 puts its optical baseline on the
+    // pixel text baseline (48+7-1=54); 45 floats, 47 sinks the 'g'.
+    const brandText = 'POWERED BY ';
+    const brandTextW = textWidth(brandText, 1); // 65 (trailing space included)
+    const brandTotal = 12 + 4 + brandTextW + 2 + ALGO_WORDMARK_W; // 119 <= VW
+    const brandX = Math.floor((VW - brandTotal) / 2);
+    drawAlgoLogo(ctx, brandX, 44, 2, '#f2f2f2');
+    drawText(ctx, brandText, brandX + 16, 48, 1, '#8a8f9c');
+    drawAlgoWordmark(ctx, brandX + 16 + brandTextW + 2, 46, '#8a8f9c');
 
     drawText(ctx, 'STAGE 1 IS FREE FOR ALL.', VW / 2, 66, 1, '#c8ccd4', 'center');
     drawText(ctx, 'THE GONNAVERSE BEYOND IS FOR HOLDERS:', VW / 2, 78, 1, '#c8ccd4', 'center');
