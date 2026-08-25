@@ -22,7 +22,7 @@ import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait } from '../skins';
 import type { SkinId } from '../skins';
 import { getArenaAdapter, arenaMode, closeGate, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
-import { activeSignOp, explorerTxUrl, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
+import { activeSignOp, explorerTxUrl, getCloseTxid, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
 import type { SignOpView } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
 import { qaActive, qaScore } from './qaSigner';
@@ -142,6 +142,10 @@ export class ArenaUI {
   // history + legacy
   private hist: HistoryEntry[] = [];
   private histDetail: HistoryEntry | null = null; // v13: tappable history rows
+  // v15.3.1 — CLOSE-TX prefetch state per cid. The explorer tap needs the
+  // txid IN HAND (iOS Safari kills window.open after an await), so the lookup
+  // fires when a terminal card RENDERS, never inside the tap handler.
+  private txPrefetch: Record<number, 'pending' | 'miss'> = {};
   private histPage = 0;
   private legacy: LegacyStats | null = null;
   // share sheet (v10.4)
@@ -192,6 +196,27 @@ export class ArenaUI {
 
   private adapter() {
     return getArenaAdapter();
+  }
+
+  // v15.3.1 — fire-and-forget close-tx lookup: memory -> on-chain close
+  // event (banked into memory on a hit). Never awaited by the render/tap
+  // path; a miss arms the honest 'TX INDEXING - RETRY' state.
+  private prefetchCloseTx(cid: number, force = false): void {
+    if (getCloseTxid(cid)) return; // already in hand — the button renders
+    // one automatic lookup per cid per session: after a miss the honest
+    // 'TX INDEXING - RETRY' button (force) re-arms it — never an auto-refire
+    // loop on every frame
+    if (!force && this.txPrefetch[cid] !== undefined) return;
+    this.txPrefetch[cid] = 'pending';
+    void this.adapter()
+      .closeTxid(cid, { force })
+      .then((txid) => {
+        if (txid) delete this.txPrefetch[cid]; // getCloseTxid answers now
+        else this.txPrefetch[cid] = 'miss';
+      })
+      .catch(() => {
+        this.txPrefetch[cid] = 'miss';
+      });
   }
 
   private bestScore(): number {
@@ -860,17 +885,22 @@ export class ArenaUI {
       return { act: 'move' };
     }
     if (id === 'hview') {
-      // v13: the on-chain box is deleted after payout — the proof lives on
-      // the explorer (resolve txid remembered by recordTxid)
+      // v15.3.1: the on-chain box is deleted after payout — the proof is the
+      // CLOSE tx on the explorer (inner txns: winner payout + treasury fee +
+      // MBR back). Direct gesture -> window.open SYNCHRONOUSLY (iOS Safari
+      // blocks popups after an await): the txid was prefetched at render;
+      // not in hand = the button was never drawn (TX INDEXING - RETRY state).
       const h = this.histDetail;
-      if (h) {
-        try {
-          const m = JSON.parse(window.localStorage.getItem('gonna.arena.txids') ?? '{}') as Record<string, string>;
-          const txid = m[String(h.id)];
-          if (txid) window.open('https://testnet.explorer.perawallet.app/tx/' + txid, '_blank');
-        } catch { /* no storage */ }
-      }
+      const txid = h ? getCloseTxid(h.id) : null;
+      if (txid) window.open(explorerTxUrl(txid), '_blank', 'noopener');
       return { act: 'none' };
+    }
+    if (id === 'htxretry') {
+      // honest retry: re-ask the indexer (forced, bypasses the 30s cache) —
+      // the button re-renders as soon as the txid lands, no fake link
+      const h = this.histDetail;
+      if (h) this.prefetchCloseTx(h.id, true);
+      return { act: 'move' };
     }
     if (id === 'hpage:prev') {
       this.histPage = Math.max(0, this.histPage - 1);
@@ -884,9 +914,16 @@ export class ArenaUI {
 
     // ---- v10.4: SHARE (private cards, owner only, while live) ----
     if (id === 'viewchain') {
+      // v15.3.1: the CLOSE tx (funds moved), never the latest random op —
+      // synchronous window.open from the gesture, txid prefetched at render
       const ch = this.current;
-      const txid = ch ? getTxid(ch.id) : null;
+      const txid = ch ? getCloseTxid(ch.id) : null;
       if (txid) window.open(explorerTxUrl(txid), '_blank', 'noopener');
+      return { act: 'move' };
+    }
+    if (id === 'viewchain:retry') {
+      const ch = this.current;
+      if (ch) this.prefetchCloseTx(ch.id, true);
       return { act: 'move' };
     }
     if (id === 'wallet') {
@@ -2367,9 +2404,21 @@ export class ArenaUI {
           drawText(c, wname + ' TOOK ' + fmtStake(card.pot) + ' $GONNA', VW / 2, ay + 16, 1, GRAY, 'center');
           ay += 28;
         }
-        if (getTxid(card.id)) {
-          this.btn(c, frame, { id: 'viewchain', x: 92, y: Math.min(ay, 182), w: 200, h: 12 }, 'VIEW ON CHAIN', { gold: true });
-          ay += 16;
+        // v15.3.1: the payout tx link (resolve/forfeit inner legs) — close
+        // memory -> close event -> honest RETRY; prefetched at render so the
+        // tap opens the explorer synchronously (iOS popup rule)
+        if (getCloseTxid(card.id)) {
+          this.btn(c, frame, { id: 'viewchain', x: 92, y: Math.min(ay, 178), w: 200, h: 16 }, 'VIEW THE PAYOUT ON-CHAIN', { gold: true });
+          ay += 20;
+        } else if (testnet) {
+          this.prefetchCloseTx(card.id);
+          if (this.txPrefetch[card.id] === 'miss') {
+            this.btn(c, frame, { id: 'viewchain:retry', x: 92, y: Math.min(ay, 178), w: 200, h: 16 }, 'TX INDEXING - RETRY', { dim: true });
+            ay += 20;
+          } else {
+            drawText(c, 'LOOKING UP THE PAYOUT TX...', VW / 2, Math.min(ay, 178) + 5, 1, DIM, 'center');
+            ay += 14;
+          }
         }
       }
       // creator emergency brake on an open card — v15.3.0 (FIX-A): gated by
@@ -2463,9 +2512,19 @@ export class ArenaUI {
       }
       y += 12;
     }
-    // the early-close / refund tx is the proof — link it when we know it
-    if (getTxid(card.id)) {
-      this.btn(c, frame, { id: 'viewchain', x: 92, y: Math.min(y + 4, 180), w: 200, h: 14 }, 'VIEW ON CHAIN', { gold: true });
+    // v15.3.1: the early-close / forfeit / refund tx is the proof — link it
+    // when we know it (close memory -> close event -> honest RETRY), with
+    // the label that says WHICH funds moved
+    if (getCloseTxid(card.id)) {
+      const label = card.forfeited ? 'VIEW THE FORFEIT ON-CHAIN' : 'VIEW THE REFUND ON-CHAIN';
+      this.btn(c, frame, { id: 'viewchain', x: 92, y: Math.min(y + 4, 176), w: 200, h: 16 }, label, { gold: true });
+    } else if (this.adapter().mode === 'testnet') {
+      this.prefetchCloseTx(card.id);
+      if (this.txPrefetch[card.id] === 'miss') {
+        this.btn(c, frame, { id: 'viewchain:retry', x: 92, y: Math.min(y + 4, 176), w: 200, h: 16 }, 'TX INDEXING - RETRY', { dim: true });
+      } else {
+        drawText(c, 'LOOKING UP THE REFUND TX...', VW / 2, Math.min(y + 4, 176) + 5, 1, DIM, 'center');
+      }
     }
     this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
   }
@@ -2530,9 +2589,10 @@ export class ArenaUI {
     c.lineWidth = flash ? 2 : 1;
     c.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
     drawTextSh(c, 'REMATCH', r.x + r.w / 2, r.y + 7, 1, flash ? '#fff3c4' : GOLD, 'center');
-    // v11: VIEW ON CHAIN — testnet explorer link for the resolve tx
-    if (getTxid(card.id)) {
-      this.btn(c, frame, { id: 'viewchain', x: VW / 2 - 60, y: 190, w: 120, h: 10 }, 'VIEW ON CHAIN', { green: true });
+    // v15.3.1: the resolve tx we JUST sent is in close memory — straight to
+    // the payout legs on the explorer (no prefetch needed on this path)
+    if (getCloseTxid(card.id)) {
+      this.btn(c, frame, { id: 'viewchain', x: VW / 2 - 84, y: 188, w: 168, h: 12 }, 'VIEW THE PAYOUT ON-CHAIN', { green: true });
     }
   }
 
@@ -2644,12 +2704,22 @@ export class ArenaUI {
     }
     const paid = this.histPaid(h);
     drawText(c, paid ? 'POT PAID ON-CHAIN' : 'POT STILL UNCLAIMED', VW / 2, y + 2, 1, paid ? GOLD : '#ff8a3c', 'center');
-    // VIEW ON CHAIN only when we actually remember the resolve txid
-    let txid: string | null = null;
-    try {
-      txid = (JSON.parse(window.localStorage.getItem('gonna.arena.txids') ?? '{}') as Record<string, string>)[String(h.id)] ?? null;
-    } catch { /* no storage */ }
-    if (txid) this.btn(c, frame, { id: 'hview', x: 92, y: 180, w: 200, h: 14 }, 'VIEW ON CHAIN', { gold: true });
+    // v15.3.1 (the Principe): tap -> SEE the funds move. The CLOSE tx on the
+    // explorer shows the inner legs (winner payout + 5% treasury fee + MBR
+    // refund). txid resolution: close memory -> on-chain close event ->
+    // honest TX INDEXING - RETRY (never an invented link, never a mock one).
+    const txid = getCloseTxid(h.id);
+    if (txid) {
+      const label = h.forfeited ? 'VIEW THE FORFEIT ON-CHAIN' : h.winner ? 'VIEW THE PAYOUT ON-CHAIN' : 'VIEW THE REFUND ON-CHAIN';
+      this.btn(c, frame, { id: 'hview', x: 92, y: 176, w: 200, h: 18 }, label, { gold: true });
+    } else if (this.adapter().mode === 'testnet') {
+      this.prefetchCloseTx(h.id); // non-blocking: the tap path stays synchronous
+      if (this.txPrefetch[h.id] === 'miss') {
+        this.btn(c, frame, { id: 'htxretry', x: 92, y: 176, w: 200, h: 18 }, 'TX INDEXING - RETRY', { dim: true });
+      } else {
+        drawText(c, 'LOOKING UP THE PAYOUT TX...', VW / 2, 182, 1, DIM, 'center');
+      }
+    }
     this.btn(c, frame, { id: 'back', x: 147, y: 198, w: 90, h: 14 }, 'BACK');
   }
 

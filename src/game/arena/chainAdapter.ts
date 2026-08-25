@@ -147,6 +147,11 @@ export interface ArenaAdapter {
   // v15: the id the NEXT create will get — a creator's DESCENT run is seeded
   // by it, so the joiner later fights the exact same waves. Read-only.
   peekNextId?(): Promise<number | null>;
+  // v15.3.1: the tx that MOVED THE FUNDS for this cid (resolve / forfeit /
+  // refund) — local close memory first, then the on-chain close event; null
+  // = unknown (indexer lag, mock mode). NEVER invented. force bypasses the
+  // 30s event cache (the honest RETRY path).
+  closeTxid(id: number, opts?: { force?: boolean }): Promise<string | null>;
 }
 
 // ---------- FEE ENGINE ----------
@@ -833,6 +838,11 @@ export class MockArenaAdapter implements ArenaAdapter {
     return [...s.history!].sort((a, b) => b.resolvedAt - a.resolvedAt);
   }
 
+  // mock is NOT on-chain: there is no explorer tx to show, honestly none
+  async closeTxid(): Promise<string | null> {
+    return null;
+  }
+
   async legacyStats(address: string): Promise<LegacyStats> {
     const s = this.store();
     // v15.2.9: the shared signed-P&L accumulator (mock history carries gross
@@ -1173,7 +1183,9 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       verdictSig: vsig,
       winner: a.encodeAddress(best.addr), // tie: contract ignores it, refunds all
     });
-    kit.recordTxid(id, await kit.signSend(me.sign, txns, { label: 'RESOLVE' }));
+    const resolveTxid = await kit.signSend(me.sign, txns, { label: 'RESOLVE' });
+    kit.recordTxid(id, resolveTxid);
+    kit.recordCloseTxid(id, resolveTxid); // v15.3.1: THE payout tx (inner winner+fee legs)
     kit.recordResolveAt(id, Date.now()); // honest "x AGO" for the HISTORY
     // card memory for the event-paired history (BUG-3): exact settlement math
     // (protocol_fee = floor(pot * 500 / 10_000))
@@ -1216,6 +1228,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const txns = await kit.buildClaimGroup({ caller: me.address, cid: id });
     const txid = await kit.signSend(me.sign, txns, { label: 'CLAIM' });
     kit.recordTxid(id, txid);
+    kit.recordCloseTxid(id, txid); // v15.3.1: the refund tx moved funds too
     if (before) this.rememberClosed(before, 'refunded', null, 0, 0);
     return { payout: 0, txid }; // exact payout lives in the inner txns
   }
@@ -1242,6 +1255,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const txns = await kit.buildClaimForfeitGroup({ caller: me.address, cid: id, seat: target });
     const txid = await kit.signSend(me.sign, txns, { label: 'CLAIM FORFEIT' });
     kit.recordTxid(id, txid);
+    kit.recordCloseTxid(id, txid); // v15.3.1: the forfeit tx (95% opponent + 5% treasury)
     kit.recordResolveAt(id, Date.now()); // terminal: honest "x AGO" everywhere
     if (before) {
       // contract: caller keeps own stake + 95% of the forfeited stake, 5% fee
@@ -1259,7 +1273,9 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     // mock adapter), otherwise the UI screams a red toast over a good close.
     const before = await this.getChallenge(id);
     const txns = await kit.buildEarlyCloseGroup({ caller: me.address, cid: id });
-    kit.recordTxid(id, await kit.signSend(me.sign, txns, { label: 'EARLY CLOSE' }));
+    const closeTx = await kit.signSend(me.sign, txns, { label: 'EARLY CLOSE' });
+    kit.recordTxid(id, closeTx);
+    kit.recordCloseTxid(id, closeTx); // v15.3.1: every payer refunded inside this tx
     const ch = await this.getChallenge(id);
     if (ch && ch.status !== 'closed') return ch; // box still readable (unexpected) — return the truth
     if (before) {
@@ -1359,6 +1375,20 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       pot: potMicro / 1e6 || (mem ? mem.stake * Math.max(1, mem.players.length) : 0),
       forfeited: kind === 'forfeited',
     };
+  }
+
+  // v15.3.1: the tx that moved the funds for cid — close memory (our own
+  // resolve/forfeit/claim/close) -> the cached on-chain event log -> null
+  // (unknown: the UI renders an honest RETRY, never an invented link). A
+  // found event txid is banked into the close memory by resolveCloseTxid.
+  async closeTxid(id: number, opts?: { force?: boolean }): Promise<string | null> {
+    const mem = kit.getCloseTxid(id);
+    if (mem) return mem;
+    try {
+      return kit.resolveCloseTxid(id, await this.closeEvents(opts?.force === true));
+    } catch {
+      return null; // indexer unreachable — memory-only answer
+    }
   }
 
   // event-log cache: the indexer answers once per 30s per session at most

@@ -895,8 +895,57 @@ export function getResolveAt(cid: number): number | null {
     return null;
   }
 }
+// v15.3.1 — EXPLORER per network, centralized next to the indexer/app config
+// (supersedes the v11..v15.3.0 hardcoded testnet perawallet link): a mainnet
+// flip touches ARENA_NETWORK only, never a call site. lora.algokit.io shows
+// the INNER txns of the close group — winner payout + treasury fee + MBR
+// refund — exactly "i fondi che si sono mossi".
+export type ArenaNetwork = 'testnet' | 'mainnet';
+export const ARENA_NETWORK: ArenaNetwork = 'testnet';
+export function explorerTxUrlFor(network: ArenaNetwork, txid: string): string {
+  return 'https://lora.algokit.io/' + network + '/transaction/' + txid;
+}
 export function explorerTxUrl(txid: string): string {
-  return 'https://testnet.explorer.perawallet.app/tx/' + txid;
+  return explorerTxUrlFor(ARENA_NETWORK, txid);
+}
+
+// v15.3.1 — per-challenge CLOSE-txid memory: the tx that MOVED THE FUNDS
+// (resolve / forfeit / claim / early-close). Distinct from TX_KEY above,
+// which remembers the latest op of ANY kind — a create/submit txid moved no
+// pot and must never back a "VIEW THE PAYOUT" link.
+const CLOSE_TX_KEY = 'gonna.arena.closetx';
+export function recordCloseTxid(cid: number, txid: string): void {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(CLOSE_TX_KEY) ?? '{}') as Record<string, string>;
+    m[String(cid)] = txid;
+    window.localStorage.setItem(CLOSE_TX_KEY, JSON.stringify(m));
+  } catch { /* no storage */ }
+}
+export function getCloseTxid(cid: number): string | null {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(CLOSE_TX_KEY) ?? '{}') as Record<string, string>;
+    return m[String(cid)] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// txid resolution order (v15.3.1): (a) local close memory (WE sent the close
+// from this browser) -> (b) the on-chain event log (the ChallengeResolved /
+// ChallengeForfeited / ChallengeRefunded event names the tx that emitted it)
+// -> (c) null = unknown (indexer lag): an honest RETRY, NEVER an invented
+// link. A found event txid is banked into the close memory so the lookup
+// never re-scans. pickCloseTxid is the PURE event step (headless-testable).
+export function pickCloseTxid(cid: number, events: ArenaCloseEvent[]): string | null {
+  const ev = events.filter((e) => e.cid === cid).sort((x, y) => y.round - x.round)[0];
+  return ev ? ev.txid : null;
+}
+export function resolveCloseTxid(cid: number, events: ArenaCloseEvent[]): string | null {
+  const mem = getCloseTxid(cid);
+  if (mem) return mem;
+  const txid = pickCloseTxid(cid, events);
+  if (txid) recordCloseTxid(cid, txid); // cache: never re-seek it
+  return txid;
 }
 
 // ============================================================================

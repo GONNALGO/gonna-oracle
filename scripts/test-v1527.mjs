@@ -151,6 +151,11 @@ writeFileSync(
     'export const signSend = (...a) => H().signSend(...a);\n' +
     'export const recordTxid = (...a) => H().recordTxid && H().recordTxid(...a);\n' +
     'export const getTxid = () => null;\n' +
+    'export const recordCloseTxid = (...a) => H().recordCloseTxid && H().recordCloseTxid(...a);\n' +
+    'export const getCloseTxid = () => null;\n' +
+    'export const pickCloseTxid = () => null;\n' +
+    'export const resolveCloseTxid = () => null;\n' +
+    "export const explorerTxUrlFor = (n, t) => 'https://example.invalid/' + n + '/' + t;\n" +
     'export const recordResolveAt = (...a) => H().recordResolveAt && H().recordResolveAt(...a);\n' +
     'export const getResolveAt = () => null;\n' +
     "export const explorerTxUrl = (t) => 'https://example.invalid/' + t;\n" +
