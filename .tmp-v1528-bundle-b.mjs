@@ -43,6 +43,7 @@ var testnetKit_exports = {};
 __export(testnetKit_exports, {
   ALGOD_TESTNET: () => ALGOD_TESTNET,
   ARENA_APP_ID: () => ARENA_APP_ID,
+  ARENA_NETWORK: () => ARENA_NETWORK,
   ARENA_VERSION: () => ARENA_VERSION,
   CONTINUE_FEE_MICRO: () => CONTINUE_FEE_MICRO,
   GONNA_ASA_TESTNET: () => GONNA_ASA_TESTNET,
@@ -75,8 +76,10 @@ __export(testnetKit_exports, {
   continueNote: () => continueNote,
   contractVersion: () => contractVersion,
   explorerTxUrl: () => explorerTxUrl,
+  explorerTxUrlFor: () => explorerTxUrlFor,
   fetchArenaCloseEvents: () => fetchArenaCloseEvents,
   fetchArenaCreateStages: () => fetchArenaCreateStages,
+  getCloseTxid: () => getCloseTxid,
   getResolveAt: () => getResolveAt,
   getTxid: () => getTxid,
   isCidRaceReject: () => isCidRaceReject,
@@ -84,14 +87,17 @@ __export(testnetKit_exports, {
   isWedgeError: () => isWedgeError,
   nextChallengeId: () => nextChallengeId,
   parseStageNote: () => parseStageNote,
+  pickCloseTxid: () => pickCloseTxid,
   readMeta: () => readMeta,
   readPlayers: () => readPlayers,
   readStageCache: () => readStageCache,
+  recordCloseTxid: () => recordCloseTxid,
   recordResolveAt: () => recordResolveAt,
   recordTxid: () => recordTxid,
   rememberCard: () => rememberCard,
   rememberedCard: () => rememberedCard,
   rememberedCards: () => rememberedCards,
+  resolveCloseTxid: () => resolveCloseTxid,
   scanChallengeIds: () => scanChallengeIds,
   scoreMsg: () => scoreMsg,
   sdk: () => sdk,
@@ -371,6 +377,8 @@ async function buildResolveGroup(o3) {
   const meta = await readMeta(o3.cid);
   if (!meta) throw new Error("card not found on chain (already settled?)");
   const roster = await readPlayers(o3.cid);
+  const innerLegs = o3.tie === false ? 3 : roster.length + 1;
+  const callFee = 1e3 * (1 + innerLegs);
   const enc = (pk) => a3.encodeAddress(pk instanceof Uint8Array ? pk : Uint8Array.from(pk));
   const creator = enc(meta.creator);
   const accounts = [.../* @__PURE__ */ new Set([o3.winner, creator, TREASURY_ADDR, ...roster.map((p4) => enc(p4.addr))])].filter((x4) => x4 !== o3.caller).slice(0, 4);
@@ -387,7 +395,7 @@ async function buildResolveGroup(o3) {
     accounts,
     foreignAssets: [GONNA_ASA_TESTNET],
     boxes: [boxRef(o3.cid, 109), boxRef(o3.cid, 112)],
-    suggestedParams: await baseParams(6e3)
+    suggestedParams: await baseParams(callFee)
   });
   return [call, ...await opupTxns(o3.caller, o3.cid)];
 }
@@ -456,7 +464,10 @@ async function buildClaimGroup(o3) {
     appArgs: [await methodSelector(a3, "claim(uint64)void"), await appArg(a3, "uint64", o3.cid)],
     foreignAssets: [GONNA_ASA_TESTNET],
     boxes: [boxRef(o3.cid, 109), boxRef(o3.cid, 112)],
-    suggestedParams: await baseParams(2e3)
+    // v15.3.2 BUG-1: claim emits 2 inner txns (_refund_all on a roster of 1:
+    // stake axfer back + exact MBR payback) => 1000 x (1 outer + 2 inner).
+    // The old 2000 was rejected by the chain ("group fee too small").
+    suggestedParams: await baseParams(TESTNET_FEES.claim)
   });
   return [call];
 }
@@ -483,7 +494,7 @@ async function buildClaimForfeitGroup(o3) {
   const a3 = await sdk();
   const meta = await readMeta(o3.cid);
   if (!meta) throw new Error("card not found on chain (already settled?)");
-  const creator = a3.encodeAddress(meta.creator);
+  const creator = a3.encodeAddress(meta.creator instanceof Uint8Array ? meta.creator : Uint8Array.from(meta.creator));
   const call = a3.makeApplicationNoOpTxnFromObject({
     sender: o3.caller,
     appIndex: ARENA_APP_ID,
@@ -738,8 +749,38 @@ function getResolveAt(cid) {
     return null;
   }
 }
+function explorerTxUrlFor(network, txid) {
+  return "https://lora.algokit.io/" + network + "/transaction/" + txid;
+}
 function explorerTxUrl(txid) {
-  return "https://testnet.explorer.perawallet.app/tx/" + txid;
+  return explorerTxUrlFor(ARENA_NETWORK, txid);
+}
+function recordCloseTxid(cid, txid) {
+  try {
+    const m5 = JSON.parse(window.localStorage.getItem(CLOSE_TX_KEY) ?? "{}");
+    m5[String(cid)] = txid;
+    window.localStorage.setItem(CLOSE_TX_KEY, JSON.stringify(m5));
+  } catch {
+  }
+}
+function getCloseTxid(cid) {
+  try {
+    const m5 = JSON.parse(window.localStorage.getItem(CLOSE_TX_KEY) ?? "{}");
+    return m5[String(cid)] ?? null;
+  } catch {
+    return null;
+  }
+}
+function pickCloseTxid(cid, events) {
+  const ev = events.filter((e3) => e3.cid === cid).sort((x4, y5) => y5.round - x4.round)[0];
+  return ev ? ev.txid : null;
+}
+function resolveCloseTxid(cid, events) {
+  const mem = getCloseTxid(cid);
+  if (mem) return mem;
+  const txid = pickCloseTxid(cid, events);
+  if (txid) recordCloseTxid(cid, txid);
+  return txid;
 }
 function hex4(b5) {
   return [...b5.slice(0, 4)].map((x4) => x4.toString(16).padStart(2, "0")).join("");
@@ -900,7 +941,7 @@ function rememberedCard(cid) {
 function rememberedCards() {
   return Object.values(readCardMem());
 }
-var ARENA_APP_ID, LEGACY_ARENA_APP_ID, GONNA_ASA_TESTNET, OPUP_APP_ID, TREASURY_ADDR, ORACLE_ADDR, ALGOD_TESTNET, SEAT_TTL_SECS, ARENA_VERSION, MBR_CREATE, EARLY_CLOSE_FEE_PAY, GONNA_DECIMALS, STAGE_NOTE_PREFIX, SCORE_DOMAIN, VERDICT_DOMAIN, TESTNET_FEES, sdkP, CONTINUE_FEE_MICRO, SIGN_TIMEOUT_MS, SIGN_TIMEOUT_MSG, SIGN_NUDGE_MS, SIGN_CANCEL_MSG, SignCancelled, recoverHook, activeOp, StaleAttempt, TX_KEY, RES_KEY, INDEXER_TESTNET, EV_RESOLVED, EV_FORFEITED, EV_REFUNDED, STAGE_KEY, STAGE_MEM_MAX, CREATE_SIG, SPAWN_SIG, stageMemo, CARD_KEY, CARD_MEM_MAX;
+var ARENA_APP_ID, LEGACY_ARENA_APP_ID, GONNA_ASA_TESTNET, OPUP_APP_ID, TREASURY_ADDR, ORACLE_ADDR, ALGOD_TESTNET, SEAT_TTL_SECS, ARENA_VERSION, MBR_CREATE, EARLY_CLOSE_FEE_PAY, GONNA_DECIMALS, STAGE_NOTE_PREFIX, SCORE_DOMAIN, VERDICT_DOMAIN, TESTNET_FEES, sdkP, CONTINUE_FEE_MICRO, SIGN_TIMEOUT_MS, SIGN_TIMEOUT_MSG, SIGN_NUDGE_MS, SIGN_CANCEL_MSG, SignCancelled, recoverHook, activeOp, StaleAttempt, TX_KEY, RES_KEY, ARENA_NETWORK, CLOSE_TX_KEY, INDEXER_TESTNET, EV_RESOLVED, EV_FORFEITED, EV_REFUNDED, STAGE_KEY, STAGE_MEM_MAX, CREATE_SIG, SPAWN_SIG, stageMemo, CARD_KEY, CARD_MEM_MAX;
 var init_testnetKit = __esm({
   "src/game/arena/testnetKit.ts"() {
     ARENA_APP_ID = 769767443;
@@ -925,11 +966,12 @@ var init_testnetKit = __esm({
       // axfer + call
       submit: 3e3 + 4 * 1e3,
       // call + 4 opup
-      resolve: 6e3 + 4 * 1e3,
-      // call + 4 opup
-      claim: 2e3,
+      resolve: 1e3 * (1 + 3) + 4 * 1e3,
+      // NON-TIE call (1 outer + 3 inner) + 4 opup; ties scale with the roster — buildResolveGroup computes it dynamically
+      claim: 1e3 + 2 * 1e3,
+      // call + 2 inner (stake axfer + MBR payback) — v15.3.2 BUG-1: was 2000, chain rejects it
       close: 1e3 + 4e3,
-      // pay + call
+      // pay + call (2 inner covered by the call's 4000)
       forfeit: 5e3
       // call + 4 inner (2 axfer winner + fee axfer + MBR payback)
     };
@@ -951,6 +993,8 @@ var init_testnetKit = __esm({
     };
     TX_KEY = "gonna.arena.txids";
     RES_KEY = "gonna.arena.resolved";
+    ARENA_NETWORK = "testnet";
+    CLOSE_TX_KEY = "gonna.arena.closetx";
     INDEXER_TESTNET = "https://testnet-idx.algonode.cloud";
     EV_RESOLVED = "ae488dc6";
     EV_FORFEITED = "24d3dd8b";
@@ -52949,6 +52993,10 @@ var MockArenaAdapter = class {
     const s4 = this.store();
     return [...s4.history].sort((a3, b5) => b5.resolvedAt - a3.resolvedAt);
   }
+  // mock is NOT on-chain: there is no explorer tx to show, honestly none
+  async closeTxid() {
+    return null;
+  }
   async legacyStats(address) {
     const s4 = this.store();
     const { wins, losses, won, lost, net, bestWin } = accumulateLegacy(s4.history, address);
@@ -53208,10 +53256,14 @@ var TestnetArenaAdapter = class {
       seedReveal: new Uint8Array(0),
       // MODE_FULL: empty reveal
       verdictSig: vsig,
-      winner: a3.encodeAddress(best.addr)
+      winner: a3.encodeAddress(best.addr),
       // tie: contract ignores it, refunds all
+      tie
+      // v15.3.2 BUG-2: ties refund the WHOLE roster — the resolve fee scales with it
     });
-    recordTxid(id, await signSend(me2.sign, txns, { label: "RESOLVE" }));
+    const resolveTxid = await signSend(me2.sign, txns, { label: "RESOLVE" });
+    recordTxid(id, resolveTxid);
+    recordCloseTxid(id, resolveTxid);
     recordResolveAt(id, Date.now());
     const potMicro = Number(meta.stake) * players.length;
     const feeMicro = tie ? 0 : Math.floor(potMicro * 0.05);
@@ -53246,6 +53298,7 @@ var TestnetArenaAdapter = class {
     const txns = await buildClaimGroup({ caller: me2.address, cid: id });
     const txid = await signSend(me2.sign, txns, { label: "CLAIM" });
     recordTxid(id, txid);
+    recordCloseTxid(id, txid);
     if (before) this.rememberClosed(before, "refunded", null, 0, 0);
     return { payout: 0, txid };
   }
@@ -53271,6 +53324,7 @@ var TestnetArenaAdapter = class {
     const txns = await buildClaimForfeitGroup({ caller: me2.address, cid: id, seat: target });
     const txid = await signSend(me2.sign, txns, { label: "CLAIM FORFEIT" });
     recordTxid(id, txid);
+    recordCloseTxid(id, txid);
     recordResolveAt(id, Date.now());
     if (before) {
       const feeMicro = Math.floor(Number(before.stake * 1e6) * 0.05);
@@ -53282,7 +53336,9 @@ var TestnetArenaAdapter = class {
     const me2 = await this.id();
     const before = await this.getChallenge(id);
     const txns = await buildEarlyCloseGroup({ caller: me2.address, cid: id });
-    recordTxid(id, await signSend(me2.sign, txns, { label: "EARLY CLOSE" }));
+    const closeTx = await signSend(me2.sign, txns, { label: "EARLY CLOSE" });
+    recordTxid(id, closeTx);
+    recordCloseTxid(id, closeTx);
     const ch = await this.getChallenge(id);
     if (ch && ch.status !== "closed") return ch;
     if (before) {
@@ -53359,6 +53415,19 @@ var TestnetArenaAdapter = class {
       pot: potMicro / 1e6 || (mem ? mem.stake * Math.max(1, mem.players.length) : 0),
       forfeited: kind === "forfeited"
     };
+  }
+  // v15.3.1: the tx that moved the funds for cid — close memory (our own
+  // resolve/forfeit/claim/close) -> the cached on-chain event log -> null
+  // (unknown: the UI renders an honest RETRY, never an invented link). A
+  // found event txid is banked into the close memory by resolveCloseTxid.
+  async closeTxid(id, opts) {
+    const mem = getCloseTxid(id);
+    if (mem) return mem;
+    try {
+      return resolveCloseTxid(id, await this.closeEvents(opts?.force === true));
+    } catch {
+      return null;
+    }
   }
   // event-log cache: the indexer answers once per 30s per session at most
   // (board refreshes and deep-links share it); failures fall back to the
@@ -54479,6 +54548,10 @@ var ArenaUI = class {
   hist = [];
   histDetail = null;
   // v13: tappable history rows
+  // v15.3.1 — CLOSE-TX prefetch state per cid. The explorer tap needs the
+  // txid IN HAND (iOS Safari kills window.open after an await), so the lookup
+  // fires when a terminal card RENDERS, never inside the tap handler.
+  txPrefetch = {};
   histPage = 0;
   legacy = null;
   // share sheet (v10.4)
@@ -54530,6 +54603,20 @@ var ArenaUI = class {
   }
   adapter() {
     return getArenaAdapter();
+  }
+  // v15.3.1 — fire-and-forget close-tx lookup: memory -> on-chain close
+  // event (banked into memory on a hit). Never awaited by the render/tap
+  // path; a miss arms the honest 'TX INDEXING - RETRY' state.
+  prefetchCloseTx(cid, force = false) {
+    if (getCloseTxid(cid)) return;
+    if (!force && this.txPrefetch[cid] !== void 0) return;
+    this.txPrefetch[cid] = "pending";
+    void this.adapter().closeTxid(cid, { force }).then((txid) => {
+      if (txid) delete this.txPrefetch[cid];
+      else this.txPrefetch[cid] = "miss";
+    }).catch(() => {
+      this.txPrefetch[cid] = "miss";
+    });
   }
   bestScore() {
     try {
@@ -55097,15 +55184,14 @@ var ArenaUI = class {
     }
     if (id === "hview") {
       const h5 = this.histDetail;
-      if (h5) {
-        try {
-          const m5 = JSON.parse(window.localStorage.getItem("gonna.arena.txids") ?? "{}");
-          const txid = m5[String(h5.id)];
-          if (txid) window.open("https://testnet.explorer.perawallet.app/tx/" + txid, "_blank");
-        } catch {
-        }
-      }
+      const txid = h5 ? getCloseTxid(h5.id) : null;
+      if (txid) window.open(explorerTxUrl(txid), "_blank", "noopener");
       return { act: "none" };
+    }
+    if (id === "htxretry") {
+      const h5 = this.histDetail;
+      if (h5) this.prefetchCloseTx(h5.id, true);
+      return { act: "move" };
     }
     if (id === "hpage:prev") {
       this.histPage = Math.max(0, this.histPage - 1);
@@ -55118,8 +55204,13 @@ var ArenaUI = class {
     if (id.startsWith("claim:")) return this.doClaim(Number(id.slice(6)));
     if (id === "viewchain") {
       const ch = this.current;
-      const txid = ch ? getTxid(ch.id) : null;
+      const txid = ch ? getCloseTxid(ch.id) : null;
       if (txid) window.open(explorerTxUrl(txid), "_blank", "noopener");
+      return { act: "move" };
+    }
+    if (id === "viewchain:retry") {
+      const ch = this.current;
+      if (ch) this.prefetchCloseTx(ch.id, true);
       return { act: "move" };
     }
     if (id === "wallet") {
@@ -56376,9 +56467,18 @@ var ArenaUI = class {
           drawText2(c3, wname + " TOOK " + fmtStake(card.pot) + " $GONNA", VW / 2, ay + 16, 1, GRAY2, "center");
           ay += 28;
         }
-        if (getTxid(card.id)) {
-          this.btn(c3, frame, { id: "viewchain", x: 92, y: Math.min(ay, 182), w: 200, h: 12 }, "VIEW ON CHAIN", { gold: true });
-          ay += 16;
+        if (getCloseTxid(card.id)) {
+          this.btn(c3, frame, { id: "viewchain", x: 92, y: Math.min(ay, 178), w: 200, h: 16 }, "VIEW THE PAYOUT ON-CHAIN", { gold: true });
+          ay += 20;
+        } else if (testnet) {
+          this.prefetchCloseTx(card.id);
+          if (this.txPrefetch[card.id] === "miss") {
+            this.btn(c3, frame, { id: "viewchain:retry", x: 92, y: Math.min(ay, 178), w: 200, h: 16 }, "TX INDEXING - RETRY", { dim: true });
+            ay += 20;
+          } else {
+            drawText2(c3, "LOOKING UP THE PAYOUT TX...", VW / 2, Math.min(ay, 178) + 5, 1, DIM2, "center");
+            ay += 14;
+          }
         }
       }
       const gate = closeGate(card, me2);
@@ -56453,8 +56553,16 @@ var ArenaUI = class {
       }
       y5 += 12;
     }
-    if (getTxid(card.id)) {
-      this.btn(c3, frame, { id: "viewchain", x: 92, y: Math.min(y5 + 4, 180), w: 200, h: 14 }, "VIEW ON CHAIN", { gold: true });
+    if (getCloseTxid(card.id)) {
+      const label = card.forfeited ? "VIEW THE FORFEIT ON-CHAIN" : "VIEW THE REFUND ON-CHAIN";
+      this.btn(c3, frame, { id: "viewchain", x: 92, y: Math.min(y5 + 4, 176), w: 200, h: 16 }, label, { gold: true });
+    } else if (this.adapter().mode === "testnet") {
+      this.prefetchCloseTx(card.id);
+      if (this.txPrefetch[card.id] === "miss") {
+        this.btn(c3, frame, { id: "viewchain:retry", x: 92, y: Math.min(y5 + 4, 176), w: 200, h: 16 }, "TX INDEXING - RETRY", { dim: true });
+      } else {
+        drawText2(c3, "LOOKING UP THE REFUND TX...", VW / 2, Math.min(y5 + 4, 176) + 5, 1, DIM2, "center");
+      }
     }
     this.btn(c3, frame, { id: "back", x: 292, y: 198, w: 78, h: 14 }, "BACK");
   }
@@ -56515,8 +56623,8 @@ var ArenaUI = class {
     c3.lineWidth = flash ? 2 : 1;
     c3.strokeRect(r4.x + 0.5, r4.y + 0.5, r4.w - 1, r4.h - 1);
     drawTextSh2(c3, "REMATCH", r4.x + r4.w / 2, r4.y + 7, 1, flash ? "#fff3c4" : GOLD2, "center");
-    if (getTxid(card.id)) {
-      this.btn(c3, frame, { id: "viewchain", x: VW / 2 - 60, y: 190, w: 120, h: 10 }, "VIEW ON CHAIN", { green: true });
+    if (getCloseTxid(card.id)) {
+      this.btn(c3, frame, { id: "viewchain", x: VW / 2 - 84, y: 188, w: 168, h: 12 }, "VIEW THE PAYOUT ON-CHAIN", { green: true });
     }
   }
   // ---------- HISTORY (v10.3) ----------
@@ -56604,12 +56712,18 @@ var ArenaUI = class {
     }
     const paid = this.histPaid(h5);
     drawText2(c3, paid ? "POT PAID ON-CHAIN" : "POT STILL UNCLAIMED", VW / 2, y5 + 2, 1, paid ? GOLD2 : "#ff8a3c", "center");
-    let txid = null;
-    try {
-      txid = JSON.parse(window.localStorage.getItem("gonna.arena.txids") ?? "{}")[String(h5.id)] ?? null;
-    } catch {
+    const txid = getCloseTxid(h5.id);
+    if (txid) {
+      const label = h5.forfeited ? "VIEW THE FORFEIT ON-CHAIN" : h5.winner ? "VIEW THE PAYOUT ON-CHAIN" : "VIEW THE REFUND ON-CHAIN";
+      this.btn(c3, frame, { id: "hview", x: 92, y: 176, w: 200, h: 18 }, label, { gold: true });
+    } else if (this.adapter().mode === "testnet") {
+      this.prefetchCloseTx(h5.id);
+      if (this.txPrefetch[h5.id] === "miss") {
+        this.btn(c3, frame, { id: "htxretry", x: 92, y: 176, w: 200, h: 18 }, "TX INDEXING - RETRY", { dim: true });
+      } else {
+        drawText2(c3, "LOOKING UP THE PAYOUT TX...", VW / 2, 182, 1, DIM2, "center");
+      }
     }
-    if (txid) this.btn(c3, frame, { id: "hview", x: 92, y: 180, w: 200, h: 14 }, "VIEW ON CHAIN", { gold: true });
     this.btn(c3, frame, { id: "back", x: 147, y: 198, w: 90, h: 14 }, "BACK");
   }
   // ---------- MY LEGACY (v10.3) ----------

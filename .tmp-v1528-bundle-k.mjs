@@ -20,11 +20,12 @@ var TESTNET_FEES = {
   // axfer + call
   submit: 3e3 + 4 * 1e3,
   // call + 4 opup
-  resolve: 6e3 + 4 * 1e3,
-  // call + 4 opup
-  claim: 2e3,
+  resolve: 1e3 * (1 + 3) + 4 * 1e3,
+  // NON-TIE call (1 outer + 3 inner) + 4 opup; ties scale with the roster — buildResolveGroup computes it dynamically
+  claim: 1e3 + 2 * 1e3,
+  // call + 2 inner (stake axfer + MBR payback) — v15.3.2 BUG-1: was 2000, chain rejects it
   close: 1e3 + 4e3,
-  // pay + call
+  // pay + call (2 inner covered by the call's 4000)
   forfeit: 5e3
   // call + 4 inner (2 axfer winner + fee axfer + MBR payback)
 };

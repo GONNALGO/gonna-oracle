@@ -23,6 +23,9 @@ var buildClaimForfeitGroup = (o) => H().buildClaimForfeitGroup(o);
 var signSendManaged = (...a) => H().signSendManaged(...a);
 var signSend = (...a) => H().signSend(...a);
 var recordTxid = (...a) => H().recordTxid && H().recordTxid(...a);
+var recordCloseTxid = (...a) => H().recordCloseTxid && H().recordCloseTxid(...a);
+var getCloseTxid = () => null;
+var resolveCloseTxid = () => null;
 var recordResolveAt = (...a) => H().recordResolveAt && H().recordResolveAt(...a);
 var getResolveAt = () => null;
 var fetchArenaCloseEvents = (...a) => H().fetchArenaCloseEvents(...a);
@@ -424,6 +427,10 @@ var MockArenaAdapter = class {
     const s = this.store();
     return [...s.history].sort((a, b) => b.resolvedAt - a.resolvedAt);
   }
+  // mock is NOT on-chain: there is no explorer tx to show, honestly none
+  async closeTxid() {
+    return null;
+  }
   async legacyStats(address) {
     const s = this.store();
     const { wins, losses, won, lost, net, bestWin } = accumulateLegacy(s.history, address);
@@ -683,10 +690,14 @@ var TestnetArenaAdapter = class {
       seedReveal: new Uint8Array(0),
       // MODE_FULL: empty reveal
       verdictSig: vsig,
-      winner: a.encodeAddress(best.addr)
+      winner: a.encodeAddress(best.addr),
       // tie: contract ignores it, refunds all
+      tie
+      // v15.3.2 BUG-2: ties refund the WHOLE roster — the resolve fee scales with it
     });
-    recordTxid(id, await signSend(me.sign, txns, { label: "RESOLVE" }));
+    const resolveTxid = await signSend(me.sign, txns, { label: "RESOLVE" });
+    recordTxid(id, resolveTxid);
+    recordCloseTxid(id, resolveTxid);
     recordResolveAt(id, Date.now());
     const potMicro = Number(meta.stake) * players.length;
     const feeMicro = tie ? 0 : Math.floor(potMicro * 0.05);
@@ -721,6 +732,7 @@ var TestnetArenaAdapter = class {
     const txns = await buildClaimGroup({ caller: me.address, cid: id });
     const txid = await signSend(me.sign, txns, { label: "CLAIM" });
     recordTxid(id, txid);
+    recordCloseTxid(id, txid);
     if (before) this.rememberClosed(before, "refunded", null, 0, 0);
     return { payout: 0, txid };
   }
@@ -746,6 +758,7 @@ var TestnetArenaAdapter = class {
     const txns = await buildClaimForfeitGroup({ caller: me.address, cid: id, seat: target });
     const txid = await signSend(me.sign, txns, { label: "CLAIM FORFEIT" });
     recordTxid(id, txid);
+    recordCloseTxid(id, txid);
     recordResolveAt(id, Date.now());
     if (before) {
       const feeMicro = Math.floor(Number(before.stake * 1e6) * 0.05);
@@ -757,7 +770,9 @@ var TestnetArenaAdapter = class {
     const me = await this.id();
     const before = await this.getChallenge(id);
     const txns = await buildEarlyCloseGroup({ caller: me.address, cid: id });
-    recordTxid(id, await signSend(me.sign, txns, { label: "EARLY CLOSE" }));
+    const closeTx = await signSend(me.sign, txns, { label: "EARLY CLOSE" });
+    recordTxid(id, closeTx);
+    recordCloseTxid(id, closeTx);
     const ch = await this.getChallenge(id);
     if (ch && ch.status !== "closed") return ch;
     if (before) {
@@ -834,6 +849,19 @@ var TestnetArenaAdapter = class {
       pot: potMicro / 1e6 || (mem ? mem.stake * Math.max(1, mem.players.length) : 0),
       forfeited: kind === "forfeited"
     };
+  }
+  // v15.3.1: the tx that moved the funds for cid — close memory (our own
+  // resolve/forfeit/claim/close) -> the cached on-chain event log -> null
+  // (unknown: the UI renders an honest RETRY, never an invented link). A
+  // found event txid is banked into the close memory by resolveCloseTxid.
+  async closeTxid(id, opts) {
+    const mem = getCloseTxid(id);
+    if (mem) return mem;
+    try {
+      return resolveCloseTxid(id, await this.closeEvents(opts?.force === true));
+    } catch {
+      return null;
+    }
   }
   // event-log cache: the indexer answers once per 30s per session at most
   // (board refreshes and deep-links share it); failures fall back to the
