@@ -8,7 +8,9 @@
 //   (d) UI: CID_MOVED -> amber NOTE toast ('THE PIT MOVED WHILE YOU PLAYED -
 //       RE-SEAL YOUR RUN'), sealed draft DISCARDED, back on wizard CONFIRM,
 //       counter re-hinted. Never red, stake never left the wallet.
-//   SIM  scripts/sim-multiplayer.mjs resolves single-mode cards at cid % 7.
+//   SIM  scripts/sim-multiplayer.mjs resolves single-mode cards at the
+//        COMMITTED create-note stage (v15.2.8); cid % 7 fallback only when
+//        nothing is committed (UNVERIFIED).
 // Run: node scripts/test-v1527b.mjs   (from /mnt/agents/output/app)
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -76,8 +78,9 @@ console.log('\n[0] SOURCE: the cid-race guard is wired end to end');
   }
 
   const sim = readFileSync(join(ROOT, 'scripts/sim-multiplayer.mjs'), 'utf8');
-  ok(sim.includes('const stageIdxFromCid = (cid) => cid % 7;'), 'sim resolve helper: stageIdxFromCid one-liner (with comment) present');
-  ok(sim.includes('const chosenStage = Number(meta.stageMode) === 1 ? stageIdxFromCid(cid) : 0;'), 'sim resolve: single-mode cards resolve at cid % 7');
+  ok(sim.includes('const stageIdxFromCid = (cid) => cid % 7;'), 'sim resolve helper: stageIdxFromCid one-liner kept (v15.2.8: FALLBACK ONLY)');
+  ok(sim.includes('kit.fetchArenaCreateStages({ force: true })'), 'sim resolve: committed stage recovered from the on-chain create NOTE scan');
+  ok(sim.includes('const chosenStage = Number(meta.stageMode) === 1 ? (committed ?? stageIdxFromCid(cid)) : 0;'), 'sim resolve: single-mode cards resolve at the COMMITTED note stage; cid % 7 fallback only when unverified');
   ok(sim.includes('stageIdx: chosenStage'), 'sim buildResolveGroup receives chosenStage (no hardcoded 0)');
   ok(!sim.includes('buildResolveGroup({ caller: addr(callerRole), cid, stageIdx: 0,'), 'sim: hardcoded stageIdx 0 eliminated from the resolve helper');
   ok(sim.includes('setBigUint64(24, BigInt(chosenStage), false)'), 'sim verdict extra binds the SAME stage idx the resolve arg passes');
@@ -195,6 +198,7 @@ writeVisible(KITSTUB,
     'export const getResolveAt = () => null;\n' +
     "export const explorerTxUrl = (t) => 'https://example.invalid/' + t;\n" +
     'export const fetchArenaCloseEvents = (...a) => H().fetchArenaCloseEvents(...a);\n' +
+    'export const fetchArenaCreateStages = (...a) => (H().fetchArenaCreateStages ? H().fetchArenaCreateStages(...a) : Promise.resolve({}));\n' +
     'export const rememberCard = (m) => H().rememberCard && H().rememberCard(m);\n' +
     'export const rememberedCard = (cid) => H().rememberedCard(cid);\n' +
     'export const rememberedCards = () => (H().rememberedCards ? H().rememberedCards() : []);\n',
@@ -293,6 +297,7 @@ function resetKit(counter) {
     scanChallengeIds: async () => [],
     contractVersion: async () => 2,
     fetchArenaCloseEvents: async () => [],
+    fetchArenaCreateStages: async () => ({}), // v15.2.8 note scan: nothing committed in these fixtures
     rememberedCard: () => null,
     signSend: async () => 'TXIDSTUB',
     recordTxid: () => undefined,

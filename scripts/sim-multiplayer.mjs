@@ -96,11 +96,11 @@ async function signVerdict(cid, mode, entries /* [{seat, addr(bytes), score}] */
   return nacl.sign.detached(msg, oracleKp.secretKey);
 }
 
-// v15.2.7b: the v2 contract has NO stage field — the DESCENT level is dealt
-// by the counter (same one-liner as chainAdapter.stageIdxFromCid). Resolve
-// must pass it AND bind it into the verdict payload (the contract asserts
-// verdict stage_idx == the resolve arg) or single-mode cards 400 in sims.
-const stageIdxFromCid = (cid) => cid % 7; // 7 stages, idx 0-6
+// v15.2.8: the DESCENT level is the CREATOR's pick, committed in the create
+// note (recovered on-chain via kit.fetchArenaCreateStages). stageIdxFromCid
+// (same one-liner as chainAdapter.stageIdxFromCid) survives ONLY as the
+// UNVERIFIED fallback for legacy cards created before the note scheme.
+const stageIdxFromCid = (cid) => cid % 7; // 7 stages, idx 0-6 — FALLBACK ONLY
 
 // decode ChallengeResolved / ChallengeForfeited / ChallengeRefunded from a
 // confirmed appl txn's logs (no indexer lag). Returns [] when none.
@@ -191,10 +191,18 @@ async function resolveChallenge(cid, callerRole, expectWinnerRole /* string addr
   const tie = signed.filter((e) => e.score === top.score).length > 1;
   const winner = enc(top.addr);
   console.log(`  resolve cid=${cid}: pot=${Number(meta.paidTotal)} winner=${short(winner)} score=${top.score} tie=${tie} caller=${callerRole}`);
-  // v15.2.7b: MODE_STAGE_IDX resolves at cid % 7 (was hardcoded 0) — the
-  // verdict extra carries the SAME idx (24 zeros + uint64) the resolve arg
-  // passes, because the contract asserts the two agree. MODE_FULL pins 0.
-  const chosenStage = Number(meta.stageMode) === 1 ? stageIdxFromCid(cid) : 0;
+  // v15.2.8: MODE_STAGE_IDX resolves at the card's COMMITTED stage — the
+  // create note recovered by the indexer scan (same resolution order as the
+  // app: note > ... > cid%7 fallback). The verdict extra carries the SAME idx
+  // (24 zeros + uint64) the resolve arg passes — the contract asserts the two
+  // agree. MODE_FULL pins 0.
+  let committed = null;
+  if (Number(meta.stageMode) === 1) {
+    const stages = await kit.fetchArenaCreateStages({ force: true }).catch(() => null);
+    committed = stages ? (stages[String(cid)] ?? null) : null;
+  }
+  const chosenStage = Number(meta.stageMode) === 1 ? (committed ?? stageIdxFromCid(cid)) : 0;
+  if (Number(meta.stageMode) === 1) console.log(`  stage: committed=${committed ?? 'none'} resolved=${chosenStage}${committed === null ? ' (UNVERIFIED cid%7 fallback)' : ' (on-chain note)'}`);
   const extra = new Uint8Array(32);
   if (Number(meta.stageMode) === 1) new DataView(extra.buffer).setBigUint64(24, BigInt(chosenStage), false);
   const vSig = await signVerdict(cid, Number(meta.stageMode), signed, extra);
@@ -285,29 +293,9 @@ console.log('\n================ PHASE 2: SIM-RUMBLE (spawn -> fill -> sign -> ea
 {
   const cid = await kit.nextChallengeId();
   console.log(`  spawning rumble cid=${cid} creator=PLAYER_A (enters UNSIGNED), stake=1 GONNA, seats=4`);
-  const a = algosdk;
-  const appAddr = a.getApplicationAddress(kit.ARENA_APP_ID);
-  const sp = await algod.getTransactionParams().do();
-  const mk = (fee) => ({ ...sp, fee, flatFee: true });
-  const sel = async (sig) => {
-    const parts = sig.split(')');
-    const argTypes = parts[0].slice(parts[0].indexOf('(') + 1).split(',').filter(Boolean);
-    return new a.ABIMethod({ name: sig.slice(0, sig.indexOf('(')), args: argTypes.map((t, i) => ({ type: t, name: 'a' + i })), returns: { type: parts[1] || 'void' } }).getSelector();
-  };
-  const u64 = (v) => a.ABIType.from('uint64').encode(BigInt(v));
-  const bytes = (v) => a.ABIType.from('byte[]').encode(v);
-  const boxRef = (p) => ({ appIndex: kit.ARENA_APP_ID, name: new Uint8Array([p, ...(() => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(cid), false); return b; })()]) });
-  const txns = [
-    a.makePaymentTxnWithSuggestedParamsFromObject({ sender: addr('PLAYER_A'), receiver: appAddr, amount: MBR, suggestedParams: mk(1000) }),
-    a.makeAssetTransferTxnWithSuggestedParamsFromObject({ sender: addr('PLAYER_A'), receiver: appAddr, assetIndex: kit.GONNA_ASA_TESTNET, amount: STAKE, suggestedParams: mk(1000) }),
-    a.makePaymentTxnWithSuggestedParamsFromObject({ sender: addr('PLAYER_A'), receiver: kit.TREASURY_ADDR, amount: 1_000_000, suggestedParams: mk(1000) }),
-    a.makeApplicationNoOpTxnFromObject({
-      sender: addr('PLAYER_A'), appIndex: kit.ARENA_APP_ID,
-      appArgs: [await sel('spawn_rumble(pay,axfer,pay,uint64,uint64,uint64,byte[])uint64'), u64(STAKE), u64(4), u64(0), bytes(ZERO32)],
-      foreignAssets: [kit.GONNA_ASA_TESTNET], boxes: [boxRef(0x6d), boxRef(0x70)],
-      suggestedParams: mk(2000),
-    }),
-  ];
+  // v15.2.8: the kit owns the spawn group now (buildSpawnRumbleGroup); FULL
+  // RUN carries no stage note (stageIdx omitted)
+  const txns = await kit.buildSpawnRumbleGroup({ creator: addr('PLAYER_A'), cid, stakeBase: STAKE, seats: 4, stageMode: 0 });
   const rSpawn = await send(txns, W.PLAYER_A);
   console.log(`  SPAWN txid=${rSpawn.txid} round=${rSpawn.round}`);
   report.txids.rumble = { cid, spawn: rSpawn.txid };

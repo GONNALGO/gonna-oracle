@@ -20,8 +20,10 @@ const PQCYAN = '#57c8d8';
 
 const STAGE_NAMES = ['GHETTO GONNA', 'PUMP HARBOR', 'WALL STREET', 'CONSENSUS', 'THE HOUSE', 'LAUNCHPAD', 'THRONE ROOM'];
 
-export function stageLine(ch: Pick<Challenge, 'stageMode' | 'stageIdx'>): string {
-  return ch.stageMode === 'full' ? 'FULL RUN - ALL 7 STAGES' : 'STAGE ' + ((ch.stageIdx ?? 0) + 1) + ' - ' + STAGE_NAMES[ch.stageIdx ?? 0];
+export function stageLine(ch: Pick<Challenge, 'stageMode' | 'stageIdx' | 'stageVerified'>): string {
+  if (ch.stageMode === 'full') return 'FULL RUN - ALL 7 STAGES';
+  const base = 'STAGE ' + ((ch.stageIdx ?? 0) + 1) + ' - ' + STAGE_NAMES[ch.stageIdx ?? 0];
+  return ch.stageVerified === false ? base + ' (UNVERIFIED)' : base; // v15.2.8: a guess is never dressed as truth
 }
 
 export function formatLine(ch: Pick<Challenge, 'format' | 'seatsTotal'>): string {
@@ -30,18 +32,27 @@ export function formatLine(ch: Pick<Challenge, 'format' | 'seatsTotal'>): string
 
 // degen share copy with tags (the link rides along on X / Telegram)
 export function shareText(ch: Challenge): string {
-  const stage = ch.stageMode === 'full' ? 'FULL RUN. ALL 7 STAGES.' : 'STAGE ' + ((ch.stageIdx ?? 0) + 1) + '.';
+  // v15.2.8b: route through stageLine — a cid%7 fallback GUESS carries the
+  // (UNVERIFIED) marker in the social copy too, never dressed as fact
+  const stage = ch.stageMode === 'full' ? 'FULL RUN. ALL 7 STAGES.' : stageLine(ch) + '.';
   return (
     'I JUST STAKED ' + fmtStake(ch.stake) + ' $GONNA ON MY OWN FIGHT. ' + stage +
     ' THINK YOU CAN TAKE IT? 🦎⚛️ $GONNA #GONNAFIGHT #ALGORAND #QUANTUMFIGHT @GONNALGO'
   );
 }
 
-export function shareUrl(id: number): string {
+// v15.2.8: the ?st= link hint (resolution tier c) rides ONLY a VERIFIED
+// single-mode stage — a cid%7 fallback guess never propagates as truth
+export function shareStageOf(ch: Pick<Challenge, 'stageMode' | 'stageIdx' | 'stageVerified'>): number | null {
+  return ch.stageMode !== 'full' && ch.stageVerified !== false && ch.stageIdx !== null && ch.stageIdx >= 0 && ch.stageIdx <= 6 ? ch.stageIdx : null;
+}
+
+export function shareUrl(id: number, stageIdx?: number | null): string {
   // the link ALWAYS carries the mode — a ?duel= id means nothing without it
   // (preview origins wipe localStorage; mock ids and chain ids collide)
   const base = window.location.origin + window.location.pathname;
-  return arenaMode() === 'testnet' ? base + '?arena=testnet&duel=' + id : base + '?duel=' + id;
+  const st = typeof stageIdx === 'number' && stageIdx >= 0 && stageIdx <= 6 ? '&st=' + stageIdx : '';
+  return arenaMode() === 'testnet' ? base + '?arena=testnet&duel=' + id + st : base + '?duel=' + id + st;
 }
 
 // pixel coin at any integer scale (decoration)

@@ -1,16 +1,23 @@
-// GONNA FIGHT v15.2.7 — pot truth + chain-dealt level + honest terminal cards
-// (node-only, no browser):
+// GONNA FIGHT v15.2.7 suite — RETCONNED to v15.2.8 (node-only, no browser).
+// The v15.2.7 chain-deals-cid%7 stage model is REJECTED (owner decree: "il
+// primo giocatore sceglie il livello"); stageIdxFromCid survives ONLY as the
+// UNVERIFIED fallback. This suite keeps its original coverage — pot truth and
+// terminal-card honesty are unchanged — and its stage-model asserts now pin
+// the v15.2.8 truth:
 //   BUG-1  pot = stake x players.length (creator is seat 0; seats_taken counts
 //          joiners only — contract.py:128). Live mapping + resolve preview +
 //          mock adapter all agree with the chain.
-//   BUG-2  the DESCENT level is cid % 7 — deterministic, trustless: live
-//          mapping, resolve() verdict + arg, and the mock all derive it.
+//   BUG-2  the DESCENT level is the CREATOR's pick, committed ON-CHAIN in the
+//          create note ('gonna:v2:stage:<K>'): live mapping + resolve() verdict
+//          + arg bind the COMMITTED stage (note > memory > link); cid % 7 only
+//          when nothing is committed, and then stageVerified === false.
 //   BUG-3  terminal card: stake from card memory ONLY (NaN -> '-', never
 //          pot/2); pot exact from the event; both-missing deep-link retries
 //          the event log 3x over ~6s then renders 'SETTLED - DATA ON CHAIN',
 //          never '0 $GONNA POT' / 'TOOK 0'.
 //   FEAT   stageLabel: 'LV6 GHETTO GONNA' on the versus header, board, wizard
-//          LOCKED line; the wizard shuffle lands on stageIdxFromCid(next id).
+//          LOCKED line ('(UNVERIFIED)' on a fallback guess); the wizard LV1-7
+//          picker sets cfg.stageIdx and RANDOM deals via the crypto RNG.
 // Run: node scripts/test-v1527.mjs   (from /mnt/agents/output/app)
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -27,36 +34,38 @@ function ok(cond, label) {
 }
 
 // ================= [0] SOURCE-LEVEL =========================================
-console.log('\n[0] SOURCE: chainAdapter + arenaUI carry the v15.2.7 truths');
+console.log('\n[0] SOURCE: chainAdapter + arenaUI carry the v15.2.7/v15.2.8 truths');
 {
   const ca = readFileSync(join(ROOT, 'src/game/arena/chainAdapter.ts'), 'utf8');
-  ok(ca.includes('export function stageIdxFromCid(cid: number): number {') && ca.includes('return cid % 7;'), 'stageIdxFromCid exported: cid % 7');
+  ok(ca.includes('export function stageIdxFromCid(cid: number): number {') && ca.includes('return cid % 7;'), 'stageIdxFromCid exported: cid % 7 (v15.2.8: UNVERIFIED fallback only)');
   ok(ca.includes('pot: (Number(meta.stake) * players.length) / 1e6'), 'live mapping pot = stake x players box length (BUG-1)');
   ok(!ca.includes('pot: (Number(meta.stake) * seatsTaken) / 1e6'), 'old seats_taken pot mapping gone');
   ok(ca.includes('const potMicro = Number(meta.stake) * players.length'), 'resolve preview pot = stake x roster length');
   ok(ca.includes('const feeMicro = tie ? 0 : Math.floor(potMicro * 0.05)') && ca.includes('payout: (potMicro - feeMicro) / 1e6'), 'resolve legs: 5% floor fee, winner takes pot - fee');
-  ok(ca.includes('const chosenStage = Number(meta.stageMode) === 1 ? stageIdxFromCid(id) : 0'), 'resolve derives chosenStage = id % 7 for MODE_STAGE_IDX');
+  ok(ca.includes("const chosenStage = Number(meta.stageMode) === 1 ? (await this.cardStage(id, 'single')).stageIdx! : 0;"), 'resolve derives chosenStage = the COMMITTED stage (note > memory > link > fallback) for MODE_STAGE_IDX');
   ok(ca.includes('stageIdx: chosenStage'), 'buildResolveGroup receives the SAME chosenStage the verdict binds');
   ok(ca.includes('setBigUint64(24, BigInt(chosenStage), false)'), 'verdict extra payload carries chosenStage (contract asserts equality)');
   ok(!ca.includes('TODO(mainnet): real chosen stage') && !ca.includes('stageIdx: 0, // TODO'), 'hardcoded stage 0 TODOs eliminated');
-  ok(ca.includes("stageIdx: stageMode === 'single' ? stageIdxFromCid(cid) : null"), 'live mapping: single -> cid % 7, full -> null');
+  ok(ca.includes('const stageRes = await this.cardStage(cid, stageMode);') && ca.includes('stageIdx: stageRes.stageIdx,') && ca.includes('stageVerified: stageRes.verified,'), 'live mapping: stage from cardStage (note > memory > link > cid%7 UNVERIFIED), full -> null');
   ok(ca.includes('stake: mem?.stake ?? NaN'), 'terminal stake from memory ONLY (NaN = unknown), never pot/2');
   ok(!ca.includes('potMicro / 1e6 / 2'), 'duel-only pot/2 stake guess eliminated');
   ok(ca.includes("if (!Number.isFinite(n)) return '—';"), "fmtStake renders '—' for the unknown stake");
   ok(ca.includes('[0, 2000, 4000]'), 'deep-link retry: bounded backoff, 3 tries over ~6s');
   ok(ca.includes("if (opts?.deepLink) return this.terminalChallenge(id, 'resolved', null, null)"), 'both-missing deep-link renders the terminal-unknown card');
-  ok(ca.includes('stageIdx: cfg.stageMode === \'full\' ? null : stageIdxFromCid(id)'), 'mock create: level dealt by the counter (id % 7), no Math.random');
+  ok(ca.includes("stageIdx: cfg.stageMode === 'full' ? null : (cfg.stageIdx ?? stageIdxFromCid(id)),"), 'mock create: the creator pick committed; cid % 7 only when NO pick');
+  ok(ca.includes("stageVerified: cfg.stageMode === 'full' ? true : cfg.stageIdx != null,"), 'mock create: pick -> verified, no pick -> UNVERIFIED fallback');
   ok(!ca.includes('Math.floor(Math.random() * 7)'), 'mock adapter: no Math.random stage anywhere');
   ok(ca.includes('c.pot = c.stake * c.players.length'), 'mock pot = stake x roster length');
 
   const ui = readFileSync(join(ROOT, 'src/game/arena/arenaUI.ts'), 'utf8');
-  ok(ui.includes("return 'LV' + (idx + 1) + ' ' + STAGE_NAMES[idx];"), "stageLabel single -> 'LV<n> <NAME>'");
+  ok(ui.includes("const base = 'LV' + (stageIdx + 1) + ' ' + STAGE_NAMES[stageIdx];") && ui.includes("return verified ? base : base + ' (UNVERIFIED)';"), "stageLabel single -> 'LV<n> <NAME>', '(UNVERIFIED)' on a fallback guess");
   ok(ui.includes("if (stageMode === 'full') return 'FULL RUN - ALL 7 STAGES';"), 'stageLabel full banner');
   ok(ui.includes("'LOCKED: ' + stageLabel('single', this.shuffleTarget)"), 'wizard LOCKED line carries LV');
-  ok(ui.includes("'THE CHAIN DEALS THE LEVEL - PROVABLY FAIR'"), 'provably-fair dim line under LOCKED');
-  ok(!ui.includes('bat:stage:'), 'manual stage picker removed (the chain deals the level)');
-  ok(ui.includes('this.shuffleTarget = stageIdxFromCid(this.nextIdHint)'), 'shuffle lands on stageIdxFromCid(nextIdHint)');
-  ok(ui.includes('this.shufflePending = true') && ui.includes('peekNextId'), 'null hint -> SHUFFLING... + on-demand peekNextId');
+  ok(ui.includes("'RANDOM - THE SHUFFLE DEALS, THE CHAIN SEALS'") && !ui.includes('THE CHAIN DEALS THE LEVEL'), "RANDOM dim line under LOCKED; v15.2.7 'chain deals' copy gone");
+  ok(ui.includes('private drawLevelPicker') && ui.includes("id: 'lvl:' + i"), 'LV1-7 picker: the creator CHOOSES the level (v15.2.8)');
+  ok(ui.includes("return this.fail('PICK A LEVEL FIRST')"), 'wizard NEXT gated until a level is picked');
+  ok(ui.includes('this.shuffleTarget = cryptoRandomStage()'), 'RANDOM shuffle target dealt LOCALLY by the crypto RNG');
+  ok(!ui.includes('shufflePending') && !ui.includes('startChainShuffle') && ui.includes('crypto.getRandomValues(b);') && ui.includes('>= 252'), 'chain-shuffle machinery removed; crypto RNG with uniform rejection sampling');
   ok(ui.includes("drawTextSh(c, 'SETTLED - DATA ON CHAIN'"), "terminal-unknown versus block: 'SETTLED - DATA ON CHAIN'");
   ok(ui.includes("potUnknown ? '—' : fmtStake(card.pot)"), 'duel pot center never prints an invented 0');
   ok(ui.includes("getChallenge(deepDuel, { deepLink: true })"), 'deep-link opts into the event-log retry');
@@ -146,6 +155,7 @@ writeFileSync(
     'export const getResolveAt = () => null;\n' +
     "export const explorerTxUrl = (t) => 'https://example.invalid/' + t;\n" +
     'export const fetchArenaCloseEvents = (...a) => H().fetchArenaCloseEvents(...a);\n' +
+    'export const fetchArenaCreateStages = (...a) => (H().fetchArenaCreateStages ? H().fetchArenaCreateStages(...a) : Promise.resolve({}));\n' +
     'export const rememberCard = (m) => H().rememberCard && H().rememberCard(m);\n' +
     'export const rememberedCard = (cid) => H().rememberedCard(cid);\n' +
     'export const rememberedCards = () => (H().rememberedCards ? H().rememberedCards() : []);\n',
@@ -200,11 +210,17 @@ function resetKit() {
     rememberedWrites: [],
     resolveArgs: null,
     verdictArgs: null,
+    noteStages: {}, // v15.2.8: cid -> committed stage, the indexer note scan
   };
   globalThis.__KIT = {
     sdk: async () => ({
       encodeAddress: (b) => ADDR58('PK' + (b instanceof Uint8Array ? b[31] : 0)),
       decodeAddress: () => ({ publicKey: new Uint8Array(32) }),
+    }),
+    algodClient: async () => ({
+      accountInformation: () => ({
+        do: async () => ({ amount: 10_000_000, minBalance: 100_000, assets: [{ assetId: 769688287, amount: 100_000_000 }] }),
+      }),
     }),
     readMeta: async () => kitState.meta,
     readPlayers: async () => kitState.players,
@@ -215,6 +231,7 @@ function resetKit() {
       kitState.fetchCount++;
       return kitState.events;
     },
+    fetchArenaCreateStages: async () => kitState.noteStages,
     rememberedCard: () => kitState.remembered,
     rememberCard: (m) => kitState.rememberedWrites.push(m),
     verdictMsg: async (cid, mode, extra, entries) => {
@@ -288,8 +305,8 @@ console.log('\n[1B] resolve preview: pot/fee/winner legs consistent with the ros
   ok(done.status === 'resolved', 'resolve returns the terminal resolved card');
 }
 
-// ================= [2] CHAIN-DEALT LEVEL ====================================
-console.log('\n[2] BUG-2: stageIdxFromCid — deterministic, 0-6, same cid -> same stage');
+// ================= [2] STAGE RESOLUTION (fallback purity + tiers) ===========
+console.log('\n[2] BUG-2 (v15.2.8): stageIdxFromCid fallback purity + live-mapping tiers');
 {
   let inRange = true;
   let deterministic = true;
@@ -298,38 +315,50 @@ console.log('\n[2] BUG-2: stageIdxFromCid — deterministic, 0-6, same cid -> sa
     if (s !== cid % 7 || s < 0 || s > 6) inRange = false;
     if (stageIdxFromCid(cid) !== s) deterministic = false;
   }
-  ok(inRange, 'cid % 7 stays in 0-6 for cid 0..200');
+  ok(inRange, 'cid % 7 stays in 0-6 for cid 0..200 (fallback domain)');
   ok(deterministic, 'same cid -> same stage (pure function)');
-  ok(stageIdxFromCid(21) === 0 && stageIdxFromCid(26) === 5, 'spot check: cid 21 -> LV1 (idx 0), cid 26 -> idx 5');
+  ok(stageIdxFromCid(21) === 0 && stageIdxFromCid(26) === 5, 'spot check: cid 21 -> idx 0, cid 26 -> idx 5');
 
   resetKit();
   const ta = new TestnetArenaAdapter();
   const single = await ta.toChallenge(26, mkMeta({ stageMode: 1n }), [mkPlayer(9, 5000), mkPlayer(1, 3000)]);
-  ok(single.stageIdx === 5, 'live mapping single: cid 26 -> stageIdx 5 (26 % 7)');
+  ok(single.stageIdx === 5 && single.stageVerified === false, 'live mapping single, NOTHING committed: cid 26 -> 5 (26 % 7), UNVERIFIED');
+  kitState.noteStages = { 26: 2 }; // the create note committed stage 2
+  const noted = await ta.toChallenge(26, mkMeta({ stageMode: 1n }), [mkPlayer(9, 5000), mkPlayer(1, 3000)]);
+  ok(noted.stageIdx === 2 && noted.stageVerified === true, 'live mapping single: the on-chain NOTE (2) beats the cid % 7 fallback');
   const full = await ta.toChallenge(26, mkMeta({ stageMode: 0n }), [mkPlayer(9, 5000), mkPlayer(1, 3000)]);
   ok(full.stageIdx === null, 'live mapping full: stageIdx stays null');
 }
 
-console.log('\n[2B] resolve passes id % 7 — verdict payload AND resolve arg agree');
+console.log('\n[2B] resolve passes the COMMITTED stage — verdict payload AND resolve arg agree');
 {
   resetKit();
   setTestnetIdentityProvider(async () => ({ address: ADDR58('ME'), sign: async () => [] }));
   const ta = new TestnetArenaAdapter();
   kitState.meta = mkMeta({ stageMode: 1n });
   kitState.players = [mkPlayer(9, 5000), mkPlayer(1, 3000)];
-  await ta.resolve(43); // 43 % 7 = 1
-  ok(kitState.resolveArgs && kitState.resolveArgs.stageIdx === 1, 'buildResolveGroup stageIdx = 43 % 7 = 1 (got ' + (kitState.resolveArgs && kitState.resolveArgs.stageIdx) + ')');
+  kitState.noteStages = { 43: 6 }; // the create note committed stage 6
+  await ta.resolve(43); // 43 % 7 = 1, but the COMMITTED stage is 6
+  ok(kitState.resolveArgs && kitState.resolveArgs.stageIdx === 6, 'buildResolveGroup stageIdx = 6 from the on-chain note, NOT 43 % 7 = 1 (got ' + (kitState.resolveArgs && kitState.resolveArgs.stageIdx) + ')');
   const ex = kitState.verdictArgs && kitState.verdictArgs.extra;
-  ok(kitState.verdictArgs && kitState.verdictArgs.mode === 1 && ex && ex.length === 32 && ex[31] === 1 && ex.slice(0, 24).every((b) => b === 0), 'verdict extra = 24 zeros + stage idx 1 — the SAME value the resolve arg carries');
+  ok(kitState.verdictArgs && kitState.verdictArgs.mode === 1 && ex && ex.length === 32 && ex[31] === 6 && ex.slice(0, 24).every((b) => b === 0), 'verdict extra = 24 zeros + committed stage idx 6 — the SAME value the resolve arg carries');
+  // fallback tier: nothing committed -> cid % 7 (and the card is UNVERIFIED)
+  resetKit();
+  setTestnetIdentityProvider(async () => ({ address: ADDR58('ME'), sign: async () => [] }));
+  kitState.meta = mkMeta({ stageMode: 1n });
+  kitState.players = [mkPlayer(9, 5000), mkPlayer(1, 3000)];
+  await ta.resolve(43);
+  ok(kitState.resolveArgs && kitState.resolveArgs.stageIdx === 1, 'fallback ONLY when nothing is committed: 43 % 7 = 1 (got ' + (kitState.resolveArgs && kitState.resolveArgs.stageIdx) + ')');
   // FULL mode pins stage 0 (contract asserts stage_idx == 0 for MODE_FULL)
   resetKit();
+  setTestnetIdentityProvider(async () => ({ address: ADDR58('ME'), sign: async () => [] }));
   kitState.meta = mkMeta({ stageMode: 0n });
   kitState.players = [mkPlayer(9, 5000), mkPlayer(1, 3000)];
   await ta.resolve(44);
   ok(kitState.resolveArgs && kitState.resolveArgs.stageIdx === 0, 'FULL run resolve keeps stageIdx 0 (contract assert)');
 }
 
-console.log('\n[2C] mock mirrors the chain: the counter deals the level');
+console.log('\n[2C] mock mirrors the chain: the creator pick is committed');
 {
   store.clear();
   const mock = new MockArenaAdapter();
@@ -337,9 +366,9 @@ console.log('\n[2C] mock mirrors the chain: the counter deals the level');
   const cfg = { visibility: 'public', format: 'duel', seatsTotal: 2, durationSecs: 3600, stageMode: 'single', stageIdx: 0, stake: 10, fighter: { skin: 'gonna', assetId: null, name: 'GONNA' } };
   const c = await mock.createChallenge(cfg, { address: 'ME', name: 'ME', score: 0, fighter: cfg.fighter, accountType: 'ed25519' });
   ok(typeof hint === 'number' && hint === c.id, 'mock peekNextId predicts the created id (' + hint + ' -> ' + c.id + ')');
-  ok(c.stageIdx === c.id % 7, 'mock single card stageIdx = id % 7 (' + c.stageIdx + ' = ' + c.id + ' % 7), cfg.stageIdx ignored like the chain ignores a stage field');
-  const cr = await mock.createChallenge({ ...cfg, stageMode: 'random' }, { address: 'ME', name: 'ME', score: 0, fighter: cfg.fighter, accountType: 'ed25519' });
-  ok(cr.stageIdx === cr.id % 7, 'mock random also deterministic: id % 7 (no Math.random)');
+  ok(c.stageIdx === 0 && c.stageVerified === true, 'mock single card commits the creator pick cfg.stageIdx=0, VERIFIED (the create-note equivalent)');
+  const cr = await mock.createChallenge({ ...cfg, stageMode: 'random', stageIdx: null }, { address: 'ME', name: 'ME', score: 0, fighter: cfg.fighter, accountType: 'ed25519' });
+  ok(cr.stageIdx === cr.id % 7 && cr.stageVerified === false, 'mock without a pick: id % 7 fallback, UNVERIFIED (no Math.random)');
 }
 
 // ================= [3] TERMINAL CARD HONESTY ================================
@@ -488,6 +517,14 @@ function renderVersus(card) {
   ui.drawVersus(mkCtx(), 16, FAKE_ART);
   return { texts: TEXTLOG.slice(), hots: ui.hots.map((h) => h.id) };
 }
+const mkArenaUI = () => {
+  store.set('gonna.arena.adapter', 'mock');
+  setMock({ address: ADDR58('VIEWERDEGEN'), nfts: [] });
+  const ui = new ArenaUI();
+  ui.hots = [];
+  ui.focus = -1;
+  return ui;
+};
 
 // ================= [4] THE LEVEL IS WRITTEN EVERYWHERE ======================
 console.log('\n[4] FEAT: stageLabel + LV everywhere');
@@ -499,32 +536,49 @@ console.log('\n[4] FEAT: stageLabel + LV everywhere');
   const { texts } = renderVersus(mkCardUI({}));
   const sub = texts.find((t) => t.y === 26);
   ok(sub && sub.str === 'THE DESCENT - LV6 LAUNCHPAD', "versus header: 'THE DESCENT - LV6 LAUNCHPAD' (got '" + (sub && sub.str) + "')");
-  // wizard shuffle locks onto stageIdxFromCid(nextIdHint): hint 26 -> idx 5
-  store.set('gonna.arena.adapter', 'mock');
-  setMock({ address: ADDR58('VIEWERDEGEN'), nfts: [] });
-  const ui = new ArenaUI();
+  ok(stageLabel('single', 5, false) === 'LV6 LAUNCHPAD (UNVERIFIED)', "stageLabel fallback guess: 'LV6 LAUNCHPAD (UNVERIFIED)'");
+  // an UNVERIFIED versus header is marked, never presented as truth
+  const unv = renderVersus(mkCardUI({ stageVerified: false }));
+  const subU = unv.texts.find((t) => t.y === 26);
+  ok(subU && subU.str === 'THE DESCENT - LV6 LAUNCHPAD (UNVERIFIED)', "versus header: fallback guess rendered '(UNVERIFIED)' (got '" + (subU && subU.str) + "')");
+
+  // v15.2.8 wizard: the LV1-7 picker — NEXT gated until the creator picks
+  const ui = mkArenaUI();
+  ui.step = 'battle';
+  ui.activate('bat:single');
+  ok(ui.cfg.stageMode === 'single' && ui.shuffleT === -1, 'THE DESCENT -> picker mode (no shuffle)');
   ui.hots = [];
-  ui.focus = -1;
-  ui.cfg.stageMode = 'single';
-  ui.nextIdHint = 26;
-  ui.startChainShuffle();
-  ok(ui.shuffleTarget === 5 && ui.shufflePending === false, 'shuffle target dealt by the chain: 26 % 7 = 5');
-  ui.shuffleT = 140; // reels stopped
   TEXTLOG.length = 0;
-  ui.drawShuffle(mkCtx(), 140, FAKE_ART);
-  ok(TEXTLOG.some((t) => t.str === 'LOCKED: LV6 LAUNCHPAD'), "wizard LOCKED line: 'LOCKED: LV6 LAUNCHPAD' (chain-dealt, LV prefix)");
-  ok(TEXTLOG.some((t) => t.str === 'THE CHAIN DEALS THE LEVEL - PROVABLY FAIR'), 'provably-fair dim line drawn under LOCKED');
-  ok(ui.hots.some((h) => h.id === 'bat:next') && ui.cfg.stageIdx === 5, 'NEXT armed once the target is known; cfg.stageIdx locked to the dealt level');
-  // pending: no hint yet -> reels spin, NEXT locked
-  const ui2 = new ArenaUI();
+  ui.drawLevelPicker(mkCtx(), 16, FAKE_ART);
+  ok(ui.hots.filter((h) => h.id.startsWith('lvl:')).length === 7, 'picker renders 7 tappable stage icons (LV1-LV7)');
+  ok(!ui.hots.some((h) => h.id === 'bat:next'), 'NEXT not armed before a pick');
+  const g1 = ui.activate('bat:next');
+  ok(g1.act !== 'move' && ui.step === 'battle' && ui.err === 'PICK A LEVEL FIRST', 'NEXT gated: PICK A LEVEL FIRST');
+  ui.activate('lvl:5');
+  ok(ui.cfg.stageIdx === 5, 'tap LV6 -> cfg.stageIdx = 5 (the creator CHOICE, committed in the note)');
+  ui.hots = [];
+  TEXTLOG.length = 0;
+  ui.drawLevelPicker(mkCtx(), 16, FAKE_ART);
+  ok(ui.hots.some((h) => h.id === 'bat:next') && TEXTLOG.some((t) => t.str === 'LV6 LAUNCHPAD'), 'after the pick: NEXT armed + selected name in gold');
+  const g2 = ui.activate('bat:next');
+  ok(g2.act === 'move' && ui.step === 'stake', 'NEXT moves to the stake step');
+
+  // RANDOM: the crypto RNG deals the target; the lock commits EXACTLY like a
+  // manual pick (the chain SEALS the pick — it never deals it)
+  const origGRV = crypto.getRandomValues.bind(crypto);
+  crypto.getRandomValues = (arr) => { arr[0] = 40; return arr; }; // 40 % 7 = 5
+  const ui2 = mkArenaUI();
+  ui2.step = 'battle';
+  ui2.activate('bat:random');
+  ok(ui2.cfg.stageMode === 'random' && ui2.shuffleT === 0 && ui2.shuffleTarget === 5, 'RANDOM target dealt by crypto.getRandomValues (40 % 7 = 5)');
+  crypto.getRandomValues = origGRV;
+  ui2.shuffleT = 140; // reels stopped
+  TEXTLOG.length = 0;
   ui2.hots = [];
-  ui2.focus = -1;
-  ui2.cfg.stageMode = 'single';
-  ui2.shuffleT = 30;
-  ui2.shufflePending = true;
-  TEXTLOG.length = 0;
-  ui2.drawShuffle(mkCtx(), 30, FAKE_ART);
-  ok(TEXTLOG.some((t) => t.str === 'SHUFFLING...') && !ui2.hots.some((h) => h.id === 'bat:next'), 'null hint: SHUFFLING... stays, NEXT not armed until the chain deals');
+  ui2.drawShuffle(mkCtx(), 140, FAKE_ART);
+  ok(TEXTLOG.some((t) => t.str === 'LOCKED: LV6 LAUNCHPAD'), "wizard LOCKED line: 'LOCKED: LV6 LAUNCHPAD' (RNG-dealt, LV prefix)");
+  ok(TEXTLOG.some((t) => t.str === 'RANDOM - THE SHUFFLE DEALS, THE CHAIN SEALS'), 'shuffle dim line: the chain SEALS the pick (never deals it)');
+  ok(ui2.hots.some((h) => h.id === 'bat:next') && ui2.cfg.stageIdx === 5 && ui2.cfg.stageMode === 'single', 'NEXT armed once dealt; cfg.stageIdx locked to the RNG pick — identical commit state to a manual pick');
 }
 
 // ================= [5] TERMINAL UI HONESTY ==================================

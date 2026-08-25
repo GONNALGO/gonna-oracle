@@ -21,14 +21,14 @@ import type { Art } from '../sprites';
 import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait } from '../skins';
 import type { SkinId } from '../skins';
-import { getArenaAdapter, arenaMode, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot, stageIdxFromCid } from './chainAdapter';
+import { getArenaAdapter, arenaMode, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
 import { activeSignOp, explorerTxUrl, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
 import type { SignOpView } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
 import { qaActive, qaScore } from './qaSigner';
 import type { Challenge, ChallengeConfig, FighterPick, HistoryEntry, LegacyStats, Visibility } from './chainAdapter';
 import { arenaAddress, arenaPlayer, arenaSession } from './arenaWallet';
-import { renderShareCard, shareCardBlob, shareText, shareUrl } from './shareCard';
+import { renderShareCard, shareCardBlob, shareStageOf, shareText, shareUrl } from './shareCard';
 
 const GOLD = '#f5c542';
 const GOLD_DK = '#b8860b';
@@ -45,6 +45,17 @@ const AMBER_DK = '#8a5a10';
 
 export type ArenaAction = { act: 'none' } | { act: 'move' } | { act: 'title' } | { act: 'run'; stageMode: 'full' | 'stage'; stageIdx: number; seedTag?: string; target?: number };
 
+// v15.2.8: RANDOM deals a UNIFORMLY RANDOM level from the crypto RNG
+// (rejection sampling — 252 = 36 x 7, so every level has exactly 36/256).
+// The pick is then committed exactly like a manual one (note + memory + link).
+export function cryptoRandomStage(): number {
+  const b = new Uint8Array(1);
+  do {
+    crypto.getRandomValues(b);
+  } while (b[0] >= 252);
+  return b[0] % 7;
+}
+
 interface Hot {
   x: number;
   y: number;
@@ -57,13 +68,16 @@ type Screen = 'board' | 'create' | 'versus' | 'history' | 'histcard' | 'legacy' 
 type WizardStep = 'visibility' | 'format' | 'battle' | 'stake' | 'fighter' | 'confirm';
 
 const STAGE_NAMES = ['GHETTO GONNA', 'PUMP HARBOR', 'WALL STREET', 'CONSENSUS', 'THE HOUSE', 'LAUNCHPAD', 'THRONE ROOM'];
-// v15.2.7: the level is written EVERYWHERE — 'LV6 GHETTO GONNA' style for a
+// v15.2.8: the level is written EVERYWHERE — 'LV6 GHETTO GONNA' style for a
 // single-stage DESCENT, the full banner for a FULL RUN. The level itself is
-// dealt by the chain (stageIdxFromCid), never hand-picked.
-export function stageLabel(stageMode: string, stageIdx: number | null): string {
+// CHOSEN by the creator (picker or RANDOM shuffle) and committed in the
+// create note. A cid%7 fallback guess is ALWAYS marked '(UNVERIFIED)' —
+// never present a guess as truth.
+export function stageLabel(stageMode: string, stageIdx: number | null, verified = true): string {
   if (stageMode === 'full') return 'FULL RUN - ALL 7 STAGES';
-  const idx = stageIdx ?? 0;
-  return 'LV' + (idx + 1) + ' ' + STAGE_NAMES[idx];
+  if (stageIdx === null) return 'LV? UNKNOWN'; // never invent a level
+  const base = 'LV' + (stageIdx + 1) + ' ' + STAGE_NAMES[stageIdx];
+  return verified ? base : base + ' (UNVERIFIED)';
 }
 const SEAT_OPTS = [4, 8, 12];
 const DUR_OPTS: { label: string; secs: number }[] = [
@@ -147,9 +161,8 @@ export class ArenaUI {
   // create wizard
   private step: WizardStep = 'visibility';
   private cfg: ChallengeConfig = this.defaultCfg();
-  private shuffleT = -1; // -1 = idle; >=0 frames into the SHUFFLE animation
-  private shuffleTarget = 0;
-  private shufflePending = false; // v15.2.7: waiting on peekNextId — the chain hasn't dealt the level yet
+  private shuffleT = -1; // -1 = idle; >=0 frames into the SHUFFLE animation (RANDOM)
+  private shuffleTarget = 0; // v15.2.8: dealt LOCALLY by crypto.getRandomValues, then committed like a manual pick
   private fighterOpts: FighterOpt[] = MOCK_SHELF;
   // versus
   private current: Challenge | null = null;
@@ -462,7 +475,8 @@ export class ArenaUI {
   // stake never left the wallet. RUN DISCARDED semantics (same draft wipe as
   // the seal-screen DISCARD), amber note (never red), then back to the wizard
   // CONFIRM step so RE-SEAL is one tap away. The counter is re-hinted so the
-  // next run is seeded/staged by the NEW id. Log-free, no white flash.
+  // next run is SEEDED by the NEW id — the chosen LEVEL never moves (v15.2.8:
+  // the stage is the creator's pick, not cid-derived). Log-free, no white flash.
   private cidMovedDiscard(): ArenaAction {
     this.resetSeal();
     this.screen = 'create';
@@ -630,7 +644,7 @@ export class ArenaUI {
           share?: (d: { files?: File[]; text?: string }) => Promise<void>;
         };
         if (nav.canShare && nav.share && nav.canShare({ files: [file] })) {
-          await nav.share({ files: [file], text: shareText(ch) + ' ' + shareUrl(ch.id) });
+          await nav.share({ files: [file], text: shareText(ch) + ' ' + shareUrl(ch.id, shareStageOf(ch)) });
           this.shareMsg = 'SHARED - GO FETCH DEGENS';
           this.shareMsgT = 240;
         }
@@ -896,7 +910,7 @@ export class ArenaUI {
     if (id === 'share:x' || id === 'share:tg') {
       const ch = this.current;
       if (!ch) return { act: 'none' };
-      const url = shareUrl(ch.id);
+      const url = shareUrl(ch.id, shareStageOf(ch));
       const text = shareText(ch);
       const intent =
         id === 'share:x'
@@ -910,7 +924,7 @@ export class ArenaUI {
     if (id === 'share:copy') {
       const ch = this.current;
       if (!ch) return { act: 'none' };
-      const link = shareUrl(ch.id);
+      const link = shareUrl(ch.id, shareStageOf(ch));
       // HONEST clipboard: COPIED only on a real write; if the browser blocks
       // it (iframes/previews), open the manual-copy overlay instead
       void (async () => {
@@ -983,24 +997,35 @@ export class ArenaUI {
       return { act: 'move' };
     }
     if (id === 'bat:single') {
-      // v15.2.7: no stage picker — THE DESCENT shuffles onto the level the
-      // CHAIN deals for the upcoming card id (stageIdxFromCid), provably fair
+      // v15.2.8 (owner decree): the CREATOR CHOOSES the level — 7 pixel stage
+      // icons, tap to pick. The pick is committed ON-CHAIN in the create note;
+      // every participant plays the same stage with the same seed ('PIT-'+cid).
       this.cfg.stageMode = 'single';
-      this.startChainShuffle();
+      this.shuffleT = -1; // a manual pick kills any running RANDOM shuffle
+      return { act: 'move' };
+    }
+    if (id.startsWith('lvl:')) {
+      const k = Number(id.slice(4));
+      if (k < 0 || k > 6) return { act: 'none' };
+      this.cfg.stageMode = 'single';
+      this.cfg.stageIdx = k;
       return { act: 'move' };
     }
     if (id === 'bat:next') {
-      if (this.shufflePending) return { act: 'none' }; // the chain hasn't dealt yet
+      if (this.cfg.stageMode === 'random' && (this.shuffleT < 0 || this.shuffleT < 140)) return { act: 'none' }; // the shuffle hasn't dealt yet
+      if (this.cfg.stageMode === 'single' && this.cfg.stageIdx === null) return this.fail('PICK A LEVEL FIRST');
       this.step = 'stake';
       this.focus = 0;
       return { act: 'move' };
     }
     if (id === 'bat:random') {
-      // SHUFFLE: slot-machine reels brake onto the dealt stage (staggered
-      // stops, no white flash — gold spark burst). v15.2.7: the target is
-      // deterministic (cid % 7) — the mock mirrors the chain exactly.
+      // SHUFFLE: slot-machine reels brake onto a UNIFORMLY RANDOM level
+      // (crypto RNG, staggered stops, no white flash — gold spark burst).
+      // v15.2.8: the shuffle DEALS, the chain SEALS — the pick is committed
+      // exactly like a manual one (note + memory + link).
       this.cfg.stageMode = 'random';
-      this.startChainShuffle();
+      this.cfg.stageIdx = null;
+      this.startRandomShuffle();
       return { act: 'move' };
     }
     // v10.2: EXACT stake ids FIRST — 'stake:minus'/'stake:plus' used to fall
@@ -1224,13 +1249,12 @@ export class ArenaUI {
     return this.nextIdHint !== null ? 'PIT-' + this.nextIdHint : 'DRAFT-' + this.sealDraftId;
   }
 
-  // v15.2.7 (BUG-2): the DESCENT run's stage derives from the SAME cid
-  // variable that seeds the run (nextIdHint -> 'PIT-N'), so a card created as
-  // cid N was PLAYED at stage N % 7 and its resolve passes N % 7. Only when
-  // the counter is unreachable (DRAFT seed) does the wizard-locked idx rule.
+  // v15.2.8 (owner decree): the creator's DESCENT run plays the level they
+  // CHOSE in the wizard (picker or RANDOM shuffle). Only the run SEED rides
+  // the cid hint ('PIT-N') — the stage never derives from the counter.
   private creatorStageIdx(): number {
     if (this.cfg.stageMode === 'full') return 0;
-    return this.nextIdHint !== null ? stageIdxFromCid(this.nextIdHint) : (this.cfg.stageIdx ?? 0);
+    return this.cfg.stageIdx ?? 0;
   }
 
   // v15: the TARGET bar score for a joiner run — the creator's sealed score
@@ -1263,8 +1287,12 @@ export class ArenaUI {
 
   private doSign(): ArenaAction {
     const cfg: ChallengeConfig = { ...this.cfg };
-    // v15.2.7: the dealt level (chain shuffle target) rides the create config
-    if (cfg.stageMode !== 'full' && this.shuffleT >= 0 && !this.shufflePending) cfg.stageIdx = this.shuffleTarget;
+    // v15.2.8: RANDOM commits exactly like a manual DESCENT pick (the shuffle
+    // lock already wrote cfg.stageIdx/stageMode; this is the belt&braces)
+    if (cfg.stageMode === 'random') {
+      cfg.stageMode = 'single';
+      cfg.stageIdx = this.shuffleTarget;
+    }
     // never a dead click: on testnet a real create NEEDS a sealed run score
     if (this.adapter().mode === 'testnet' && !qaActive() && this.sealedScore === null) {
       return this.fail('PLAY YOUR RUN FIRST');
@@ -1403,16 +1431,16 @@ export class ArenaUI {
     if (!c) return { act: 'none' };
     this.rematchOf = c.id;
     // same rules, fresh card — the wizard pre-fills from the last battle
-    // v15.2.7: a terminal-unknown card (stake NaN) never poisons the new
-    // wizard; a single-stage rematch is re-dealt by the chain (new cid % 7),
-    // so stageIdx follows the current hint, not the old card's level
+    // v15.2.8: a terminal-unknown card (stake NaN) never poisons the new
+    // wizard; a single-stage rematch pre-fills the SAME level the creator
+    // picked last time (they can re-pick in the wizard before signing)
     this.cfg = {
       visibility: c.visibility,
       format: c.format,
       seatsTotal: c.seatsTotal,
       durationSecs: c.durationSecs,
       stageMode: c.stageMode,
-      stageIdx: c.stageMode === 'single' ? (this.nextIdHint !== null ? stageIdxFromCid(this.nextIdHint) : c.stageIdx) : c.stageIdx,
+      stageIdx: c.stageIdx,
       stake: Number.isFinite(c.stake) ? c.stake : this.cfg.stake,
       fighter: { ...this.cfg.fighter },
     };
@@ -1451,9 +1479,9 @@ export class ArenaUI {
       this.feedT = 0;
       if (this.feedLines.length > 1) this.feedLines.push(this.feedLines.shift()!);
     }
-    // v15.2.7: while the chain hasn't dealt the level (peekNextId in flight),
-    // hold the reels BEFORE the first stop — the shuffle never locks early
-    if (this.shuffleT >= 0 && this.shuffleT < (this.shufflePending ? 60 : 200)) this.shuffleT++;
+    // RANDOM shuffle reels advance; the target was dealt at shuffle start
+    // (crypto RNG), the stops are pure animation
+    if (this.shuffleT >= 0 && this.shuffleT < 200) this.shuffleT++;
     for (const c of this.coinRain) {
       c.y += c.vy;
       c.vy += 0.03;
@@ -1620,9 +1648,9 @@ export class ArenaUI {
     drawText(c, String(idx + 1), x + 2, y + s - 8, 1, '#ffffff');
   }
 
-  private drawHeader(c: CanvasRenderingContext2D, title: string, sub: string): void {
+  private drawHeader(c: CanvasRenderingContext2D, title: string, sub: string, subColor = GRAY): void {
     drawTextSh(c, title, VW / 2, 8, 2, GOLD, 'center', GOLD_DK);
-    if (sub) drawText(c, sub, VW / 2, 26, 1, GRAY, 'center');
+    if (sub) drawText(c, sub, VW / 2, 26, 1, subColor, 'center');
   }
 
   // ---------- THE BOARD ----------
@@ -1714,7 +1742,9 @@ export class ArenaUI {
       const statusTxt = live ? '' : card.status.toUpperCase();
       const statusX = claimable ? VW - 102 : VW - 40;
       const maxChars = Math.max(8, Math.floor(((statusTxt ? statusX - textWidth(statusTxt, 1) - 10 : VW - 40) - tx) / 6));
-      const stage = card.stageMode === 'full' ? 'FULL RUN' : 'THE DESCENT - ' + stageLabel(card.stageMode, card.stageIdx);
+      // v15.2.8: the REAL chosen level; a cid%7 fallback guess is marked
+      // '(UNVERIFIED)' and the whole BY line stays DIM — a guess is never gold
+      const stage = card.stageMode === 'full' ? 'FULL RUN' : 'THE DESCENT - ' + stageLabel(card.stageMode, card.stageIdx, card.stageVerified !== false);
       const byLine = stage + ' - BY ' + card.creatorName;
       drawText(c, byLine.length > maxChars ? byLine.slice(0, maxChars) : byLine, tx, y + 24, 1, DIM);
       if (statusTxt) {
@@ -1810,40 +1840,46 @@ export class ArenaUI {
   private stepBattle(c: CanvasRenderingContext2D, frame: number, art: Art): void {
     drawText(c, 'BATTLE', VW / 2, 40, 1, GRAY, 'center');
     this.btn(c, frame, { id: 'bat:full', x: 42, y: 50, w: 300, h: 20 }, 'FULL RUN - ALL 7 STAGES', { gold: this.cfg.stageMode === 'full' });
-    this.btn(c, frame, { id: 'bat:single', x: 42, y: 74, w: 300, h: 20 }, 'THE DESCENT - INFINITE WAVES', { gold: this.cfg.stageMode === 'single' });
+    this.btn(c, frame, { id: 'bat:single', x: 42, y: 74, w: 300, h: 20 }, 'THE DESCENT - PICK THE LEVEL', { gold: this.cfg.stageMode === 'single' });
     this.btn(c, frame, { id: 'bat:random', x: 42, y: 98, w: 300, h: 20 }, 'RANDOM - TRUST THE SHUFFLE', { gold: this.cfg.stageMode === 'random' });
-    // v15.2.7: NO manual stage picking — the chain deals the level (cid % 7),
-    // provably fair. THE DESCENT runs the same SHUFFLE as RANDOM, but the
-    // reels brake onto stageIdxFromCid(next challenge id), not a local draw.
-    if ((this.cfg.stageMode === 'single' || this.cfg.stageMode === 'random') && this.shuffleT >= 0) this.drawShuffle(c, frame, art);
+    // v15.2.8 (owner decree): the CREATOR chooses the level. THE DESCENT shows
+    // the LV1..LV7 picker; RANDOM runs the slot-machine shuffle onto a
+    // crypto-random level. Both commit the pick ON-CHAIN in the create note.
+    if (this.shuffleT >= 0) this.drawShuffle(c, frame, art);
+    else if (this.cfg.stageMode === 'single') this.drawLevelPicker(c, frame, art);
   }
 
-  // v15.2.7: the SHUFFLE's target is DEALT BY THE CHAIN — stageIdxFromCid of
-  // the id the next create will get (the same id that seeds the DESCENT run).
-  // If the prefetch hasn't landed yet, the reels keep spinning (SHUFFLING...)
-  // while peekNextId is fetched on demand; NEXT only arms once the
-  // deterministic target is known — the wizard can never lock an invented level.
-  private startChainShuffle(): void {
-    this.shuffleT = 0;
-    if (this.nextIdHint !== null) {
-      this.shuffleTarget = stageIdxFromCid(this.nextIdHint);
-      this.shufflePending = false;
-      return;
+  // v15.2.8: THE DESCENT level picker — the creator CHOOSES. 7 pixel stage
+  // icons, tap to select (gold frame = selected), 'LV n' under each icon and
+  // the full stage name of the selection in gold below the row. NEXT stays
+  // away until a level is picked — the pick is committed ON-CHAIN in the
+  // create note, so every player of the card fights the exact same stage.
+  private drawLevelPicker(c: CanvasRenderingContext2D, frame: number, art: Art): void {
+    drawText(c, 'PICK THE LEVEL - EVERYONE FIGHTS IT', VW / 2, 124, 1, GRAY, 'center');
+    for (let i = 0; i < 7; i++) {
+      const x = 16 + i * 52;
+      const y = 132;
+      const sel = this.cfg.stageIdx === i;
+      this.hots.push({ id: 'lvl:' + i, x, y, w: 44, h: 44 });
+      this.stageIcon(c, art, i, x, y, 44);
+      c.strokeStyle = sel ? ((frame & 8) !== 0 ? GOLD : '#fff3c4') : '#3a3f4c';
+      c.lineWidth = 1;
+      c.strokeRect(x - 1.5, y - 1.5, 47, 47);
+      drawText(c, 'LV' + (i + 1), x + 22, y + 48, 1, sel ? GOLD : DIM, 'center');
     }
-    this.shufflePending = true;
-    const p = this.adapter().peekNextId?.();
-    if (!p) return; // adapter without a counter: reels spin until BACK
-    void p
-      .then((n) => {
-        if (typeof n === 'number') {
-          this.nextIdHint = n;
-          if (this.shufflePending) {
-            this.shuffleTarget = stageIdxFromCid(n);
-            this.shufflePending = false;
-          }
-        }
-      })
-      .catch(() => undefined);
+    if (this.cfg.stageIdx !== null) {
+      drawTextSh(c, stageLabel('single', this.cfg.stageIdx), VW / 2, 188, 1, GOLD, 'center');
+      this.btn(c, frame, { id: 'bat:next', x: 122, y: 198, w: 140, h: 16 }, 'NEXT', { green: true });
+    } else {
+      drawText(c, 'TAP A LEVEL - THE CHAIN SEALS YOUR PICK', VW / 2, 190, 1, DIM, 'center');
+    }
+  }
+
+  // v15.2.8: RANDOM — the shuffle's target is dealt LOCALLY by the crypto RNG
+  // (uniform over the 7 levels), then committed exactly like a manual pick.
+  private startRandomShuffle(): void {
+    this.shuffleT = 0;
+    this.shuffleTarget = cryptoRandomStage();
   }
 
   // slot-machine SHUFFLE: 3 reels brake onto the drawn stage (staggered stops)
@@ -1861,10 +1897,13 @@ export class ArenaUI {
       c.strokeRect(x - 1.5, y - 1.5, 43, 43);
       if (stopped) this.pixelCoin(c, x + 17, y - 8, frame + r * 5); // gold sparkle on lock
     }
-    if (!this.shufflePending && t >= 140) {
+    if (t >= 140) {
+      // the deal becomes a DESCENT pick — committed identically to a manual
+      // one (create note + card memory + share link), then the wizard moves on
       this.cfg.stageIdx = this.shuffleTarget;
+      this.cfg.stageMode = 'single';
       drawTextSh(c, 'LOCKED: ' + stageLabel('single', this.shuffleTarget), VW / 2, 172, 1, GOLD, 'center');
-      drawText(c, 'THE CHAIN DEALS THE LEVEL - PROVABLY FAIR', VW / 2, 183, 1, DIM, 'center');
+      drawText(c, 'RANDOM - THE SHUFFLE DEALS, THE CHAIN SEALS', VW / 2, 183, 1, DIM, 'center');
       this.btn(c, frame, { id: 'bat:next', x: 122, y: 194, w: 140, h: 16 }, 'NEXT', { green: true });
     } else if ((frame & 8) !== 0) {
       drawText(c, 'SHUFFLING...', VW / 2, 176, 1, FLUO, 'center');
@@ -2077,8 +2116,11 @@ export class ArenaUI {
     const stakeKnown = Number.isFinite(card.stake);
     const potUnknown = !stakeKnown && card.pot <= 0;
     const title = fmtStake(card.stake) + (card.format === 'duel' ? ' DUEL' : ' OPEN TABLE');
-    const stage = card.stageMode === 'full' ? stageLabel('full', null) : 'THE DESCENT - ' + stageLabel(card.stageMode, card.stageIdx);
-    this.drawHeader(c, title, stage);
+    // v15.2.8: the creator's REAL chosen level; unverified fallback guesses
+    // render '(UNVERIFIED)' in DIM — never presented as truth
+    const unverified = card.stageMode !== 'full' && card.stageVerified === false;
+    const stage = card.stageMode === 'full' ? stageLabel('full', null) : 'THE DESCENT - ' + stageLabel(card.stageMode, card.stageIdx, !unverified);
+    this.drawHeader(c, title, stage, unverified ? DIM : GRAY);
     // v10.1: the PRIVATE tag lives bottom-left — never next to the card title
     if (card.visibility === 'private') drawText(c, 'PRIVATE - LINK ONLY', 10, VH - 11, 1, '#b45aff');
 
@@ -2332,8 +2374,9 @@ export class ArenaUI {
   // back (STATUS_REFUNDED on-chain). Render the truth, never the live duel.
   private drawClosedCard(c: CanvasRenderingContext2D, frame: number, card: Challenge): void {
     const title = fmtStake(card.stake) + (card.format === 'duel' ? ' DUEL' : ' OPEN TABLE');
-    const stage = card.stageMode === 'full' ? stageLabel('full', null) : 'THE DESCENT - ' + stageLabel(card.stageMode, card.stageIdx);
-    this.drawHeader(c, title, stage);
+    const unverified = card.stageMode !== 'full' && card.stageVerified === false;
+    const stage = card.stageMode === 'full' ? stageLabel('full', null) : 'THE DESCENT - ' + stageLabel(card.stageMode, card.stageIdx, !unverified);
+    this.drawHeader(c, title, stage, unverified ? DIM : GRAY);
     if (card.forfeited) {
       // v2 STATUS_FORFEIT (terminal): an unsigned duel seat ran out its 1h
       // clock — the signed opponent claimed 95%, the treasury took 5%
@@ -2459,8 +2502,8 @@ export class ArenaUI {
   }
 
   // ---------- HISTORY (v10.3) ----------
-  private stageLabel(stageMode: string, stageIdx: number | null): string {
-    return stageLabel(stageMode, stageIdx); // v15.2.7: 'LV6 GHETTO GONNA' style
+  private stageLabel(stageMode: string, stageIdx: number | null, verified = true): string {
+    return stageLabel(stageMode, stageIdx, verified); // v15.2.8: 'LV6 GHETTO GONNA' style, '(UNVERIFIED)' on a fallback guess
   }
 
   // v14: the contract pays INSIDE resolve (winner + 5% treasury fee, one
@@ -2496,7 +2539,7 @@ export class ArenaUI {
       drawText(c, head, 40, y + 4, 1, GOLD);
       if (this.histPaid(h)) drawText(c, 'PAID', VW - 14, y + 4, 1, GOLD, 'right');
       else if ((frame & 16) !== 0) drawText(c, 'UNCLAIMED', VW - 14, y + 4, 1, '#ff8a3c', 'right');
-      const sub = (h.format === 'duel' ? 'DUEL' : 'OPEN ' + h.seats) + ' - ' + this.stageLabel(h.stageMode, h.stageIdx) + ' - ' + fmtAgo(h.resolvedAt);
+      const sub = (h.format === 'duel' ? 'DUEL' : 'OPEN ' + h.seats) + ' - ' + this.stageLabel(h.stageMode, h.stageIdx, h.stageVerified !== false) + ' - ' + fmtAgo(h.resolvedAt);
       drawText(c, sub.slice(0, 40), 40, y + 15, 1, DIM);
       // v13: history rows are tappable — tap opens the battle detail
       this.hots.push({ id: 'hist:' + (this.histPage * 5 + i), x: 8, y, w: VW - 16, h: ROW_H - 4 });
@@ -2529,7 +2572,7 @@ export class ArenaUI {
     // keeps 5% (treasury fee) inside resolve, the winner takes the rest
     const sp = splitPot(h.stake, h.pot, h.players.length);
     const lines: [string, string][] = [
-      ['STAGE', this.stageLabel(h.stageMode, h.stageIdx)],
+      ['STAGE', this.stageLabel(h.stageMode, h.stageIdx, h.stageVerified !== false)],
       ['STAKE', fmtAmount(h.stake) + ' $GONNA A SEAT'],
       ['POT', fmtAmount(sp.pool) + ' $GONNA'],
       ['FEE', fmtAmount(sp.fee) + ' $GONNA (5%)'],

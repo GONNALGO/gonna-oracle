@@ -49,9 +49,10 @@ import { captureInstallPrompt, FsGuide } from './fsguide';
 // ---- v10: THE ARENA (staking piazza) ----
 import { ArenaUI } from './arena/arenaUI';
 import type { ArenaAction } from './arena/arenaUI';
-import { arenaMode } from './arena/chainAdapter';
+import { arenaMode, setLinkStageHint } from './arena/chainAdapter';
 import { adoptOracleFromHash } from './arena/oracleLink';
 // v10.4: ?duel=<id> parsed once per page load (StrictMode double-boot safe)
+// v15.2.8: ?st=<0-6> rides single-mode share links — the committed level hint
 let bootDuelParam: number | null | undefined;
 
 type Scene = 'title' | 'intro' | 'play' | 'mint' | 'clear' | 'gameover' | 'continue' | 'victory' | 'connect' | 'gate' | 'fighter' | 'save' | 'board' | 'sealanim' | 'arena';
@@ -533,7 +534,10 @@ export class Game implements GameCtx {
         const raw = sp.get('duel');
         if (raw && /^\d+$/.test(raw)) {
           bootDuelParam = Number(raw);
-          sp.delete('duel'); // consume ONLY the duel param, keep arena=
+          const st = sp.get('st');
+          if (st !== null && /^[0-6]$/.test(st)) setLinkStageHint(bootDuelParam, Number(st)); // v15.2.8: committed level hint
+          sp.delete('duel'); // consume the duel/st params, keep arena=
+          sp.delete('st');
           window.history.replaceState(null, '', window.location.pathname + (sp.toString() ? '?' + sp.toString() : ''));
         }
       } catch { /* no window/history: ignore */ }

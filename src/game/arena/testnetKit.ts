@@ -22,6 +22,31 @@ const MBR_CREATE = 358_200; // v2 box MBR payment (create): 65_300 + 292_900
 const EARLY_CLOSE_FEE_PAY = 1_000_000; // 1 ALGO to treasury (early close)
 export const GONNA_DECIMALS = 6;
 
+// ============================================================================
+// v15.2.8 — CREATOR-CHOSEN LEVEL, committed ON-CHAIN in the NOTE of the
+// create/spawn app-call txn: UTF8 'gonna:v2:stage:<K>' (K 0-6). The note is
+// creator-signed -> immutable and publicly readable via the indexer, so EVERY
+// participant reads the same level and plays the same stage with the same
+// seed ('PIT-'+cid). The v2 contract is FROZEN and has no stage field — the
+// note is the commitment (contract v3 gets a native meta field).
+// FULL RUN cards carry NO stage note (the level is irrelevant on a 7-stage
+// run; absence of a note == no single-stage commitment).
+// ============================================================================
+export const STAGE_NOTE_PREFIX = 'gonna:v2:stage:';
+export function stageNote(stageIdx: number): Uint8Array {
+  return new TextEncoder().encode(STAGE_NOTE_PREFIX + stageIdx);
+}
+export function parseStageNote(note: Uint8Array): number | null {
+  const m = /^gonna:v2:stage:(\d)$/.exec(new TextDecoder().decode(note));
+  if (!m) return null;
+  const k = Number(m[1]);
+  return k >= 0 && k <= 6 ? k : null; // 7 stages, idx 0-6 ('full' -> null: no single-stage commitment)
+}
+// the note rides the app-call txn when a level was CHOSEN (single-mode pick)
+function stageNoteOpt(stageIdx: number | null | undefined): { note: Uint8Array } | Record<string, never> {
+  return stageIdx != null && stageIdx >= 0 && stageIdx <= 6 ? { note: stageNote(stageIdx) } : {};
+}
+
 // oracle message domains (contract.py: SCORE_DOMAIN/VERDICT_DOMAIN)
 const SCORE_DOMAIN = new TextEncoder().encode('QA-SCORE|');
 const VERDICT_DOMAIN = new TextEncoder().encode('QA-VERDICT|');
@@ -236,6 +261,7 @@ export async function buildCreateGroup(o: {
   stageMode: 0 | 1 | 2; // full / single / random
   creatorScore: number;
   creatorScoreSig: Uint8Array;
+  stageIdx?: number | null; // v15.2.8: creator-CHOSEN level (0-6) -> committed in the app-call NOTE
 }): Promise<Txn[]> {
   const a = await sdk();
   const appAddr = a.getApplicationAddress(ARENA_APP_ID);
@@ -260,9 +286,52 @@ export async function buildCreateGroup(o: {
     sender: o.creator, appIndex: ARENA_APP_ID, appArgs,
     foreignAssets: [GONNA_ASA_TESTNET],
     boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)],
+    // v15.2.8: the CHOSEN level is committed in the note (creator-signed,
+    // immutable). Group semantics/fees/args unchanged — the note is inert.
+    ...stageNoteOpt(o.stageIdx),
     suggestedParams: await baseParams(3000),
   });
   return [pay, axfer, call, ...(await opupTxns(o.creator, o.cid))];
+}
+
+// v15.2.8: spawn_rumble group builder (mirrors deploy/smoke + the sim's
+// PHASE 2 inline group): [MBR pay, $GONNA stake axfer, 1 ALGO fee pay, call].
+// Same optional stage note commitment as buildCreateGroup.
+export async function buildSpawnRumbleGroup(o: {
+  creator: string;
+  cid: number; // next_challenge_id
+  stakeBase: number; // microGONNA
+  seats: number; // SEATS_SMALL/MEDIUM/LARGE (4/8/12)
+  stageMode: 0 | 1 | 2; // full / single / random
+  stageIdx?: number | null; // chosen level (0-6) -> app-call NOTE
+}): Promise<Txn[]> {
+  const a = await sdk();
+  const appAddr = a.getApplicationAddress(ARENA_APP_ID);
+  const sig = 'spawn_rumble(pay,axfer,pay,uint64,uint64,uint64,byte[])uint64';
+  const appArgs = [
+    await methodSelector(a, sig),
+    await appArg(a, 'uint64', o.stakeBase),
+    await appArg(a, 'uint64', o.seats),
+    await appArg(a, 'uint64', o.stageMode),
+    await appArg(a, 'byte[]', new Uint8Array(32)),
+  ];
+  const pay = a.makePaymentTxnWithSuggestedParamsFromObject({
+    sender: o.creator, receiver: appAddr, amount: MBR_CREATE, suggestedParams: await baseParams(1000),
+  });
+  const axfer = a.makeAssetTransferTxnWithSuggestedParamsFromObject({
+    sender: o.creator, receiver: appAddr, assetIndex: GONNA_ASA_TESTNET, amount: o.stakeBase, suggestedParams: await baseParams(1000),
+  });
+  const fee = a.makePaymentTxnWithSuggestedParamsFromObject({
+    sender: o.creator, receiver: TREASURY_ADDR, amount: EARLY_CLOSE_FEE_PAY, suggestedParams: await baseParams(1000),
+  });
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.creator, appIndex: ARENA_APP_ID, appArgs,
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)],
+    ...stageNoteOpt(o.stageIdx),
+    suggestedParams: await baseParams(2000),
+  });
+  return [pay, axfer, fee, call];
 }
 
 export async function buildJoinGroup(o: { joiner: string; cid: number; stakeBase: number }): Promise<Txn[]> {
@@ -915,6 +984,150 @@ export async function fetchArenaCloseEvents(maxPages = 5): Promise<ArenaCloseEve
   return out;
 }
 
+// ============================================================================
+// v15.2.8 — ON-CHAIN STAGE NOTES via the indexer (cid -> chosen level).
+// SEQUENTIAL MAPPING FACT (verified against contract.py): next_challenge_id
+// is initialized to 0 (contract.py:290) and is read-then-incremented by
+// EXACTLY 1 in ONLY two methods — create_challenge (read contract.py:379,
+// write cid+1 contract.py:420) and spawn_rumble (read contract.py:486, write
+// cid+1 contract.py:515). A confirmed create-ish call can never fail (a
+// failed txn never confirms), so the Nth (1-based) successful create/spawn
+// app call on app 769767443 created cid N-1. The scan below therefore maps
+// cid -> stage WITHOUT any stage field in the frozen v2 contract.
+// Cache: localStorage 'gonna.arena.stages' {fromCid, stages} — fromCid is the
+// watermark (number of create-ish calls already mapped). The indexer pages
+// OLDEST-FIRST (ascending confirmed-round, verified against algonode testnet
+// 2026-07), so a scan skips the first fromCid create-ish hits and collects
+// the (total - fromCid) NEWEST ones — watermark hits are never re-mapped, and
+// when the counter hasn't moved the scan costs ZERO indexer calls. Cap 500
+// stage entries (lowest cids dropped first). v15.2.8b: a scan whose create-ish
+// count (watermark + new hits) does NOT match the on-chain next_challenge_id
+// is banked NOWHERE — the watermark stays put (monotonic, never backward,
+// never forward on a mismatch) and the cids fall back to UNVERIFIED tiers.
+// ============================================================================
+export interface StageScanCache {
+  fromCid: number; // watermark: cids [0, fromCid) already mapped
+  stages: Record<string, number>; // cid -> stage idx (only cids WITH a note)
+}
+const STAGE_KEY = 'gonna.arena.stages';
+const STAGE_MEM_MAX = 500;
+
+export function readStageCache(): StageScanCache {
+  try {
+    const j = JSON.parse(window.localStorage.getItem(STAGE_KEY) ?? '{}') as Partial<StageScanCache>;
+    return { fromCid: typeof j.fromCid === 'number' ? j.fromCid : 0, stages: j.stages && typeof j.stages === 'object' ? j.stages : {} };
+  } catch {
+    return { fromCid: 0, stages: {} };
+  }
+}
+function writeStageCache(c: StageScanCache): void {
+  try {
+    const keys = Object.keys(c.stages);
+    if (keys.length > STAGE_MEM_MAX) {
+      const sorted = keys.sort((x, y) => Number(x) - Number(y));
+      for (const k of sorted.slice(0, keys.length - STAGE_MEM_MAX)) delete c.stages[k];
+    }
+    window.localStorage.setItem(STAGE_KEY, JSON.stringify(c));
+  } catch { /* no storage */ }
+}
+
+// one successful create-ish app call found by the indexer scan
+export interface CreateCallHit {
+  round: number; // confirmed-round
+  offset: number; // intra-round-offset (tie-break inside a round)
+  stage: number | null; // parsed note stage (null = no stage note)
+}
+
+// pure mapping step (exported for tests): the hits are the NEWEST create-ish
+// calls after the watermark — sorted oldest-first they map SEQUENTIALLY to
+// cids fromCid, fromCid+1, ... (contract fact cited above).
+export function applyStageScan(cache: StageScanCache, hits: CreateCallHit[]): StageScanCache {
+  const sorted = [...hits].sort((x, y) => x.round - y.round || x.offset - y.offset);
+  const stages = { ...cache.stages };
+  let cid = cache.fromCid;
+  for (const h of sorted) {
+    if (h.stage !== null) stages[String(cid)] = h.stage;
+    cid++;
+  }
+  return { fromCid: cid, stages };
+}
+
+const CREATE_SIG = 'create_challenge(pay,axfer,uint64,uint64,uint64,uint64,byte[],uint64,byte[])uint64';
+const SPAWN_SIG = 'spawn_rumble(pay,axfer,pay,uint64,uint64,uint64,byte[])uint64';
+
+// 30s memo: a board refresh maps MANY cards through the same scan
+let stageMemo: { at: number; stages: Record<string, number> } | null = null;
+
+// Indexer down/lagging -> THROWS; callers catch and fall to the memory/link
+// tiers. opts.total skips the algod next_challenge_id read (tests); the
+// watermark math is exact only when total == the on-chain counter.
+export async function fetchArenaCreateStages(opts: { force?: boolean; maxPages?: number; total?: number } = {}): Promise<Record<string, number>> {
+  if (!opts.force && stageMemo && Date.now() - stageMemo.at < 30_000) return stageMemo.stages;
+  const cache = readStageCache();
+  const total = opts.total ?? (await nextChallengeId());
+  let out = cache;
+  const need = Math.max(0, total - cache.fromCid);
+  if (need > 0) {
+    const a = await sdk();
+    const selCreate = await methodSelector(a, CREATE_SIG);
+    const selSpawn = await methodSelector(a, SPAWN_SIG);
+    const eq = (b: Uint8Array, s: Uint8Array) => b.length === s.length && b.every((v, i) => v === s[i]);
+    const hits: CreateCallHit[] = [];
+    let skipped = cache.fromCid; // oldest-first stream: cids [0, fromCid) are already mapped
+    let token: string | null = null;
+    const maxPages = opts.maxPages ?? 10;
+    for (let page = 0; page < maxPages && hits.length < need; page++) {
+      const url =
+        INDEXER_TESTNET + '/v2/transactions?application-id=' + ARENA_APP_ID + '&tx-type=appl&limit=100' + (token ? '&next=' + encodeURIComponent(token) : '');
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('indexer http ' + r.status);
+      const j = (await r.json()) as {
+        transactions?: {
+          id: string;
+          'confirmed-round'?: number;
+          'intra-round-offset'?: number;
+          note?: string;
+          'application-transaction'?: { 'application-args'?: string[] };
+        }[];
+        'next-token'?: string;
+      };
+      for (const t of j.transactions ?? []) {
+        if (typeof t['confirmed-round'] !== 'number') continue; // unconfirmed: never a successful create
+        const args = t['application-transaction']?.['application-args'];
+        if (!args || args.length === 0) continue;
+        const first = b64ToBytes(args[0]);
+        if (!eq(first, selCreate) && !eq(first, selSpawn)) continue; // join/submit/resolve/close don't move the counter
+        if (skipped > 0) {
+          skipped--; // watermark: this create-ish call maps to an already-known cid
+          continue;
+        }
+        hits.push({
+          round: t['confirmed-round'],
+          offset: t['intra-round-offset'] ?? 0,
+          stage: typeof t.note === 'string' ? parseStageNote(b64ToBytes(t.note)) : null,
+        });
+        if (hits.length >= need) break;
+      }
+      token = j['next-token'] ?? null;
+      if (!token) break;
+    }
+    // v15.2.8b MAPPING SANITY CROSS-CHECK: the sequential cid mapping is exact
+    // ONLY when the count of successful create-ish calls seen (watermark +
+    // newly scanned) equals the app's CURRENT next_challenge_id global (read
+    // above via nextChallengeId() — the same global-state read sim-multiplayer
+    // recon uses). A lagging/truncated indexer page set would otherwise shift
+    // every subsequent cid and dress WRONG stages as truth. On mismatch: bank
+    // NOTHING (no localStorage write, no log), keep the watermark exactly
+    // where it was — unmapped cids fall through to the UNVERIFIED tiers.
+    if (cache.fromCid + hits.length === total) {
+      out = applyStageScan(cache, hits);
+      writeStageCache(out);
+    }
+  }
+  stageMemo = { at: Date.now(), stages: out.stages };
+  return out.stages;
+}
+
 // ---------- per-challenge CARD MEMORY (pairs with the event log) ----------
 // The event gives cid/winner/payout/fee; the MEMORY gives stake/format/stage/
 // roster for cards THIS browser witnessed (created, joined, scanned, closed).
@@ -927,6 +1140,10 @@ export interface CardMemory {
   seatsTotal: number; // UI convention (joiner seats + creator)
   stageMode: 'full' | 'single' | 'random';
   stageIdx: number | null;
+  // v15.2.8: true = the stage was COMMITTED (create note / this browser's own
+  // create / link hint); false/absent = never verified (a cid%7 fallback GUESS
+  // is never written into memory — unverified cards carry stageIdx null here)
+  stageVerified?: boolean;
   deadline: number; // ms epoch
   players: { address: string; score: number; signed: boolean }[];
   closedKind: 'resolved' | 'forfeited' | 'refunded' | null;
@@ -950,9 +1167,16 @@ export function rememberCard(m: CardMemory): void {
     const all = readCardMem();
     const prev = all[String(m.cid)];
     // merge: a later close never blanks fields an earlier snapshot knew
-    all[String(m.cid)] = prev
+    const merged = prev
       ? { ...prev, ...m, players: m.players.length > 0 ? m.players : prev.players, closedAt: m.closedAt ?? prev.closedAt }
       : m;
+    // v15.2.8: a VERIFIED stage is never downgraded by a later unverified
+    // snapshot (e.g. a scan that ran before the note indexer caught up)
+    if (prev && prev.stageVerified === true && m.stageVerified !== true) {
+      merged.stageVerified = true;
+      merged.stageIdx = prev.stageIdx;
+    }
+    all[String(m.cid)] = merged;
     const keys = Object.keys(all);
     if (keys.length > CARD_MEM_MAX) {
       const sorted = keys.sort((x, y) => Number(x) - Number(y));

@@ -25,14 +25,18 @@ export interface ChallengeConfig {
   seatsTotal: number; // duel => always 2
   durationSecs: number; // 4h / 12h / 24h
   stageMode: StageMode;
-  stageIdx: number | null; // 0-6 for single; null = full run / random pending
+  // v15.2.8: 0-6 for single — the CREATOR's CHOSEN level (wizard picker or
+  // the RANDOM shuffle), committed ON-CHAIN in the create app-call note;
+  // null = full run (no single stage)
+  stageIdx: number | null;
   stake: number; // $GONNA display units per seat
   fighter: FighterPick;
   sealedScore?: number; // v11: the run score sealed BEFORE signing (testnet)
   // v15.2.7b (cid-race guard): the challenge id the sealed run was PLAYED for
-  // ('PIT-' + runCid, stage runCid % 7). When set, createChallenge REFUSES to
-  // build/sign under any other id (CidMovedError) — a card created at cid !=
-  // runCid would hand joiners a different seed/stage than the creator played.
+  // ('PIT-' + runCid; the LEVEL is the creator's pick in stageIdx, only the
+  // seed rides the cid). When set, createChallenge REFUSES to build/sign
+  // under any other id (CidMovedError) — a card created at cid != runCid
+  // would hand joiners a different seed than the creator played.
   runCid?: number;
   // v14.4: no continueRefId here — creator replays are FREE pre-commitment;
   // the 5 ALGO continue receipt exists ONLY on the joiner submitScore path
@@ -59,7 +63,14 @@ export interface Challenge {
   seatsTotal: number;
   durationSecs: number;
   stageMode: StageMode;
-  stageIdx: number | null; // resolved stage (v15.2.7: single = cid % 7 on testnet)
+  stageIdx: number | null; // resolved stage (v15.2.8: single = the creator's committed pick)
+  // v15.2.8: true = stageIdx is COMMITTED (on-chain note / card memory of a
+  // card this browser created); false = UNVERIFIED (cid%7 FALLBACK guess for
+  // legacy cards without notes, or a caller-controlled deep-link ?st= hint —
+  // v15.2.8b: the link tier fills the stage but never self-verifies) — the UI
+  // renders it '(UNVERIFIED)' in DIM, never presenting a guess as truth.
+  // Undefined = treat as true (mock cards and every pre-v15.2.8 record).
+  stageVerified?: boolean;
   stake: number; // $GONNA per seat — NaN on a terminal card with no card memory (UNKNOWN, renders '-'; never an invented number)
   createdAt: number; // ms epoch
   deadline: number; // ms epoch — REAL timer
@@ -84,6 +95,7 @@ export interface HistoryEntry {
   format: Format;
   stageMode: StageMode;
   stageIdx: number | null;
+  stageVerified?: boolean; // v15.2.8: false = cid%7 fallback guess (renders UNVERIFIED)
   seats: number;
   winner: string; // address
   winnerName: string;
@@ -172,19 +184,61 @@ export function fmtAmount(n: number): string {
   return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
 }
 
-// v15.2.7 (BUG-2): the v2 contract has NO stage field — the level is derived
-// deterministically from the challenge id, so every player of the same card
-// plays the same stage and resolve() binds the SAME idx into the oracle
-// verdict (the contract asserts verdict stage_idx == the resolve arg).
+// v15.2.7 (BUG-2) kept as the UNVERIFIED FALLBACK only: the v2 contract has
+// NO stage field, and legacy cards (created before v15.2.8) carry no stage
+// note. For those, cid % 7 is the deterministic guess — ALWAYS rendered
+// '(UNVERIFIED)', never presented as truth. v15.2.8: the creator CHOOSES the
+// level and commits it in the create note; pickCardStage below is the truth.
 export function stageIdxFromCid(cid: number): number {
   return cid % 7; // 7 stages, idx 0-6
 }
 
+// ---------- v15.2.8: single-mode stage resolution ----------
+// Order: (a) on-chain create NOTE via kit.fetchArenaCreateStages; (b) card
+// memory (gonna.arena.cards — createChallenge persists the pick there);
+// (c) deep-link URL hint ?st= (share links carry it for single-mode cards) —
+// fills the stage but stageVerified stays FALSE (v15.2.8b: a URL param is
+// caller-controlled, never a proof); (d) stageIdxFromCid fallback — FALSE.
+export type StageSource = 'full' | 'note' | 'memory' | 'link' | 'fallback';
+export interface StageResolution {
+  stageIdx: number | null;
+  verified: boolean;
+  source: StageSource;
+}
+const inStageRange = (v: number | null | undefined): v is number => typeof v === 'number' && v >= 0 && v <= 6;
+export function pickCardStage(
+  cid: number,
+  stageMode: StageMode,
+  opts: { note?: number | null; memory?: { stageIdx: number | null; stageVerified?: boolean } | null; link?: number | null } = {},
+): StageResolution {
+  if (stageMode === 'full') return { stageIdx: null, verified: true, source: 'full' };
+  if (inStageRange(opts.note)) return { stageIdx: opts.note, verified: true, source: 'note' };
+  if (opts.memory && inStageRange(opts.memory.stageIdx) && opts.memory.stageVerified !== false) {
+    return { stageIdx: opts.memory.stageIdx, verified: true, source: 'memory' };
+  }
+  // v15.2.8b: the ?st= URL hint fills the stage but NEVER self-verifies — a
+  // crafted link (?duel=26&st=5) must not spoof a legacy card's stage as
+  // VERIFIED. Only the note and memory tiers are verified sources.
+  if (inStageRange(opts.link)) return { stageIdx: opts.link, verified: false, source: 'link' };
+  return { stageIdx: stageIdxFromCid(cid), verified: false, source: 'fallback' };
+}
+
+// deep-link stage hint (?duel=N&st=K) — tier (c). engine.bootArenaDeepLink
+// parses it once at page boot and hands it here before stripping the params.
+let linkStageHint: { cid: number; stage: number } | null = null;
+export function setLinkStageHint(cid: number, stage: number): void {
+  linkStageHint = inStageRange(stage) ? { cid, stage } : null;
+}
+export function getLinkStageHint(cid: number): number | null {
+  return linkStageHint && linkStageHint.cid === cid ? linkStageHint.stage : null;
+}
+
 // v15.2.7b (cid-race guard): a creator's DESCENT run is seeded 'PIT-' + the
-// hinted id and played at stage hint % 7. If next_challenge_id has moved by
+// hinted id (v15.2.8: the LEVEL is the creator's pick — a moved cid changes
+// only the seed, never the chosen stage). If next_challenge_id has moved by
 // SIGN time, creating under the NEW id would silently mismatch every joiner
-// (different seed, different stage). The oracle sig is cid-bound so the chain
-// would 400 it anyway — this guard fires BEFORE the wallet prompt instead.
+// (different seed). The oracle sig is cid-bound so the chain would 400 it
+// anyway — this guard fires BEFORE the wallet prompt instead.
 export const CID_MOVED_MSG = 'THE PIT MOVED WHILE YOU PLAYED - RE-SEAL YOUR RUN';
 export class CidMovedError extends Error {
   readonly code = 'CID_MOVED';
@@ -374,6 +428,7 @@ function seed(s: Store): void {
       durationSecs: 12 * 3600,
       stageMode,
       stageIdx,
+      stageVerified: true, // seeded piazza cards: mock-local truth
       stake,
       createdAt: now - (12 - hrsLeft) * 3600_000,
       deadline: now + hrsLeft * 3600_000,
@@ -423,6 +478,7 @@ function seedHistory(s: Store): void {
       format,
       stageMode,
       stageIdx,
+      stageVerified: true, // seeded history: mock-local truth
       seats,
       winner,
       winnerName: name,
@@ -466,6 +522,7 @@ export class MockArenaAdapter implements ArenaAdapter {
       format: c.format,
       stageMode: c.stageMode,
       stageIdx: c.stageIdx,
+      stageVerified: c.stageVerified !== false,
       seats: c.seatsTotal,
       winner: c.winner ?? '',
       winnerName: w ? w.name : '???',
@@ -507,9 +564,12 @@ export class MockArenaAdapter implements ArenaAdapter {
       seatsTotal: cfg.format === 'duel' ? 2 : cfg.seatsTotal,
       durationSecs: cfg.durationSecs,
       stageMode: cfg.stageMode,
-      // v15.2.7 (BUG-2): the mock mirrors the chain — the level is id % 7,
-      // dealt by the counter, never Math.random and never hand-picked
-      stageIdx: cfg.stageMode === 'full' ? null : stageIdxFromCid(id),
+      // v15.2.8 (owner decree): the CREATOR chooses the level (wizard picker
+      // or the RANDOM shuffle) — the mock commits cfg.stageIdx exactly like
+      // the chain commits the create note; cid % 7 survives ONLY as the
+      // unverified fallback when no pick was made (QA/legacy paths)
+      stageIdx: cfg.stageMode === 'full' ? null : (cfg.stageIdx ?? stageIdxFromCid(id)),
+      stageVerified: cfg.stageMode === 'full' ? true : cfg.stageIdx != null,
       stake: cfg.stake,
       createdAt: now,
       deadline: now + cfg.durationSecs * 1000,
@@ -782,6 +842,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       statusCode === 3 || statusCode === 4 ? 'closed' : statusCode === 2 ? 'resolved' : expired ? 'expired' : statusCode === 1 || seatsTaken >= seatsTotal ? 'full' : 'open';
     const creator = encOpt(meta.creator);
     const stageMode: StageMode = Number(meta.stageMode) === 0 ? 'full' : Number(meta.stageMode) === 1 ? 'single' : 'random';
+    const stageRes = await this.cardStage(cid, stageMode);
     return {
       id: cid,
       creator,
@@ -792,9 +853,11 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       seatsTotal,
       durationSecs: 0, // not stored on-chain; deadline is the truth
       stageMode,
-      // v15.2.7 (BUG-2): v2 ChallengeMeta has NO stage field — the DESCENT
-      // level is cid % 7, trustless and identical for every player of the card
-      stageIdx: stageMode === 'single' ? stageIdxFromCid(cid) : null,
+      // v15.2.8 (owner decree): v2 ChallengeMeta has NO stage field — the
+      // DESCENT level is the CREATOR's pick, committed in the create note.
+      // Resolution order: note > card memory > link hint > cid%7 (UNVERIFIED).
+      stageIdx: stageRes.stageIdx,
+      stageVerified: stageRes.verified,
       stake: Number(meta.stake) / 1e6, // base units -> $GONNA display units
       createdAt: Number(meta.deadline) * 1000 - 12 * 3600_000,
       deadline: Number(meta.deadline) * 1000,
@@ -819,6 +882,26 @@ export class TestnetArenaAdapter implements ArenaAdapter {
 
   private async requireOracle(): Promise<void> {
     if (!hasDevOracle()) throw new Error('ORACLE OFFLINE - testnet dev oracle key not injected');
+  }
+
+  // v15.2.8: the committed level for a single-mode card — (a) on-chain note
+  // via the indexer scan, (b) this browser's card memory, (c) the deep-link
+  // ?st= hint (v15.2.8b: fills the stage, verified FALSE — caller-controlled),
+  // (d) cid%7 fallback (verified: false). Indexer hiccups never blank a card:
+  // the memory/link tiers still resolve.
+  private async cardStage(cid: number, stageMode: StageMode): Promise<StageResolution> {
+    let notes: Record<string, number> | null = null;
+    try {
+      notes = await kit.fetchArenaCreateStages();
+    } catch {
+      console.debug('[arena] stage-note scan unreachable — falling back to card memory / link hint');
+    }
+    const mem = kit.rememberedCard(cid);
+    return pickCardStage(cid, stageMode, {
+      note: notes ? (notes[String(cid)] ?? null) : null,
+      memory: mem ? { stageIdx: mem.stageIdx, stageVerified: mem.stageVerified } : null,
+      link: getLinkStageHint(cid),
+    });
   }
 
   async createChallenge(cfg: ChallengeConfig, _creator: ChallengePlayer): Promise<Challenge> {
@@ -883,6 +966,9 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         stageMode: cfg.stageMode === 'full' ? 0 : 1,
         creatorScore: score,
         creatorScoreSig: sig,
+        // v15.2.8: the creator's CHOSEN level rides the app-call NOTE —
+        // creator-signed, immutable, readable by every participant
+        stageIdx: cfg.stageMode === 'single' ? cfg.stageIdx : null,
       });
     };
     const txid = await kit.signSendManaged(me.sign, build, {
@@ -891,9 +977,29 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       autoRetries: 2, // up to 3 sends total on the cid-race 400 (was attempt<3)
     }).done;
     kit.recordTxid(builtCid, txid);
-    const ch = await this.getChallenge(builtCid);
-    if (!ch) throw new Error('created on-chain but box unreadable');
-    return ch;
+    const ch0 = await this.getChallenge(builtCid);
+    if (!ch0) throw new Error('created on-chain but box unreadable');
+    // v15.2.8: WE committed the level (note signed by this wallet) — the card
+    // is verified with our pick even before the indexer catches up, and the
+    // pick is persisted to card memory (resolution tier b)
+    const committed = cfg.stageMode === 'single' && cfg.stageIdx !== null ? cfg.stageIdx : null;
+    kit.rememberCard({
+      cid: builtCid,
+      creator: me.address,
+      stake: cfg.stake,
+      seatsTotal: ch0.seatsTotal,
+      stageMode: cfg.stageMode,
+      stageIdx: committed,
+      stageVerified: cfg.stageMode === 'full' ? true : committed !== null,
+      deadline: ch0.deadline,
+      players: ch0.players.map((p) => ({ address: p.address, score: p.score, signed: !!p.signed })),
+      closedKind: null,
+      winner: null,
+      payout: 0,
+      fee: 0,
+      closedAt: null,
+    });
+    return committed !== null ? { ...ch0, stageIdx: committed, stageVerified: true } : ch0;
   }
 
   async join(id: number, _player: ChallengePlayer): Promise<Challenge> {
@@ -939,10 +1045,11 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       .filter((p) => p.signed);
     if (entries.length === 0) throw new Error('no signed scores yet');
     // verdict payload: FULL -> 32 zero bytes; STAGE_IDX -> 24 zeros + stage idx
-    // v15.2.7 (BUG-2): the chosen stage is cid % 7 — deterministic, identical
-    // for every player, and the contract asserts the verdict's stage_idx
-    // equals the resolve arg, so BOTH legs use the same value.
-    const chosenStage = Number(meta.stageMode) === 1 ? stageIdxFromCid(id) : 0;
+    // v15.2.8 (owner decree): the chosen stage is the CREATOR's committed pick
+    // (note > memory > link > cid%7 fallback) — the contract asserts the
+    // verdict's stage_idx equals the resolve arg (contract.py:689-691), so
+    // BOTH legs carry the SAME committed value.
+    const chosenStage = Number(meta.stageMode) === 1 ? (await this.cardStage(id, 'single')).stageIdx! : 0;
     let extra = new Uint8Array(32);
     if (Number(meta.stageMode) === 1) {
       extra = new Uint8Array(32);
@@ -961,7 +1068,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const txns = await kit.buildResolveGroup({
       caller: me.address,
       cid: id,
-      stageIdx: chosenStage, // v15.2.7: cid % 7 for MODE_STAGE_IDX (0 for FULL)
+      stageIdx: chosenStage, // v15.2.8: the committed pick for MODE_STAGE_IDX (0 for FULL)
       seedReveal: new Uint8Array(0), // MODE_FULL: empty reveal
       verdictSig: vsig,
       winner: a.encodeAddress(best.addr), // tie: contract ignores it, refunds all
@@ -980,7 +1087,9 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       stake: before.stake,
       seatsTotal: before.seatsTotal,
       stageMode: before.stageMode,
-      stageIdx: before.stageIdx,
+      // v15.2.8: never persist an UNVERIFIED fallback guess as memory truth
+      stageIdx: before.stageVerified === false ? null : before.stageIdx,
+      stageVerified: before.stageVerified !== false,
       deadline: before.deadline,
       players: before.players.map((p) => ({ address: p.address, score: p.score, signed: !!p.signed })),
       closedKind: tie ? 'refunded' : 'resolved',
@@ -1117,6 +1226,14 @@ export class TestnetArenaAdapter implements ArenaAdapter {
           ? [{ address: winner, name: shortAddr(winner), score: 0, fighter: { skin: 'gonna', assetId: null, name: 'GONNA' }, accountType: 'ed25519' as AccountType }]
           : [];
     const creator = mem?.creator ?? winner ?? '';
+    // v15.2.8: terminal cards keep the committed level from card memory / the
+    // link hint; without either, the cid%7 fallback renders '(UNVERIFIED)'
+    // (the on-chain note tier is async — the live path resolves it first and
+    // banks the verified stage into memory before the card settles)
+    const tStage = pickCardStage(id, mem?.stageMode ?? 'full', {
+      memory: mem ? { stageIdx: mem.stageIdx, stageVerified: mem.stageVerified } : null,
+      link: getLinkStageHint(id),
+    });
     return {
       id,
       creator,
@@ -1127,7 +1244,8 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       seatsTotal: mem?.seatsTotal ?? 2,
       durationSecs: 0,
       stageMode: mem?.stageMode ?? 'full',
-      stageIdx: mem?.stageIdx ?? null,
+      stageIdx: tStage.stageIdx,
+      stageVerified: tStage.verified,
       // v15.2.7 (BUG-3a): the stake comes from card memory ONLY — the chain
       // event names pot/winner/fee, never the per-seat stake. No memory =
       // stake UNKNOWN (NaN -> fmtStake renders '-'), never pot/2 (that was a
@@ -1167,7 +1285,8 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       stake: c.stake,
       seatsTotal: c.seatsTotal,
       stageMode: c.stageMode,
-      stageIdx: c.stageIdx,
+      stageIdx: c.stageVerified === false ? null : c.stageIdx, // v15.2.8: guesses never become memory truth
+      stageVerified: c.stageVerified !== false,
       deadline: c.deadline,
       players: c.players.map((p) => ({ address: p.address, score: p.score, signed: !!p.signed })),
       closedKind: kind,
@@ -1217,7 +1336,8 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         stake: c.stake,
         seatsTotal: c.seatsTotal,
         stageMode: c.stageMode,
-        stageIdx: c.stageIdx,
+        stageIdx: c.stageVerified === false ? null : c.stageIdx, // v15.2.8: never bank a fallback guess
+        stageVerified: c.stageVerified !== false,
         deadline: c.deadline,
         players: c.players.map((p) => ({ address: p.address, score: p.score, signed: !!p.signed })),
         closedKind: null,
@@ -1260,6 +1380,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         format: c.format,
         stageMode: c.stageMode,
         stageIdx: c.stageIdx,
+        stageVerified: c.stageVerified !== false,
         seats: c.seatsTotal,
         winner: c.winner ?? '',
         winnerName: c.winner ? shortAddr(c.winner) : '???',
@@ -1283,7 +1404,8 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         pot: (ev.payout + ev.fee) / 1e6,
         format: mem && mem.seatsTotal > 2 ? 'open' : 'duel',
         stageMode: mem?.stageMode ?? 'full',
-        stageIdx: mem?.stageIdx ?? null,
+        stageIdx: pickCardStage(ev.cid, mem?.stageMode ?? 'full', { memory: mem ? { stageIdx: mem.stageIdx, stageVerified: mem.stageVerified } : null, link: getLinkStageHint(ev.cid) }).stageIdx,
+        stageVerified: pickCardStage(ev.cid, mem?.stageMode ?? 'full', { memory: mem ? { stageIdx: mem.stageIdx, stageVerified: mem.stageVerified } : null, link: getLinkStageHint(ev.cid) }).verified,
         seats: mem?.seatsTotal ?? 2,
         winner: ev.winner ?? '',
         winnerName: ev.winner ? shortAddr(ev.winner) : 'TIE - ALL REFUNDED',
@@ -1309,7 +1431,8 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         pot: mem.payout + mem.fee || mem.stake * Math.max(1, mem.players.length),
         format: mem.seatsTotal > 2 ? 'open' : 'duel',
         stageMode: mem.stageMode,
-        stageIdx: mem.stageIdx,
+        stageIdx: pickCardStage(mem.cid, mem.stageMode, { memory: { stageIdx: mem.stageIdx, stageVerified: mem.stageVerified }, link: getLinkStageHint(mem.cid) }).stageIdx,
+        stageVerified: pickCardStage(mem.cid, mem.stageMode, { memory: { stageIdx: mem.stageIdx, stageVerified: mem.stageVerified }, link: getLinkStageHint(mem.cid) }).verified,
         seats: mem.seatsTotal,
         winner: mem.winner ?? '',
         winnerName: mem.winner ? shortAddr(mem.winner) : '???',
