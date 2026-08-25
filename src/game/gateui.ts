@@ -49,9 +49,60 @@ interface Hot {
 // The whole 384-wide strip is visible in portrait FIT, so this fits mobile too.
 export const FIGHTER_DISCONNECT_BTN = { x: VW - 80, y: VH - 14, w: 66, h: 10 };
 
-// ---------- tiny pixel ALGORAND logo (blocky A, neon-sign style) ----------
+// ---------- v16.0.1: OFFICIAL Algorand logo, re-adapted to the game ----------
+// The mono black-on-transparent official mark (public/brand/) is lazy-loaded
+// once, tinted to the context color via an offscreen canvas ('source-in') with
+// a per-color cache, and drawn pixel-crisp into the SAME boxes the old blocky
+// A filled (6*s x 6*s — the official mark is square). While the PNG is in
+// flight the logo is simply skipped (grace frames, never a crash); only if
+// the fetch truly fails does the legacy blocky A stand in.
+export const ALGO_LOGO_SRC = 'brand/algorand-mono-32.png';
+let algoLogoImg: HTMLImageElement | null = null;
+let algoLogoDead = false;
+const algoLogoTints = new Map<string, HTMLCanvasElement>();
+(function bootAlgoLogo(): void {
+  if (typeof Image === 'undefined') return; // node/CI: no DOM
+  const img = new Image();
+  img.onload = () => {
+    algoLogoImg = img;
+  };
+  img.onerror = () => {
+    algoLogoDead = true;
+  };
+  img.src = ALGO_LOGO_SRC;
+})();
+
+function algoLogoTinted(color: string): HTMLCanvasElement | null {
+  if (!algoLogoImg) return null;
+  const hit = algoLogoTints.get(color);
+  if (hit) return hit;
+  const c = document.createElement('canvas');
+  c.width = algoLogoImg.width;
+  c.height = algoLogoImg.height;
+  const x = c.getContext('2d');
+  if (!x) return null;
+  x.imageSmoothingEnabled = false;
+  x.drawImage(algoLogoImg, 0, 0);
+  x.globalCompositeOperation = 'source-in'; // keep alpha, take the tint color
+  x.fillStyle = color;
+  x.fillRect(0, 0, c.width, c.height);
+  algoLogoTints.set(color, c);
+  return c;
+}
+
+// legacy blocky A — emergency stand-in ONLY when the brand PNG cannot load
 const ALGO_ROWS = ['001100', '011110', '110011', '110011', '111111', '110011', '110011'];
 export function drawAlgoLogo(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, color: string): void {
+  const logo = algoLogoTinted(color);
+  if (logo) {
+    const size = 6 * s; // same footprint as the old 6-cell mark
+    const smooth = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false; // pixel-crisp
+    ctx.drawImage(logo, x, y, size, size);
+    ctx.imageSmoothingEnabled = smooth;
+    return;
+  }
+  if (!algoLogoDead) return; // grace frames: no logo until the PNG lands
   ctx.fillStyle = color;
   for (let r = 0; r < ALGO_ROWS.length; r++) {
     for (let c = 0; c < 6; c++) {
@@ -173,6 +224,7 @@ export class GateUI {
   private collapsed = new Set<SkinId>();
   private rows: { kind: 'head' | 'nft'; skin: SkinId; nft: OwnedNft | null }[] = [];
   private rowCur = 0;
+  private listVis = 1; // rows per window, refreshed every drawAthleteList
 
   open(scene: GateScene): void {
     this.scene = scene;
@@ -481,6 +533,15 @@ export class GateUI {
   }
 
   private tapFighter(h: Hot): GateAction {
+    // v16.0.1: whale pager — window-jump, clamped at both ends (no wrap)
+    if (h.id === 'list:up' || h.id === 'list:down') {
+      const n = this.rows.length;
+      if (n === 0) return { act: 'none' };
+      const d = h.id === 'list:down' ? this.listVis : -this.listVis;
+      this.rowCur = clamp(this.rowCur + d, 0, n - 1);
+      this.rowToFighter();
+      return { act: 'move' };
+    }
     if (h.id === 'tile') {
       const skin = SKINS[h.data];
       if (this.gridCur === h.data && this.unlockedSkins().has(skin)) return this.confirmFighter();
@@ -872,8 +933,33 @@ export class GateUI {
       if (cur && (t & 16) !== 0) drawText(ctx, '>', lx - 9, ry + 3, 1, '#7fd858');
     }
     ctx.restore();
+    this.listVis = maxVis;
     if (this.rows.length > maxVis) {
       drawText(ctx, (first + 1) + '-' + Math.min(this.rows.length, first + maxVis) + '/' + this.rows.length, lx + lw, listTop - 2, 1, '#5a5f6c', 'right');
+      // v16.0.1 WHALE PAGER: keyboard always scrolled row-by-row, but a
+      // touch-only degen could never reach rows past the first window. Tap
+      // arrows jump a whole window (row cursor follows, CLAMPED at both
+      // ends — no wrap), so a 70-NFT wallet is fully browsable by thumb.
+      const py = listTop + listH + 3;
+      const canUp = first > 0;
+      const canDown = first + maxVis < this.rows.length;
+      if (canUp) {
+        this.hots.push({ x: lx, y: py, w: 18, h: 14, id: 'list:up', data: 0 });
+        ctx.fillStyle = '#0d1118';
+        ctx.fillRect(lx, py, 18, 14);
+        ctx.strokeStyle = '#b8860b';
+        ctx.strokeRect(lx + 0.5, py + 0.5, 17, 13);
+        drawText(ctx, '<', lx + 9, py + 4, 1, '#f5c542', 'center');
+      }
+      if (canDown) {
+        const nx = lx + lw - 18;
+        this.hots.push({ x: nx, y: py, w: 18, h: 14, id: 'list:down', data: 0 });
+        ctx.fillStyle = '#0d1118';
+        ctx.fillRect(nx, py, 18, 14);
+        ctx.strokeStyle = '#b8860b';
+        ctx.strokeRect(nx + 0.5, py + 0.5, 17, 13);
+        drawText(ctx, '>', nx + 9, py + 4, 1, '#f5c542', 'center');
+      }
     }
   }
 

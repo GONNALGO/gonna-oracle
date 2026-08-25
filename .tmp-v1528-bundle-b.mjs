@@ -52222,8 +52222,92 @@ function skinForAsset(assetId) {
 var FRAME_KEYS = [];
 for (let r4 = 0; r4 < 4; r4++) for (let c3 = 0; c3 < 6; c3++) FRAME_KEYS.push([r4, c3]);
 var portraitCache = /* @__PURE__ */ new Map();
+var portraitFailedSet = /* @__PURE__ */ new Set();
 function skinPortrait(skin) {
   return portraitCache.get(skin) ?? null;
+}
+function skinPortraitFailed(skin) {
+  return portraitFailedSet.has(skin);
+}
+var SHELF_PAGE = 10;
+function shelfPages(count) {
+  return Math.max(1, Math.ceil(Math.max(0, count) / SHELF_PAGE));
+}
+function shelfPageClamp(page, count) {
+  const last = shelfPages(count) - 1;
+  if (!Number.isFinite(page)) return 0;
+  return Math.min(Math.max(0, Math.floor(page)), last);
+}
+function nftHue(assetId) {
+  let h5 = Math.imul(assetId >>> 0, 2654435761) >>> 0 ^ 2654435769;
+  h5 = (h5 ^ h5 >>> 15) >>> 0;
+  return h5 % 360;
+}
+function rgb2hsl(r4, g5, b5) {
+  const mx = Math.max(r4, g5, b5);
+  const mn = Math.min(r4, g5, b5);
+  const l3 = (mx + mn) / 510;
+  if (mx === mn) return [0, 0, l3];
+  const d3 = (mx - mn) / 255;
+  const s4 = l3 > 0.5 ? d3 / (2 - (mx + mn) / 255) : d3 / ((mx + mn) / 255);
+  let h5;
+  if (mx === r4) h5 = ((g5 - b5) / (mx - mn) + (g5 < b5 ? 6 : 0)) * 60;
+  else if (mx === g5) h5 = ((b5 - r4) / (mx - mn) + 2) * 60;
+  else h5 = ((r4 - g5) / (mx - mn) + 4) * 60;
+  return [h5, s4, l3];
+}
+function hsl2rgb(h5, s4, l3) {
+  if (s4 === 0) {
+    const v5 = Math.round(l3 * 255);
+    return [v5, v5, v5];
+  }
+  const q4 = l3 < 0.5 ? l3 * (1 + s4) : l3 + s4 - l3 * s4;
+  const p4 = 2 * l3 - q4;
+  const f5 = (t3) => {
+    let tt2 = t3;
+    if (tt2 < 0) tt2 += 1;
+    if (tt2 > 1) tt2 -= 1;
+    if (tt2 < 1 / 6) return p4 + (q4 - p4) * 6 * tt2;
+    if (tt2 < 1 / 2) return q4;
+    if (tt2 < 2 / 3) return p4 + (q4 - p4) * (2 / 3 - tt2) * 6;
+    return p4;
+  };
+  return [Math.round(f5(h5 / 360 + 1 / 3) * 255), Math.round(f5(h5 / 360) * 255), Math.round(f5(h5 / 360 - 1 / 3) * 255)];
+}
+var BASE_HUE = 105;
+var tintCache = /* @__PURE__ */ new Map();
+function tintedFighterPortrait(base, assetId) {
+  const hit = tintCache.get(assetId);
+  if (hit) return hit;
+  if (typeof document === "undefined") return null;
+  const w5 = base.naturalWidth || base.width || 0;
+  const h5 = base.naturalHeight || base.height || 0;
+  if (!w5 || !h5) return null;
+  const c3 = document.createElement("canvas");
+  c3.width = w5;
+  c3.height = h5;
+  const x4 = c3.getContext("2d", { willReadFrequently: true });
+  if (!x4) return null;
+  x4.imageSmoothingEnabled = false;
+  x4.drawImage(base, 0, 0);
+  try {
+    const d3 = x4.getImageData(0, 0, w5, h5);
+    const shift = nftHue(assetId) - BASE_HUE;
+    const px = d3.data;
+    for (let i3 = 0; i3 < px.length; i3 += 4) {
+      if (px[i3 + 3] === 0) continue;
+      const [hh, ss, ll] = rgb2hsl(px[i3], px[i3 + 1], px[i3 + 2]);
+      const [r4, g5, b5] = hsl2rgb((hh + shift + 360) % 360, ss, ll);
+      px[i3] = r4;
+      px[i3 + 1] = g5;
+      px[i3 + 2] = b5;
+    }
+    x4.putImageData(d3, 0, 0);
+  } catch {
+    return null;
+  }
+  tintCache.set(assetId, c3);
+  return c3;
 }
 
 // src/game/sovereign.ts
@@ -54760,6 +54844,9 @@ var ArenaUI = class {
   shuffleTarget = 0;
   // v15.2.8: dealt LOCALLY by crypto.getRandomValues, then committed like a manual pick
   fighterOpts = MOCK_SHELF;
+  // v16.0.1: the whale shelf paginates (10 cells/page, CLAMPED at both ends —
+  // no wrap). Reset to page 0 whenever the shelf is rebuilt (open()).
+  fighterPage = 0;
   // versus
   current = null;
   myScore = 0;
@@ -54855,6 +54942,7 @@ var ArenaUI = class {
     this.page = 0;
     this.histPage = 0;
     this.fighterOpts = this.fighterShelf();
+    this.fighterPage = 0;
     this.shareMsg = "";
     this.notice = "";
     void this.refreshBoard();
@@ -55346,6 +55434,10 @@ var ArenaUI = class {
       this.focus = 0;
       this.myScore = this.bestScore();
       this.resetSeal();
+      return { act: "move" };
+    }
+    if (id === "fpage:prev" || id === "fpage:next") {
+      this.fighterPage = shelfPageClamp(this.fighterPage + (id === "fpage:next" ? 1 : -1), this.fighterOpts.length);
       return { act: "move" };
     }
     if (id === "page:prev") {
@@ -56191,7 +56283,7 @@ var ArenaUI = class {
     else if (this.step === "format") this.stepFormat(c3, frame);
     else if (this.step === "battle") this.stepBattle(c3, frame, art);
     else if (this.step === "stake") this.stepStake(c3, frame);
-    else if (this.step === "fighter") this.stepFighter(c3);
+    else if (this.step === "fighter") this.stepFighter(c3, frame);
     else this.stepConfirm(c3, frame);
     this.btn(c3, frame, { id: "back", x: 8, y: 198, w: 70, h: 14 }, "BACK");
   }
@@ -56326,14 +56418,33 @@ var ArenaUI = class {
     this.coinPile(c3, VW / 2 - 12, 156, this.cfg.stake, frame);
     this.btn(c3, frame, { id: "stake:next", x: 122, y: 170, w: 140, h: 18 }, "NEXT", { green: true });
   }
-  stepFighter(c3) {
+  // v16.0.1: the cell portrait is ALWAYS a fighter, never a flat swatch.
+  // gonna-skin NFTs and failed portrait loads fall back to the base GONNA
+  // frame deterministically TINTED by assetId (same id = same hue, always);
+  // a portrait still in flight gets an honest pulsing placeholder instead.
+  shelfPortrait(pick) {
+    if (pick.skin !== "gonna") {
+      const p4 = skinPortrait(pick.skin);
+      if (p4) return p4;
+      if (!skinPortraitFailed(pick.skin)) return null;
+    }
+    const base = this.framesRef?.get("0_0") ?? null;
+    if (!base) return null;
+    if (pick.assetId === null) return base;
+    return tintedFighterPortrait(base, pick.assetId) ?? base;
+  }
+  stepFighter(c3, frame) {
     drawText2(c3, "FIGHTER - NFT SKIN IF YOU OWN IT", VW / 2, 44, 1, GRAY2, "center");
     const opts = this.fighterOpts;
-    for (let i3 = 0; i3 < opts.length; i3++) {
-      const o3 = opts[i3];
+    const pages = shelfPages(opts.length);
+    this.fighterPage = shelfPageClamp(this.fighterPage, opts.length);
+    const from = this.fighterPage * SHELF_PAGE;
+    const vis = opts.slice(from, from + SHELF_PAGE);
+    for (let i3 = 0; i3 < vis.length; i3++) {
+      const o3 = vis[i3];
       const x4 = 22 + i3 % 5 * 70;
       const y5 = 58 + Math.floor(i3 / 5) * 74;
-      const r4 = { id: "fighter:" + i3, x: x4, y: y5, w: 60, h: 62 };
+      const r4 = { id: "fighter:" + (from + i3), x: x4, y: y5, w: 60, h: 62 };
       const lit = this.hots.length === this.focus;
       this.hots.push(r4);
       c3.fillStyle = o3.owned ? "#101a10" : "#0a0c12";
@@ -56341,12 +56452,16 @@ var ArenaUI = class {
       c3.strokeStyle = lit ? "#ffffff" : o3.owned ? "#2e5a26" : "#232838";
       c3.lineWidth = 1;
       c3.strokeRect(x4 + 0.5, y5 + 0.5, 59, 61);
-      const skin = o3.pick.skin;
-      const info = SKIN_INFO[skin] ?? SKIN_INFO.gonna;
-      const port = skinPortrait(skin);
-      if (port && o3.owned) this.drawFit(c3, port, x4 + 18, y5 + 4, 24);
-      else {
-        c3.fillStyle = o3.owned ? info.accent : "#1a1e28";
+      if (o3.owned) {
+        const img = this.shelfPortrait(o3.pick);
+        if (img) this.drawFit(c3, img, x4 + 18, y5 + 4, 24);
+        else {
+          c3.fillStyle = "#141a24";
+          c3.fillRect(x4 + 18, y5 + 4, 24, 24);
+          if ((frame & 16) !== 0) drawText2(c3, "..", x4 + 30, y5 + 12, 1, DIM2, "center");
+        }
+      } else {
+        c3.fillStyle = "#1a1e28";
         c3.fillRect(x4 + 18, y5 + 4, 24, 24);
       }
       drawText2(c3, o3.pick.name.slice(0, 9), x4 + 30, y5 + 32, 1, o3.owned ? "#c8ccd4" : DIM2, "center");
@@ -56354,6 +56469,11 @@ var ArenaUI = class {
       if (this.cfg.fighter.assetId === o3.pick.assetId && this.cfg.fighter.skin === o3.pick.skin) {
         drawCrown(c3, x4 + 24, y5 - 6);
       }
+    }
+    if (pages > 1) {
+      if (this.fighterPage > 0) this.btn(c3, frame, { id: "fpage:prev", x: 258, y: 198, w: 18, h: 14 }, "<", { small: true });
+      if (this.fighterPage < pages - 1) this.btn(c3, frame, { id: "fpage:next", x: 344, y: 198, w: 18, h: 14 }, ">", { small: true });
+      drawText2(c3, "PAGE " + (this.fighterPage + 1) + "/" + pages, 310, 202, 1, DIM2, "center");
     }
     if (!this.walletConnected()) drawText2(c3, "MOCK SHELF - CONNECT FOR REAL NFTS", VW / 2, 170, 1, DIM2, "center");
     else if (opts.length <= 1) drawText2(c3, "NO GONNA NFTS IN THIS WALLET - BASE FIGHTER", VW / 2, 170, 1, DIM2, "center");

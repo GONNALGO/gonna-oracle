@@ -112,6 +112,9 @@ export function skinFramesLoaded(skin: SkinId): Map<string, HTMLImageElement> | 
 
 // Eagerly cache just the idle portrait (r0_c0) of every skin for the select grid.
 const portraitCache = new Map<SkinId, HTMLImageElement>();
+// v16.0.1: a portrait that 404'd is FAILED, not "loading" — pickers must show
+// the deterministic tinted fighter, never the old flat green swatch forever.
+const portraitFailedSet = new Set<SkinId>();
 export function loadSkinPortraits(onEach?: () => void): void {
   for (const skin of SKINS) {
     if (skin === 'gonna' || portraitCache.has(skin)) continue;
@@ -120,12 +123,110 @@ export function loadSkinPortraits(onEach?: () => void): void {
       portraitCache.set(skin, img);
       if (onEach) onEach();
     };
-    img.onerror = () => { /* tile falls back to a colored swatch */ };
+    img.onerror = () => {
+      portraitFailedSet.add(skin);
+    };
     img.src = 'frames/skins/' + skin + '_r0_c0.png';
   }
 }
 export function skinPortrait(skin: SkinId): HTMLImageElement | null {
   return portraitCache.get(skin) ?? null;
+}
+export function skinPortraitFailed(skin: SkinId): boolean {
+  return portraitFailedSet.has(skin);
+}
+
+// ---------- v16.0.1: whale-shelf paging + deterministic NFT tint ----------
+// The arena CREATE CARD shelf lays fighters out 5 x 2 = 10 cells a page.
+// Paging CLAMPS at both ends (no wrap): a prev/next tap past the edge is a
+// no-op, and the buttons hide at the edges like the PIT board pager.
+export const SHELF_PAGE = 10;
+export function shelfPages(count: number): number {
+  return Math.max(1, Math.ceil(Math.max(0, count) / SHELF_PAGE));
+}
+export function shelfPageClamp(page: number, count: number): number {
+  const last = shelfPages(count) - 1;
+  if (!Number.isFinite(page)) return 0; // shelf changed under us: reset safe
+  return Math.min(Math.max(0, Math.floor(page)), last);
+}
+
+// Deterministic hue for an assetId (Knuth multiplicative hash): the SAME id
+// always gets the SAME tint, different ids spread across the wheel.
+export function nftHue(assetId: number): number {
+  let h = (Math.imul(assetId >>> 0, 2654435761) >>> 0) ^ 0x9e3779b9;
+  h = (h ^ (h >>> 15)) >>> 0;
+  return h % 360;
+}
+
+function rgb2hsl(r: number, g: number, b: number): [number, number, number] {
+  const mx = Math.max(r, g, b);
+  const mn = Math.min(r, g, b);
+  const l = (mx + mn) / 510;
+  if (mx === mn) return [0, 0, l];
+  const d = (mx - mn) / 255;
+  const s = l > 0.5 ? d / (2 - (mx + mn) / 255) : d / ((mx + mn) / 255);
+  let h: number;
+  if (mx === r) h = ((g - b) / (mx - mn) + (g < b ? 6 : 0)) * 60;
+  else if (mx === g) h = ((b - r) / (mx - mn) + 2) * 60;
+  else h = ((r - g) / (mx - mn) + 4) * 60;
+  return [h, s, l];
+}
+
+function hsl2rgb(h: number, s: number, l: number): [number, number, number] {
+  if (s === 0) {
+    const v = Math.round(l * 255);
+    return [v, v, v];
+  }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const f = (t: number): number => {
+    let tt = t;
+    if (tt < 0) tt += 1;
+    if (tt > 1) tt -= 1;
+    if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+    if (tt < 1 / 2) return q;
+    if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+    return p;
+  };
+  return [Math.round(f(h / 360 + 1 / 3) * 255), Math.round(f(h / 360) * 255), Math.round(f(h / 360 - 1 / 3) * 255)];
+}
+
+// The base GONNA fighter hue (~105deg green) is re-hued to nftHue(assetId),
+// saturation/luminosity untouched, one offscreen pass cached per assetId.
+const BASE_HUE = 105;
+const tintCache = new Map<number, HTMLCanvasElement>();
+export function tintedFighterPortrait(base: CanvasImageSource, assetId: number): HTMLCanvasElement | null {
+  const hit = tintCache.get(assetId);
+  if (hit) return hit;
+  if (typeof document === 'undefined') return null; // node/CI: no canvas
+  const w = (base as HTMLImageElement).naturalWidth || (base as HTMLCanvasElement).width || 0;
+  const h = (base as HTMLImageElement).naturalHeight || (base as HTMLCanvasElement).height || 0;
+  if (!w || !h) return null;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  if (!x) return null;
+  x.imageSmoothingEnabled = false;
+  x.drawImage(base, 0, 0);
+  try {
+    const d = x.getImageData(0, 0, w, h);
+    const shift = nftHue(assetId) - BASE_HUE;
+    const px = d.data;
+    for (let i = 0; i < px.length; i += 4) {
+      if (px[i + 3] === 0) continue;
+      const [hh, ss, ll] = rgb2hsl(px[i], px[i + 1], px[i + 2]);
+      const [r, g, b] = hsl2rgb((hh + shift + 360) % 360, ss, ll);
+      px[i] = r;
+      px[i + 1] = g;
+      px[i + 2] = b;
+    }
+    x.putImageData(d, 0, 0);
+  } catch {
+    return null; // tainted/unreadable source: caller falls back untinted
+  }
+  tintCache.set(assetId, c);
+  return c;
 }
 
 // ---------- fighter selection ----------

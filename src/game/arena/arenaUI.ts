@@ -19,7 +19,7 @@ import type { ViewFit } from '../fit';
 import type { Input } from '../input';
 import type { Art } from '../sprites';
 import * as wallet from '../wallet';
-import { SKIN_INFO, skinPortrait } from '../skins';
+import { SKIN_INFO, skinPortrait, skinPortraitFailed, SHELF_PAGE, shelfPages, shelfPageClamp, tintedFighterPortrait } from '../skins';
 import type { SkinId } from '../skins';
 import { getArenaAdapter, arenaMode, closeGate, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
 import { activeSignOp, explorerTxUrl, getCloseTxid, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
@@ -174,6 +174,9 @@ export class ArenaUI {
   private shuffleT = -1; // -1 = idle; >=0 frames into the SHUFFLE animation (RANDOM)
   private shuffleTarget = 0; // v15.2.8: dealt LOCALLY by crypto.getRandomValues, then committed like a manual pick
   private fighterOpts: FighterOpt[] = MOCK_SHELF;
+  // v16.0.1: the whale shelf paginates (10 cells/page, CLAMPED at both ends —
+  // no wrap). Reset to page 0 whenever the shelf is rebuilt (open()).
+  private fighterPage = 0;
   // versus
   private current: Challenge | null = null;
   private myScore = 0;
@@ -283,6 +286,7 @@ export class ArenaUI {
     this.page = 0;
     this.histPage = 0;
     this.fighterOpts = this.fighterShelf();
+    this.fighterPage = 0; // v16.0.1: fresh shelf -> back to page 1
     this.shareMsg = '';
     this.notice = '';
     void this.refreshBoard();
@@ -869,6 +873,11 @@ export class ArenaUI {
       this.focus = 0;
       this.myScore = this.bestScore();
       this.resetSeal();
+      return { act: 'move' };
+    }
+    // v16.0.1: whale shelf pager (YOUR FIGHTER step) — clamped, no wrap
+    if (id === 'fpage:prev' || id === 'fpage:next') {
+      this.fighterPage = shelfPageClamp(this.fighterPage + (id === 'fpage:next' ? 1 : -1), this.fighterOpts.length);
       return { act: 'move' };
     }
     if (id === 'page:prev') {
@@ -1853,7 +1862,7 @@ export class ArenaUI {
     else if (this.step === 'format') this.stepFormat(c, frame);
     else if (this.step === 'battle') this.stepBattle(c, frame, art);
     else if (this.step === 'stake') this.stepStake(c, frame);
-    else if (this.step === 'fighter') this.stepFighter(c);
+    else if (this.step === 'fighter') this.stepFighter(c, frame);
     else this.stepConfirm(c, frame);
     this.btn(c, frame, { id: 'back', x: 8, y: 198, w: 70, h: 14 }, 'BACK');
   }
@@ -1997,14 +2006,37 @@ export class ArenaUI {
     this.btn(c, frame, { id: 'stake:next', x: 122, y: 170, w: 140, h: 18 }, 'NEXT', { green: true });
   }
 
-  private stepFighter(c: CanvasRenderingContext2D): void {
+  // v16.0.1: the cell portrait is ALWAYS a fighter, never a flat swatch.
+  // gonna-skin NFTs and failed portrait loads fall back to the base GONNA
+  // frame deterministically TINTED by assetId (same id = same hue, always);
+  // a portrait still in flight gets an honest pulsing placeholder instead.
+  private shelfPortrait(pick: FighterPick): CanvasImageSource | null {
+    if (pick.skin !== 'gonna') {
+      const p = skinPortrait(pick.skin as SkinId);
+      if (p) return p;
+      if (!skinPortraitFailed(pick.skin as SkinId)) return null; // still loading
+      // load FAILED: tinted stand-in below (never the old flat accent square)
+    }
+    const base = this.framesRef?.get('0_0') ?? null;
+    if (!base) return null;
+    if (pick.assetId === null) return base; // the free default fighter stays pure
+    return tintedFighterPortrait(base, pick.assetId) ?? base;
+  }
+
+  private stepFighter(c: CanvasRenderingContext2D, frame: number): void {
     drawText(c, 'FIGHTER - NFT SKIN IF YOU OWN IT', VW / 2, 44, 1, GRAY, 'center');
     const opts = this.fighterOpts;
-    for (let i = 0; i < opts.length; i++) {
-      const o = opts[i];
+    // v16.0.1: whale shelf paging — 5x2 cells a page, CLAMPED (no wrap):
+    // prev/next stop at the edges and the edge button hides (PIT board style)
+    const pages = shelfPages(opts.length);
+    this.fighterPage = shelfPageClamp(this.fighterPage, opts.length);
+    const from = this.fighterPage * SHELF_PAGE;
+    const vis = opts.slice(from, from + SHELF_PAGE);
+    for (let i = 0; i < vis.length; i++) {
+      const o = vis[i];
       const x = 22 + (i % 5) * 70;
       const y = 58 + Math.floor(i / 5) * 74;
-      const r = { id: 'fighter:' + i, x, y, w: 60, h: 62 };
+      const r = { id: 'fighter:' + (from + i), x, y, w: 60, h: 62 };
       const lit = this.hots.length === this.focus;
       this.hots.push(r);
       c.fillStyle = o.owned ? '#101a10' : '#0a0c12';
@@ -2012,12 +2044,17 @@ export class ArenaUI {
       c.strokeStyle = lit ? '#ffffff' : o.owned ? '#2e5a26' : '#232838';
       c.lineWidth = 1;
       c.strokeRect(x + 0.5, y + 0.5, 59, 61);
-      const skin = o.pick.skin as SkinId;
-      const info = SKIN_INFO[skin] ?? SKIN_INFO.gonna;
-      const port = skinPortrait(skin);
-      if (port && o.owned) this.drawFit(c, port, x + 18, y + 4, 24);
-      else {
-        c.fillStyle = o.owned ? info.accent : '#1a1e28';
+      if (o.owned) {
+        const img = this.shelfPortrait(o.pick);
+        if (img) this.drawFit(c, img, x + 18, y + 4, 24);
+        else {
+          // honest LOADING placeholder (portrait PNG still in flight)
+          c.fillStyle = '#141a24';
+          c.fillRect(x + 18, y + 4, 24, 24);
+          if ((frame & 16) !== 0) drawText(c, '..', x + 30, y + 12, 1, DIM, 'center');
+        }
+      } else {
+        c.fillStyle = '#1a1e28'; // locked cell: dark box, never accent green
         c.fillRect(x + 18, y + 4, 24, 24);
       }
       drawText(c, o.pick.name.slice(0, 9), x + 30, y + 32, 1, o.owned ? '#c8ccd4' : DIM, 'center');
@@ -2025,6 +2062,12 @@ export class ArenaUI {
       if (this.cfg.fighter.assetId === o.pick.assetId && this.cfg.fighter.skin === o.pick.skin) {
         drawCrown(c, x + 24, y - 6);
       }
+    }
+    // pager row (same line as BACK, right side): < PAGE n/m >
+    if (pages > 1) {
+      if (this.fighterPage > 0) this.btn(c, frame, { id: 'fpage:prev', x: 258, y: 198, w: 18, h: 14 }, '<', { small: true });
+      if (this.fighterPage < pages - 1) this.btn(c, frame, { id: 'fpage:next', x: 344, y: 198, w: 18, h: 14 }, '>', { small: true });
+      drawText(c, 'PAGE ' + (this.fighterPage + 1) + '/' + pages, 310, 202, 1, DIM, 'center');
     }
     // v15.2.2: honest shelf captions — mock dressing only with NO wallet
     if (!this.walletConnected()) drawText(c, 'MOCK SHELF - CONNECT FOR REAL NFTS', VW / 2, 170, 1, DIM, 'center');
