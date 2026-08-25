@@ -90,8 +90,15 @@ export interface ClaimResult {
 // A match leaves the BOARD the moment it resolves — it lives here forever.
 export interface HistoryEntry {
   id: number;
+  // $GONNA per seat. NaN on an event-only terminal with no card memory (the
+  // chain event names pot/winner/fee, never the per-seat stake) — legacyStats
+  // SKIPS the money math for it but still counts the W/L. NEVER invented
+  // (the v15.2.8 pot/2 duel guess was wrong for every table).
   stake: number;
-  pot: number; // total paid to the winner
+  pot: number; // GROSS pot = stake x seats taken (fee still inside) — the winner receives `payout`, never the full pot
+  payout?: number; // EXACT net $GONNA the winner was paid (on-chain close event / card memory). Undefined = estimate from the gross pot via the contract fee.
+  fee?: number; // EXACT treasury fee ($GONNA) when known (pairs with payout)
+  forfeited?: boolean; // v2 seat-clock forfeit: the winner was ALSO refunded his own stake in full on top of `payout`
   format: Format;
   stageMode: StageMode;
   stageIdx: number | null;
@@ -267,6 +274,65 @@ export function splitPot(stake: number, pot: number, seatsTaken: number): { pool
   const pool = Math.max(pot, stake * Math.max(0, seatsTaken));
   const fee = pool * 0.05;
   return { pool, fee, takes: pool - fee };
+}
+
+// v15.2.9: CONTRACT-EXACT net payout from a GROSS pot. The contract computes
+// protocol_fee = floor(potMicro * 500 / 10000) with an overflow-proof
+// decomposition (contract.py protocol_fee) and pays potMicro - feeMicro —
+// integer micro math here, never the float `pool * 0.05` estimate, so
+// stake-1 duel -> pot 2 -> fee 0.1 -> payout EXACTLY 1.9.
+export function netPayoutFromPot(potGonna: number): { pot: number; fee: number; payout: number } {
+  const potMicro = Math.round(potGonna * 1e6);
+  const feeMicro = Math.floor((potMicro * 500) / 10000);
+  return { pot: potMicro / 1e6, fee: feeMicro / 1e6, payout: (potMicro - feeMicro) / 1e6 };
+}
+
+// v15.2.9 (owner decree): the TRUE settled-money legs of one address over a
+// merged history — NET IS A SIGNED P&L, decimals included.
+//   paid     = entry.stake (his seat) on every settled match he played
+//   received = winner  -> EXACT net payout (event value preferred, else the
+//              contract-exact estimate; a forfeit ALSO returns his own stake)
+//              loser   -> 0
+//              tie/refund entries never reach this loop (skipped with the
+//              W/L): the full refund is paid == received, net 0 by definition
+//   won  = Σ received on wins (net payouts — 1.9 on a stake-1 duel)
+//   lost = Σ paid on losses (refunds are NOT losses)
+//   net  = Σ received − Σ paid over ALL settled matches (a stake-1 duel win
+//          plus a stake-1 table loss = 1.9 − 2 = −0.1, never "+0")
+//   Entries whose stake the chain never told us (NaN, event-only terminals)
+//   still count played/W/L but are SKIPPED here — the money is never invented.
+export function accumulateLegacy(
+  hist: HistoryEntry[],
+  address: string,
+): { wins: number; losses: number; won: number; lost: number; net: number; bestWin: number } {
+  let wins = 0;
+  let losses = 0;
+  let won = 0;
+  let lost = 0;
+  let net = 0;
+  let bestWin = 0;
+  for (const h of hist) {
+    if (!h.players.some((p) => p.address === address)) continue;
+    if (!h.winner) continue; // tie: everyone refunded — no scar, no W, no L, net leg 0
+    const isWin = h.winner === address;
+    if (isWin) wins++;
+    else losses++;
+    if (!Number.isFinite(h.stake)) continue; // stake UNKNOWN (event-only terminal): W/L counted, money skipped
+    const paid = h.stake;
+    let received = 0;
+    if (isWin) {
+      const payout = Number.isFinite(h.payout)
+        ? (h.payout as number)
+        : netPayoutFromPot(Number.isFinite(h.pot) && h.pot > 0 ? h.pot : h.stake * h.players.length).payout;
+      received = h.forfeited ? h.stake + payout : payout; // forfeit: own stake back in full + the winner share
+      won += received;
+      if (received > bestWin) bestWin = received;
+    } else {
+      lost += paid;
+    }
+    net += received - paid;
+  }
+  return { wins, losses, won, lost, net, bestWin };
 }
 
 // degen relative time: "57M AGO" / "1H 02M AGO" / "3D AGO"
@@ -721,24 +787,10 @@ export class MockArenaAdapter implements ArenaAdapter {
 
   async legacyStats(address: string): Promise<LegacyStats> {
     const s = this.store();
-    let wins = 0;
-    let losses = 0;
-    let won = 0;
-    let lost = 0;
-    let bestWin = 0;
+    // v15.2.9: the shared signed-P&L accumulator (mock history carries gross
+    // pot + known stake, no exact payout -> contract-exact estimate)
+    const { wins, losses, won, lost, net, bestWin } = accumulateLegacy(s.history!, address);
     let open = 0;
-    for (const h of s.history!) {
-      if (!h.players.some((p) => p.address === address)) continue;
-      if (h.winner === address) {
-        wins++;
-        const takes = splitPot(h.stake, h.pot, h.players.length).takes;
-        won += takes;
-        if (takes > bestWin) bestWin = takes;
-      } else {
-        losses++;
-        lost += h.stake;
-      }
-    }
     // OPEN: live cards where I'm seated (or the creator) — not settled yet
     for (const c of s.challenges) {
       this.refresh(c);
@@ -755,7 +807,7 @@ export class MockArenaAdapter implements ArenaAdapter {
       winRate: played > 0 ? Math.round((wins / played) * 100) : 0,
       won,
       lost,
-      net: won - lost,
+      net,
       bestWin,
     };
   }
@@ -1391,6 +1443,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         // FUTURE deadline
         resolvedAt: kit.getResolveAt(c.id) ?? Math.min(c.deadline, Date.now()),
         claimed: c.status === 'claimed',
+        forfeited: c.forfeited, // v15.2.9: forfeit closes pay the own stake back on top
       });
     }
     for (const ev of await this.closeEvents()) {
@@ -1398,10 +1451,19 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       const mem = kit.rememberedCard(ev.cid);
       byId.set(ev.cid, {
         id: ev.cid,
-        // event knows pot = payout + fee exactly; stake/seats come from the
-        // card memory when this browser witnessed the card, else duel estimate
-        stake: mem?.stake ?? (ev.payout + ev.fee) / 1e6 / 2,
-        pot: (ev.payout + ev.fee) / 1e6,
+        // v15.2.9: the stake comes from card memory ONLY — the chain event
+        // names pot/winner/fee, never the per-seat stake. No memory = stake
+        // UNKNOWN (NaN): legacyStats still counts the W/L but SKIPS the money
+        // math. The old (payout+fee)/2 duel guess invented 2.5-GONNA seats on
+        // 5-seat tables — inventing numbers is banned.
+        stake: mem?.stake ?? NaN,
+        // GROSS pot (fee inside): a resolve pays payout+fee = stake x roster
+        // exactly. A forfeit event only names the FORFEITED seat (payout+fee
+        // = ONE stake) — the gross pot needs the memory roster, else unknown.
+        pot: ev.kind === 'forfeited' ? (mem ? mem.stake * Math.max(1, mem.players.length) : NaN) : (ev.payout + ev.fee) / 1e6,
+        payout: ev.payout / 1e6, // EXACT net payout (forfeit: the winner SHARE — his own stake came back on top)
+        fee: ev.fee / 1e6,
+        forfeited: ev.kind === 'forfeited',
         format: mem && mem.seatsTotal > 2 ? 'open' : 'duel',
         stageMode: mem?.stageMode ?? 'full',
         stageIdx: pickCardStage(ev.cid, mem?.stageMode ?? 'full', { memory: mem ? { stageIdx: mem.stageIdx, stageVerified: mem.stageVerified } : null, link: getLinkStageHint(ev.cid) }).stageIdx,
@@ -1428,7 +1490,12 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       byId.set(mem.cid, {
         id: mem.cid,
         stake: mem.stake,
-        pot: mem.payout + mem.fee || mem.stake * Math.max(1, mem.players.length),
+        // GROSS pot: a forfeit memory's payout+fee is only the forfeited seat
+        // (ONE stake) — the gross pot is stake x roster like every close
+        pot: mem.closedKind === 'forfeited' ? mem.stake * Math.max(1, mem.players.length) : mem.payout + mem.fee || mem.stake * Math.max(1, mem.players.length),
+        payout: mem.payout > 0 ? mem.payout : undefined, // exact net payout remembered at the close
+        fee: mem.fee > 0 ? mem.fee : undefined,
+        forfeited: mem.closedKind === 'forfeited',
         format: mem.seatsTotal > 2 ? 'open' : 'duel',
         stageMode: mem.stageMode,
         stageIdx: pickCardStage(mem.cid, mem.stageMode, { memory: { stageIdx: mem.stageIdx, stageVerified: mem.stageVerified }, link: getLinkStageHint(mem.cid) }).stageIdx,
@@ -1446,29 +1513,16 @@ export class TestnetArenaAdapter implements ArenaAdapter {
 
   async legacyStats(address: string): Promise<LegacyStats> {
     const hist = await this.listHistory();
-    let wins = 0;
-    let losses = 0;
-    let won = 0;
-    let lost = 0;
-    let bestWin = 0;
-    for (const h of hist) {
-      if (!h.players.some((p) => p.address === address)) continue;
-      if (!h.winner) continue; // tie: everyone refunded — no scar, no W, no L
-      if (h.winner === address) {
-        wins++;
-        const takes = splitPot(h.stake, h.pot, h.players.length).takes;
-        won += takes;
-        if (takes > bestWin) bestWin = takes;
-      } else {
-        losses++;
-        lost += h.stake;
-      }
-    }
+    // v15.2.9 (owner decree): TRUE signed P&L — net = Σ received (exact net
+    // payouts, event values preferred) − Σ paid (seat stakes on ALL settled
+    // matches, wins included). The stake-1 duel win (1.9) plus the stake-1
+    // table loss reads −0.1, never "+0".
+    const { wins, losses, won, lost, net, bestWin } = accumulateLegacy(hist, address);
     // OPEN: live cards where I'm seated (or the creator) — not settled yet
     const mine = await this.myChallenges(address);
     const open = mine.filter((c) => c.status === 'open' || c.status === 'full' || c.status === 'expired').length;
     const played = wins + losses;
-    return { played, wins, losses, open, winRate: played > 0 ? Math.round((wins / played) * 100) : 0, won, lost, net: won - lost, bestWin };
+    return { played, wins, losses, open, winRate: played > 0 ? Math.round((wins / played) * 100) : 0, won, lost, net, bestWin };
   }
 }
 

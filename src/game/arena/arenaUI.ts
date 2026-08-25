@@ -2534,7 +2534,15 @@ export class ArenaUI {
       c.lineWidth = 1;
       c.strokeRect(8.5, y + 0.5, VW - 17, ROW_H - 5);
       this.coinPile(c, 14, y + 16, h.stake, frame + i * 5);
-      const takes = splitPot(h.stake, h.pot, h.players.length).takes;
+      // v15.2.9: the EXACT on-chain net payout when the entry carries it
+      // (event / card memory — a forfeit also returned the winner's own
+      // stake), else the estimate from the gross pot. Never a NaN 'TOOK 0'
+      // on event-only terminals whose stake is unknown.
+      const takes = Number.isFinite(h.payout)
+        ? h.forfeited && Number.isFinite(h.stake)
+          ? h.stake + (h.payout as number)
+          : (h.payout as number)
+        : splitPot(h.stake, h.pot, h.players.length).takes;
       const head = (h.winnerName + ' TOOK ' + fmtAmount(takes)).slice(0, 34);
       drawText(c, head, 40, y + 4, 1, GOLD);
       if (this.histPaid(h)) drawText(c, 'PAID', VW - 14, y + 4, 1, GOLD, 'right');
@@ -2570,10 +2578,19 @@ export class ArenaUI {
     y += 4;
     // v14: honest settlement math — pool = stake x seats taken, the contract
     // keeps 5% (treasury fee) inside resolve, the winner takes the rest
-    const sp = splitPot(h.stake, h.pot, h.players.length);
+    const spEst = splitPot(h.stake, h.pot, h.players.length);
+    // v15.2.9: exact event/memory payout + fee beat the estimate (a forfeit
+    // row shows the winner share PLUS his own stake back — the real credit)
+    const sp = Number.isFinite(h.payout)
+      ? {
+          pool: Number.isFinite(h.pot) && h.pot > 0 ? h.pot : spEst.pool,
+          fee: Number.isFinite(h.fee) ? (h.fee as number) : spEst.fee,
+          takes: h.forfeited && Number.isFinite(h.stake) ? h.stake + (h.payout as number) : (h.payout as number),
+        }
+      : spEst;
     const lines: [string, string][] = [
       ['STAGE', this.stageLabel(h.stageMode, h.stageIdx, h.stageVerified !== false)],
-      ['STAKE', fmtAmount(h.stake) + ' $GONNA A SEAT'],
+      ['STAKE', Number.isFinite(h.stake) ? fmtAmount(h.stake) + ' $GONNA A SEAT' : 'UNKNOWN - DATA ON CHAIN'],
       ['POT', fmtAmount(sp.pool) + ' $GONNA'],
       ['FEE', fmtAmount(sp.fee) + ' $GONNA (5%)'],
       ['WINNER TAKES', fmtAmount(sp.takes) + ' $GONNA'],
@@ -2605,10 +2622,10 @@ export class ArenaUI {
       ['LOSSES', s ? String(s.losses) : '-', RED],
       ['OPEN', s ? String(s.open) : '-', '#ff8a3c'],
       ['WIN RATE', s ? s.winRate + '%' : '-', '#c8ccd4'],
-      ['$GONNA WON', s ? fmtGonna(s.won) : '-', GOLD],
-      ['$GONNA LOST', s ? fmtGonna(s.lost) : '-', RED],
-      ['NET', s ? (s.net >= 0 ? '+' : '-') + fmtGonna(Math.abs(s.net)) : '-', s && s.net < 0 ? RED : GREEN],
-      ['BEST WIN', s ? fmtGonna(s.bestWin) : '-', GOLD],
+      ['$GONNA WON', s ? fmtAmount(s.won) : '-', GOLD],
+      ['$GONNA LOST', s ? fmtAmount(s.lost) : '-', RED],
+      ['NET', s ? (s.net >= 0 ? '+' : '-') + fmtAmount(Math.abs(s.net)) : '-', s && s.net < 0 ? RED : GREEN],
+      ['BEST WIN', s ? fmtAmount(s.bestWin) : '-', GOLD],
     ];
     for (let i = 0; i < rows.length; i++) {
       const y = 42 + i * 14;
