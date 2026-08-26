@@ -161,7 +161,7 @@ const mkCtx = () => ({
   save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, arc() {},
 });
 function render(card, me) {
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   setMock(me ? { address: me, nfts: [] } : null);
   const ui = new ArenaUI();
   ui.current = card;

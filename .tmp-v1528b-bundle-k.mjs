@@ -1,6 +1,58 @@
+// src/game/arena/arenaKit.ts
+function envNetwork() {
+  try {
+    return import.meta.env?.VITE_ARENA_NETWORK === "mainnet" ? "mainnet" : "testnet";
+  } catch {
+    return "testnet";
+  }
+}
+var ARENA_NETWORK = envNetwork();
+var ARENA_NETS = {
+  testnet: {
+    appId: 769907387,
+    // ARENA APP v2.1
+    legacyAppId: 769688298,
+    // QuantumArena v1 (superseded)
+    gonnaAsa: 769688287,
+    opUpAppId: 769688641,
+    treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
+    oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
+    algodUrl: "https://testnet-api.algonode.cloud",
+    oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+  },
+  mainnet: {
+    appId: 0,
+    // PLACEHOLDER — M-2 deploy flips this (0 = unreachable on purpose)
+    legacyAppId: 0,
+    // no legacy on mainnet
+    gonnaAsa: 2582294183,
+    // REAL mainnet $GONNA (same id as src/game/wallet.ts)
+    opUpAppId: 0,
+    // PLACEHOLDER — M-2
+    treasuryAddr: "",
+    // PLACEHOLDER — M-2
+    oracleAddr: "",
+    // PLACEHOLDER — M-2
+    algodUrl: "https://mainnet-api.algonode.cloud",
+    oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+    // same Render service; flipped at M-2
+  }
+};
+var NET = ARENA_NETS[ARENA_NETWORK];
+function netLsKey(base) {
+  return base + "." + ARENA_NETWORK;
+}
+
 // src/game/arena/testnetKit.ts
-var ARENA_APP_ID = 769907387;
-var ALGOD_TESTNET = "https://testnet-api.algonode.cloud";
+var ARENA_APP_ID = NET.appId;
+var LEGACY_ARENA_APP_ID = NET.legacyAppId;
+var GONNA_ASA = NET.gonnaAsa;
+var GONNA_ASA_TESTNET = NET.gonnaAsa;
+var OPUP_APP_ID = NET.opUpAppId;
+var TREASURY_ADDR = NET.treasuryAddr;
+var ORACLE_ADDR = NET.oracleAddr;
+var ALGOD_URL = NET.algodUrl;
+var ALGOD_TESTNET = NET.algodUrl;
 function parseStageNote(note) {
   const m = /^gonna:v2:stage:(\d)$/.exec(new TextDecoder().decode(note));
   if (!m) return null;
@@ -32,7 +84,7 @@ function sdk() {
 }
 async function algodClient() {
   const a = await sdk();
-  return new a.Algodv2("", ALGOD_TESTNET, "");
+  return new a.Algodv2("", ALGOD_URL, "");
 }
 async function nextChallengeId() {
   const algod = await algodClient();
@@ -52,6 +104,9 @@ async function methodSelector(a, sig) {
   });
   return m.getSelector();
 }
+var TX_KEY = netLsKey("gonna.arena.txids");
+var RES_KEY = netLsKey("gonna.arena.resolved");
+var CLOSE_TX_KEY = netLsKey("gonna.arena.closetx");
 var INDEXER_TESTNET = "https://testnet-idx.algonode.cloud";
 function b64ToBytes(s) {
   return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));

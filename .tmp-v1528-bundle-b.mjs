@@ -38,17 +38,72 @@ var __toESM = (mod2, isNodeMode, target) => (target = mod2 != null ? __create(__
 ));
 var __toCommonJS = (mod2) => __copyProps(__defProp({}, "__esModule", { value: true }), mod2);
 
+// src/game/arena/arenaKit.ts
+function envNetwork() {
+  try {
+    return import.meta.env?.VITE_ARENA_NETWORK === "mainnet" ? "mainnet" : "testnet";
+  } catch {
+    return "testnet";
+  }
+}
+function netLsKey(base) {
+  return base + "." + ARENA_NETWORK;
+}
+var ARENA_NETWORK, IS_MAINNET, ARENA_NETS, NET, ARENA_FIXTURES_ENABLED;
+var init_arenaKit = __esm({
+  "src/game/arena/arenaKit.ts"() {
+    ARENA_NETWORK = envNetwork();
+    IS_MAINNET = ARENA_NETWORK === "mainnet";
+    ARENA_NETS = {
+      testnet: {
+        appId: 769907387,
+        // ARENA APP v2.1
+        legacyAppId: 769688298,
+        // QuantumArena v1 (superseded)
+        gonnaAsa: 769688287,
+        opUpAppId: 769688641,
+        treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
+        oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
+        algodUrl: "https://testnet-api.algonode.cloud",
+        oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+      },
+      mainnet: {
+        appId: 0,
+        // PLACEHOLDER — M-2 deploy flips this (0 = unreachable on purpose)
+        legacyAppId: 0,
+        // no legacy on mainnet
+        gonnaAsa: 2582294183,
+        // REAL mainnet $GONNA (same id as src/game/wallet.ts)
+        opUpAppId: 0,
+        // PLACEHOLDER — M-2
+        treasuryAddr: "",
+        // PLACEHOLDER — M-2
+        oracleAddr: "",
+        // PLACEHOLDER — M-2
+        algodUrl: "https://mainnet-api.algonode.cloud",
+        oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+        // same Render service; flipped at M-2
+      }
+    };
+    NET = ARENA_NETS[ARENA_NETWORK];
+    ARENA_FIXTURES_ENABLED = ARENA_NETWORK === "testnet";
+  }
+});
+
 // src/game/arena/testnetKit.ts
 var testnetKit_exports = {};
 __export(testnetKit_exports, {
   ALGOD_TESTNET: () => ALGOD_TESTNET,
+  ALGOD_URL: () => ALGOD_URL,
   ARENA_APP_ID: () => ARENA_APP_ID,
   ARENA_NETWORK: () => ARENA_NETWORK,
   ARENA_VERSION: () => ARENA_VERSION,
   CONTINUE_FEE_MICRO: () => CONTINUE_FEE_MICRO,
+  GONNA_ASA: () => GONNA_ASA,
   GONNA_ASA_TESTNET: () => GONNA_ASA_TESTNET,
   GONNA_DECIMALS: () => GONNA_DECIMALS,
   INDEXER_TESTNET: () => INDEXER_TESTNET,
+  IS_MAINNET: () => IS_MAINNET,
   LEGACY_ARENA_APP_ID: () => LEGACY_ARENA_APP_ID,
   OPUP_APP_ID: () => OPUP_APP_ID,
   ORACLE_ADDR: () => ORACLE_ADDR,
@@ -127,7 +182,7 @@ function sdk() {
 }
 async function algodClient() {
   const a3 = await sdk();
-  return new a3.Algodv2("", ALGOD_TESTNET, "");
+  return new a3.Algodv2("", ALGOD_URL, "");
 }
 function u64be(v5) {
   const b5 = new Uint8Array(8);
@@ -941,16 +996,19 @@ function rememberedCard(cid) {
 function rememberedCards() {
   return Object.values(readCardMem());
 }
-var ARENA_APP_ID, LEGACY_ARENA_APP_ID, GONNA_ASA_TESTNET, OPUP_APP_ID, TREASURY_ADDR, ORACLE_ADDR, ALGOD_TESTNET, SEAT_TTL_SECS, ARENA_VERSION, MBR_CREATE, EARLY_CLOSE_FEE_PAY, GONNA_DECIMALS, STAGE_NOTE_PREFIX, SCORE_DOMAIN, VERDICT_DOMAIN, TESTNET_FEES, sdkP, CONTINUE_FEE_MICRO, SIGN_TIMEOUT_MS, SIGN_TIMEOUT_MSG, SIGN_NUDGE_MS, SIGN_CANCEL_MSG, SignCancelled, recoverHook, activeOp, StaleAttempt, TX_KEY, RES_KEY, ARENA_NETWORK, CLOSE_TX_KEY, INDEXER_TESTNET, EV_RESOLVED, EV_FORFEITED, EV_REFUNDED, STAGE_KEY, STAGE_MEM_MAX, CREATE_SIG, SPAWN_SIG, stageMemo, CARD_KEY, CARD_MEM_MAX;
+var ARENA_APP_ID, LEGACY_ARENA_APP_ID, GONNA_ASA, GONNA_ASA_TESTNET, OPUP_APP_ID, TREASURY_ADDR, ORACLE_ADDR, ALGOD_URL, ALGOD_TESTNET, SEAT_TTL_SECS, ARENA_VERSION, MBR_CREATE, EARLY_CLOSE_FEE_PAY, GONNA_DECIMALS, STAGE_NOTE_PREFIX, SCORE_DOMAIN, VERDICT_DOMAIN, TESTNET_FEES, sdkP, CONTINUE_FEE_MICRO, SIGN_TIMEOUT_MS, SIGN_TIMEOUT_MSG, SIGN_NUDGE_MS, SIGN_CANCEL_MSG, SignCancelled, recoverHook, activeOp, StaleAttempt, TX_KEY, RES_KEY, CLOSE_TX_KEY, INDEXER_TESTNET, EV_RESOLVED, EV_FORFEITED, EV_REFUNDED, STAGE_KEY, STAGE_MEM_MAX, CREATE_SIG, SPAWN_SIG, stageMemo, CARD_KEY, CARD_MEM_MAX;
 var init_testnetKit = __esm({
   "src/game/arena/testnetKit.ts"() {
-    ARENA_APP_ID = 769907387;
-    LEGACY_ARENA_APP_ID = 769688298;
-    GONNA_ASA_TESTNET = 769688287;
-    OPUP_APP_ID = 769688641;
-    TREASURY_ADDR = "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM";
-    ORACLE_ADDR = "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA";
-    ALGOD_TESTNET = "https://testnet-api.algonode.cloud";
+    init_arenaKit();
+    ARENA_APP_ID = NET.appId;
+    LEGACY_ARENA_APP_ID = NET.legacyAppId;
+    GONNA_ASA = NET.gonnaAsa;
+    GONNA_ASA_TESTNET = NET.gonnaAsa;
+    OPUP_APP_ID = NET.opUpAppId;
+    TREASURY_ADDR = NET.treasuryAddr;
+    ORACLE_ADDR = NET.oracleAddr;
+    ALGOD_URL = NET.algodUrl;
+    ALGOD_TESTNET = NET.algodUrl;
     SEAT_TTL_SECS = 3600;
     ARENA_VERSION = 2;
     MBR_CREATE = 358200;
@@ -991,10 +1049,9 @@ var init_testnetKit = __esm({
     activeOp = null;
     StaleAttempt = class extends Error {
     };
-    TX_KEY = "gonna.arena.txids";
-    RES_KEY = "gonna.arena.resolved";
-    ARENA_NETWORK = "testnet";
-    CLOSE_TX_KEY = "gonna.arena.closetx";
+    TX_KEY = netLsKey("gonna.arena.txids");
+    RES_KEY = netLsKey("gonna.arena.resolved");
+    CLOSE_TX_KEY = netLsKey("gonna.arena.closetx");
     INDEXER_TESTNET = "https://testnet-idx.algonode.cloud";
     EV_RESOLVED = "ae488dc6";
     EV_FORFEITED = "24d3dd8b";
@@ -52038,8 +52095,11 @@ function bytesToB64(bytes) {
 }
 
 // src/game/arena/oracleClient.ts
-var ORACLE_BASE_URL_TESTNET = "http://localhost:8787";
-var LS_ORACLE_URL = "gonna.arena.oracleurl";
+init_arenaKit();
+var ORACLE_BASE_URL_TESTNET = "https://gonna-arena-oracle-testnet.onrender.com";
+var ORACLE_BASE_URL_MAINNET = NET.oracleBaseUrl;
+var ORACLE_BASE_URL_DEFAULT = ARENA_NETWORK === "mainnet" ? ORACLE_BASE_URL_MAINNET : ORACLE_BASE_URL_TESTNET;
+var LS_ORACLE_URL = netLsKey("gonna.arena.oracleurl");
 var ORACLE_DEV = "dev";
 function oracleBaseUrl() {
   try {
@@ -52052,7 +52112,7 @@ function oracleBaseUrl() {
     if (stored) return stored;
   } catch {
   }
-  return ORACLE_BASE_URL_TESTNET;
+  return ORACLE_BASE_URL_DEFAULT;
 }
 function oracleIsDev() {
   return oracleBaseUrl() === ORACLE_DEV;
@@ -52700,6 +52760,7 @@ if (false) {
 
 // src/game/arena/chainAdapter.ts
 init_testnetKit();
+init_arenaKit();
 
 // src/game/ver.ts
 function buildVer() {
@@ -52918,7 +52979,7 @@ function closeGate(card, me2, nowMs = Date.now()) {
   if (joiners.length === 0) return live ? { kind: "cancel" } : { kind: "claim" };
   return { kind: "locked" };
 }
-var LS_KEY = "gonna.arena.v1";
+var LS_KEY = netLsKey("gonna.arena.v1");
 var LS_FALCON = "gonna.arena.falcon";
 function mockAccountType() {
   try {
@@ -53895,7 +53956,7 @@ function feeLine(op, accountType, testnet) {
   if (testnet) return (TESTNET_FEES[op] / 1e6).toFixed(3) + " ALGO (TESTNET)";
   return fmtFee(accountType);
 }
-var LS_ADAPTER = "gonna.arena.adapter";
+var LS_ADAPTER = netLsKey("gonna.arena.adapter");
 var current = null;
 function arenaMode() {
   try {
@@ -53926,8 +53987,9 @@ function getArenaAdapter() {
 
 // src/game/arena/testnetWallet.ts
 init_testnetKit();
+init_arenaKit();
 var PROBE_TIMEOUT_MS = 12e3;
-var LS_ACCT = "gonna.arena.testnet.addr";
+var LS_ACCT = netLsKey("gonna.arena.testnet.addr");
 var pera = null;
 async function peraInstance() {
   if (pera) return pera;
@@ -54022,7 +54084,7 @@ async function peraSignFn(address) {
 }
 
 // src/game/wallet.ts
-var GONNA_ASA = 2582294183;
+var GONNA_ASA2 = 2582294183;
 var GONNA_THRESHOLD = 2e9;
 var INDEXERS = ["https://mainnet-idx.algonode.cloud", "https://mainnet-idx.4160.nodely.dev"];
 var GRACE_MS = 24 * 60 * 60 * 1e3;
@@ -54380,7 +54442,7 @@ async function gonnaDecimals() {
     const n3 = Number(raw);
     if (Number.isFinite(n3)) return n3;
   }
-  const j4 = await idxFetch("/v2/assets/" + GONNA_ASA);
+  const j4 = await idxFetch("/v2/assets/" + GONNA_ASA2);
   const d3 = j4.asset.params.decimals;
   lsSet(KEY_DECIMALS, String(d3));
   return d3;
@@ -54401,7 +54463,7 @@ async function refreshEligibility(force) {
     const acct = wrapped.account ?? resp;
     if (!Number.isFinite(Number(acct.amount))) throw new Error("bad account payload");
     const assets = acct.assets ?? [];
-    const holding = assets.find((a3) => a3["asset-id"] === GONNA_ASA);
+    const holding = assets.find((a3) => a3["asset-id"] === GONNA_ASA2);
     const gonna = holding ? holding.amount / Math.pow(10, dec) : 0;
     await loadSkinMap();
     const nfts = [];
@@ -54513,9 +54575,11 @@ function drawCrown(ctx, x4, y5) {
 
 // src/game/arena/arenaUI.ts
 init_testnetKit();
+init_arenaKit();
 
 // src/game/arena/arenaWallet.ts
 init_testnetKit();
+init_arenaKit();
 function arenaSession() {
   const w5 = getWallet();
   return {
@@ -54527,7 +54591,7 @@ function arenaSession() {
     mocked: w5.mocked
   };
 }
-var LS_ANON = "gonna.arena.anon";
+var LS_ANON = netLsKey("gonna.arena.anon");
 var LS_QA_ADDR = "gonna.qa.player.addr";
 function arenaAddress() {
   if (arenaMode() === "testnet") {
@@ -54916,7 +54980,7 @@ var ArenaUI = class {
       const e3 = getEligibility();
       const opts = [{ pick: { skin: "gonna", assetId: null, name: "GONNA" }, owned: true }];
       for (const n3 of e3.nfts) opts.push({ pick: { skin: n3.skin, assetId: n3.id, name: n3.name }, owned: true });
-      if (arenaMode() === "testnet") {
+      if (ARENA_FIXTURES_ENABLED && arenaMode() === "testnet") {
         const fixtures = [
           { pick: { skin: "fire", assetId: 7007, name: "GONNA 7" }, owned: true },
           { pick: { skin: "rainbow", assetId: 7042, name: "GONNA 42" }, owned: true }

@@ -39,6 +39,51 @@ var oracleScoreSig = async () => new Uint8Array(64);
 var oracleVerdictSig = async () => new Uint8Array(64);
 var registerContinueReceipt = async () => void 0;
 
+// src/game/arena/arenaKit.ts
+function envNetwork() {
+  try {
+    return import.meta.env?.VITE_ARENA_NETWORK === "mainnet" ? "mainnet" : "testnet";
+  } catch {
+    return "testnet";
+  }
+}
+var ARENA_NETWORK = envNetwork();
+var ARENA_NETS = {
+  testnet: {
+    appId: 769907387,
+    // ARENA APP v2.1
+    legacyAppId: 769688298,
+    // QuantumArena v1 (superseded)
+    gonnaAsa: 769688287,
+    opUpAppId: 769688641,
+    treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
+    oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
+    algodUrl: "https://testnet-api.algonode.cloud",
+    oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+  },
+  mainnet: {
+    appId: 0,
+    // PLACEHOLDER — M-2 deploy flips this (0 = unreachable on purpose)
+    legacyAppId: 0,
+    // no legacy on mainnet
+    gonnaAsa: 2582294183,
+    // REAL mainnet $GONNA (same id as src/game/wallet.ts)
+    opUpAppId: 0,
+    // PLACEHOLDER — M-2
+    treasuryAddr: "",
+    // PLACEHOLDER — M-2
+    oracleAddr: "",
+    // PLACEHOLDER — M-2
+    algodUrl: "https://mainnet-api.algonode.cloud",
+    oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+    // same Render service; flipped at M-2
+  }
+};
+var NET = ARENA_NETS[ARENA_NETWORK];
+function netLsKey(base) {
+  return base + "." + ARENA_NETWORK;
+}
+
 // src/game/font.ts
 var GLYPH_ROWS = {
   A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
@@ -195,7 +240,7 @@ function accumulateLegacy(hist, address) {
   return { wins, losses, won, lost, net, bestWin };
 }
 var SEAT_TTL_MS = 3600 * 1e3;
-var LS_KEY = "gonna.arena.v1";
+var LS_KEY = netLsKey("gonna.arena.v1");
 var DEGEN_NAMES = ["GEKKORIDER", "WHALE_X", "SER_BUYTHE_DIP", "LIL_LIZARD", "ANON_404", "PUMP_SAINT", "HODL_GOBLIN", "MOON_MARTIAN"];
 function lsLoad() {
   try {
@@ -1160,6 +1205,7 @@ var TestnetArenaAdapter = class {
     return { played, wins, losses, open, winRate: played > 0 ? Math.round(wins / played * 100) : 0, won, lost, net, bestWin };
   }
 };
+var LS_ADAPTER = netLsKey("gonna.arena.adapter");
 export {
   MockArenaAdapter,
   TestnetArenaAdapter,

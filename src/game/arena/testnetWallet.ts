@@ -5,6 +5,7 @@
 // Mobile: Pera wallet app -> developer settings -> TESTNET mode.
 // ============================================================================
 import { withTimeout } from './testnetKit';
+import { netLsKey } from './arenaKit';
 import type { TxSignFn } from './testnetKit';
 
 // v14.2: a stale WC session can hang reconnectSession() too — probe with a
@@ -13,7 +14,8 @@ const PROBE_TIMEOUT_MS = 12_000;
 
 type PeraWalletConnectT = import('@perawallet/connect').PeraWalletConnect;
 
-const LS_ACCT = 'gonna.arena.testnet.addr';
+// M-1: NETWORK-SCOPED — a saved live-adapter account must not leak cross-net
+const LS_ACCT = netLsKey('gonna.arena.testnet.addr');
 
 let pera: PeraWalletConnectT | null = null;
 

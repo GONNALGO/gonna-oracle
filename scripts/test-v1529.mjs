@@ -215,8 +215,8 @@ console.log('\n[2] synthetic: table win / tie / unknown stake / gross-vs-net / f
 // ================= [3] MOCK ADAPTER END-TO-END ==============================
 console.log('\n[3] mock adapter legacyStats end-to-end (same fixture store)');
 {
-  store.set('gonna.arena.adapter', 'mock');
-  store.set('gonna.arena.v1', JSON.stringify({ nextId: 200, seeded: true, histSeeded: true, challenges: [], history: [DUEL_WIN, TABLE_LOSS] }));
+  store.set('gonna.arena.adapter.testnet', 'mock');
+  store.set('gonna.arena.v1.testnet', JSON.stringify({ nextId: 200, seeded: true, histSeeded: true, challenges: [], history: [DUEL_WIN, TABLE_LOSS] }));
   const adapter = new MockArenaAdapter();
   const s = await adapter.legacyStats(HIM);
   ok(s.played === 2 && s.wins === 1 && s.losses === 1 && s.winRate === 50, 'mock: played 2, 1W/1L, 50%');
@@ -235,7 +235,7 @@ const mkCtx = () => ({
 const GREEN = '#7fd858';
 const RED = '#e23b3b';
 function renderLegacy(legacy) {
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   setMock({ address: ADDR58('VIEWERDEGEN'), nfts: [] });
   const ui = new ArenaUI();
   ui.hots = [];

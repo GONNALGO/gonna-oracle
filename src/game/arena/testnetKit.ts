@@ -1,17 +1,29 @@
 // ============================================================================
-// THE ARENA — TESTNET KIT. TESTNET ONLY — NEVER SHIP TO MAINNET.
+// THE ARENA — CHAIN KIT (testnet-born, network-agnostic since M-1).
 // Exact atomic groups for the QuantumArena v2 contract (deploy/smoke_v2_testnet.py
 // is the reference implementation; v5.0.0 pooled-opcode-budget via OpUp).
-//   ARENA APP v2.1 769907387 · $GONNA ASA 769688287 · OPUP DONOR 769688641
+//   TESTNET: APP v2.1 769907387 · $GONNA ASA 769688287 · OPUP DONOR 769688641
 //   v1 app 769688298 is LEGACY — old cards stay resolvable on-chain there.
+// M-1: all network constants now resolve from ./arenaKit (VITE_ARENA_NETWORK
+// build flag) — the historical *testnet* export NAMES stay as deprecated
+// aliases so every existing import keeps working untouched.
 // ============================================================================
-export const ARENA_APP_ID = 769907387;
-export const LEGACY_ARENA_APP_ID = 769688298; // QuantumArena v1 (superseded)
-export const GONNA_ASA_TESTNET = 769688287;
-export const OPUP_APP_ID = 769688641;
-export const TREASURY_ADDR = '4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM';
-export const ORACLE_ADDR = 'COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA';
-export const ALGOD_TESTNET = 'https://testnet-api.algonode.cloud';
+import { ARENA_NETWORK, IS_MAINNET, NET, netLsKey } from './arenaKit';
+import type { ArenaNetwork } from './arenaKit';
+
+export { ARENA_NETWORK, IS_MAINNET };
+export type { ArenaNetwork };
+export const ARENA_APP_ID = NET.appId;
+export const LEGACY_ARENA_APP_ID = NET.legacyAppId;
+export const GONNA_ASA = NET.gonnaAsa;
+/** @deprecated network-resolved alias — prefer GONNA_ASA */
+export const GONNA_ASA_TESTNET = NET.gonnaAsa;
+export const OPUP_APP_ID = NET.opUpAppId;
+export const TREASURY_ADDR = NET.treasuryAddr;
+export const ORACLE_ADDR = NET.oracleAddr;
+export const ALGOD_URL = NET.algodUrl;
+/** @deprecated network-resolved alias — prefer ALGOD_URL */
+export const ALGOD_TESTNET = NET.algodUrl;
 
 // v2 seat clock: a duel seat that stays UNSIGNED for SEAT_TTL seconds can be
 // forfeited by the signed opponent via claim_forfeit(cid, seat).
@@ -79,7 +91,7 @@ export function sdk(): Promise<Sdk> {
 
 export async function algodClient() {
   const a = await sdk();
-  return new a.Algodv2('', ALGOD_TESTNET, '');
+  return new a.Algodv2('', ALGOD_URL, '');
 }
 
 function u64be(v: number): Uint8Array {
@@ -887,7 +899,7 @@ export async function signSend(sign: TxSignFn, txns: Txn[], opts: SignManagedOpt
 }
 
 // per-challenge txid memory (for VIEW ON CHAIN)
-const TX_KEY = 'gonna.arena.txids';
+const TX_KEY = netLsKey('gonna.arena.txids'); // M-1: network-scoped txid memory
 export function recordTxid(cid: number, txid: string): void {
   try {
     const m = JSON.parse(window.localStorage.getItem(TX_KEY) ?? '{}') as Record<string, string>;
@@ -907,7 +919,7 @@ export function getTxid(cid: number): string | null {
 // per-challenge RESOLVE-TIME memory: the box carries no timestamp, so the
 // HISTORY "x AGO" line is only honest for matches WE resolved from this
 // browser (everyone else falls back to the deadline, clamped to now)
-const RES_KEY = 'gonna.arena.resolved';
+const RES_KEY = netLsKey('gonna.arena.resolved'); // M-1: network-scoped
 export function recordResolveAt(cid: number, at: number): void {
   try {
     const m = JSON.parse(window.localStorage.getItem(RES_KEY) ?? '{}') as Record<string, number>;
@@ -929,8 +941,8 @@ export function getResolveAt(cid: number): number | null {
 // flip touches ARENA_NETWORK only, never a call site. lora.algokit.io shows
 // the INNER txns of the close group — winner payout + treasury fee + MBR
 // refund — exactly "i fondi che si sono mossi".
-export type ArenaNetwork = 'testnet' | 'mainnet';
-export const ARENA_NETWORK: ArenaNetwork = 'testnet';
+// M-1: ArenaNetwork/ARENA_NETWORK now come from ./arenaKit (build flag) —
+// re-exported at the top of this file for every existing import.
 export function explorerTxUrlFor(network: ArenaNetwork, txid: string): string {
   return 'https://lora.algokit.io/' + network + '/transaction/' + txid;
 }
@@ -942,7 +954,7 @@ export function explorerTxUrl(txid: string): string {
 // (resolve / forfeit / claim / early-close). Distinct from TX_KEY above,
 // which remembers the latest op of ANY kind — a create/submit txid moved no
 // pot and must never back a "VIEW THE PAYOUT" link.
-const CLOSE_TX_KEY = 'gonna.arena.closetx';
+const CLOSE_TX_KEY = netLsKey('gonna.arena.closetx'); // M-1: network-scoped
 export function recordCloseTxid(cid: number, txid: string): void {
   try {
     const m = JSON.parse(window.localStorage.getItem(CLOSE_TX_KEY) ?? '{}') as Record<string, string>;

@@ -469,8 +469,10 @@ export function closeGate(card: Challenge, me: string | null, nowMs = Date.now()
 
 // ======================================================================
 // MOCK ADAPTER — localStorage state, real timers, full flow for QA
+// M-1: the store is NETWORK-SCOPED (netLsKey) — a testnet-era mock piazza
+// must never surface in a mainnet session (and vice versa).
 // ======================================================================
-const LS_KEY = 'gonna.arena.v1';
+const LS_KEY = netLsKey('gonna.arena.v1');
 // CI / QA hook: the local account runs as Falcon (PQ fees + QUANTUM SEAL)
 const LS_FALCON = 'gonna.arena.falcon';
 
@@ -911,6 +913,7 @@ export class MockArenaAdapter implements ArenaAdapter {
 // ======================================================================
 import * as kit from './testnetKit';
 import { oracleScoreSig, oracleVerdictSig, registerContinueReceipt } from './oracleClient';
+import { netLsKey } from './arenaKit';
 import { buildVer } from '../ver';
 import { qaScore } from './qaSigner';
 export { ARENA_APP_ID, GONNA_ASA_TESTNET } from './testnetKit';
@@ -1663,7 +1666,9 @@ export function feeLine(op: kit.ArenaOp, accountType: AccountType, testnet: bool
 // ---------- selector ----------
 // MOCK is the PUBLIC default (the Prince flips the preview explicitly).
 // ?arena=testnet enables the live testnet adapter and PERSISTS the choice.
-const LS_ADAPTER = 'gonna.arena.adapter';
+// M-1: the persisted choice is NETWORK-SCOPED — a stored 'testnet' flag from
+// a testnet build must not light the live adapter inside a mainnet build.
+const LS_ADAPTER = netLsKey('gonna.arena.adapter');
 let current: ArenaAdapter | null = null;
 export function arenaMode(): 'mock' | 'testnet' {
   try {

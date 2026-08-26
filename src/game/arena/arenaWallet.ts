@@ -21,6 +21,7 @@ import { arenaMode, mockAccountType, setTestnetIdentityProvider } from './chainA
 import { connectTestnetPera, liveTestnetSignFn, recoverTestnetSession, testnetAddress } from './testnetWallet';
 import { qaActive, qaPlayerAddress, qaSignFn } from './qaSigner';
 import { setSignRecoverHook } from './testnetKit';
+import { netLsKey } from './arenaKit';
 import type { TxSignFn } from './testnetKit';
 
 export type ArenaWalletProvider = wallet.WalletProvider;
@@ -46,7 +47,8 @@ export function arenaSession(): ArenaSession {
 
 // wallet-less degens still get a STABLE pseudo-address (persisted) so a QA
 // session can create -> join -> submit -> claim without a wallet prompt
-const LS_ANON = 'gonna.arena.anon';
+// M-1: NETWORK-SCOPED — anon arena identities stay inside their network
+const LS_ANON = netLsKey('gonna.arena.anon');
 const LS_QA_ADDR = 'gonna.qa.player.addr'; // injected by the QA harness
 export function arenaAddress(): string {
   if (arenaMode() === 'testnet') {

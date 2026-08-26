@@ -83,9 +83,56 @@ function b64ToBytes(s) {
   return new Uint8Array(out);
 }
 
+// src/game/arena/arenaKit.ts
+function envNetwork() {
+  try {
+    return import.meta.env?.VITE_ARENA_NETWORK === "mainnet" ? "mainnet" : "testnet";
+  } catch {
+    return "testnet";
+  }
+}
+var ARENA_NETWORK = envNetwork();
+var ARENA_NETS = {
+  testnet: {
+    appId: 769907387,
+    // ARENA APP v2.1
+    legacyAppId: 769688298,
+    // QuantumArena v1 (superseded)
+    gonnaAsa: 769688287,
+    opUpAppId: 769688641,
+    treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
+    oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
+    algodUrl: "https://testnet-api.algonode.cloud",
+    oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+  },
+  mainnet: {
+    appId: 0,
+    // PLACEHOLDER — M-2 deploy flips this (0 = unreachable on purpose)
+    legacyAppId: 0,
+    // no legacy on mainnet
+    gonnaAsa: 2582294183,
+    // REAL mainnet $GONNA (same id as src/game/wallet.ts)
+    opUpAppId: 0,
+    // PLACEHOLDER — M-2
+    treasuryAddr: "",
+    // PLACEHOLDER — M-2
+    oracleAddr: "",
+    // PLACEHOLDER — M-2
+    algodUrl: "https://mainnet-api.algonode.cloud",
+    oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+    // same Render service; flipped at M-2
+  }
+};
+var NET = ARENA_NETS[ARENA_NETWORK];
+function netLsKey(base) {
+  return base + "." + ARENA_NETWORK;
+}
+
 // src/game/arena/oracleClient.ts
-var ORACLE_BASE_URL_TESTNET = "http://localhost:8787";
-var LS_ORACLE_URL = "gonna.arena.oracleurl";
+var ORACLE_BASE_URL_TESTNET = "https://gonna-arena-oracle-testnet.onrender.com";
+var ORACLE_BASE_URL_MAINNET = NET.oracleBaseUrl;
+var ORACLE_BASE_URL_DEFAULT = ARENA_NETWORK === "mainnet" ? ORACLE_BASE_URL_MAINNET : ORACLE_BASE_URL_TESTNET;
+var LS_ORACLE_URL = netLsKey("gonna.arena.oracleurl");
 var ORACLE_DEV = "dev";
 function oracleBaseUrl() {
   try {
@@ -98,7 +145,7 @@ function oracleBaseUrl() {
     if (stored) return stored;
   } catch {
   }
-  return ORACLE_BASE_URL_TESTNET;
+  return ORACLE_BASE_URL_DEFAULT;
 }
 function oracleIsDev() {
   return oracleBaseUrl() === ORACLE_DEV;
@@ -369,6 +416,7 @@ function accumulateLegacy(hist, address) {
   return { wins, losses, won, lost, net, bestWin };
 }
 var SEAT_TTL_MS = 3600 * 1e3;
+var LS_KEY = netLsKey("gonna.arena.v1");
 function providerRef() {
   return window.__arenaIdProvider ?? null;
 }
@@ -979,6 +1027,7 @@ var TestnetArenaAdapter = class {
     return { played, wins, losses, open, winRate: played > 0 ? Math.round(wins / played * 100) : 0, won, lost, net, bestWin };
   }
 };
+var LS_ADAPTER = netLsKey("gonna.arena.adapter");
 
 // src/game/arena/shareCard.ts
 var STAGE_NAMES = ["GHETTO GONNA", "PUMP HARBOR", "WALL STREET", "CONSENSUS", "THE HOUSE", "LAUNCHPAD", "THRONE ROOM"];

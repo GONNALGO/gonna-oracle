@@ -41,7 +41,8 @@ console.log('\n[1] SOURCE: arenaUI.ts carries both fixes, guarded');
   ok(shelf.includes('assetId: 7042') && shelf.includes("name: 'GONNA 42'"), 'fixture GONNA 42 (assetId 7042) inside fighterShelf');
   ok(shelf.includes("arenaMode() === 'testnet'"), 'fixtures guarded by arenaMode() === testnet');
   ok(/!opts\.some\(\(o\)\s*=>\s*o\.pick\.assetId === f\.pick\.assetId\)/.test(shelf), 'dedup vs real holdings (no duplicate assetId)');
-  ok(shelf.includes('TESTNET TEST FIXTURES — remove at mainnet'), 'removal comment present (mainnet path never includes them)');
+  // M-1: the fixtures are now hard-gated by the BUILD flag (ARENA_FIXTURES_ENABLED=false in every mainnet build)
+  ok(shelf.includes("if (ARENA_FIXTURES_ENABLED && arenaMode() === 'testnet') {"), 'fixtures gated by ARENA_FIXTURES_ENABLED build flag (dead path on mainnet)');
   ok(!shelf.includes('MOCK_SHELF') || shelf.indexOf('MOCK_SHELF') === -1 || true, 'mock shelf path untouched (asserted behaviorally below)');
 
   // placeStakeInput: visualViewport branch
@@ -117,7 +118,7 @@ const shelf = (ui) => ui.fighterShelf().map((o) => ({ assetId: o.pick.assetId, n
 const count = (s, assetId) => s.filter((x) => x.assetId === assetId).length;
 {
   // testnet + connected wallet, real holding IS GONNA 7 -> exactly once
-  store.set('gonna.arena.adapter', 'testnet');
+  store.set('gonna.arena.adapter.testnet', 'testnet');
   setMock({ address: 'TNETDEGEN' + 'Q'.repeat(50), nfts: [{ id: 7007, name: 'GONNA 7', skin: 'fire' }] });
   const ui = new ArenaUI();
   const s = shelf(ui);
@@ -132,7 +133,7 @@ const count = (s, assetId) => s.filter((x) => x.assetId === assetId).length;
   ok(count(s2, 7007) === 1 && count(s2, 7042) === 1 && s2.length === 3, 'testnet + 0 NFTs: base GONNA + both fixtures');
 
   // mainnet (mock adapter) + connected wallet -> NO fixtures
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   setMock({ address: 'MAINNETDEGEN' + 'S'.repeat(47), nfts: [{ id: 7066, name: 'GONNA 66', skin: 'alien' }] });
   const s3 = shelf(new ArenaUI());
   ok(arenaMode() === 'mock', 'adapter stubbed to mock (mainnet path)');

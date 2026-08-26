@@ -255,7 +255,7 @@ const mkCtx = () => ({
   save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, arc() {},
 });
 function renderVersus(card, me, mode = 'mock') {
-  store.set('gonna.arena.adapter', mode);
+  store.set('gonna.arena.adapter.testnet', mode);
   resetArenaAdapter(); // the adapter is a cached singleton — force a fresh pick
   setMock(me ? { address: me, nfts: [] } : null);
   const ui = new ArenaUI();
@@ -347,7 +347,7 @@ const HIM = A('UUFN4LNBWB');
 const OPP = A('GONHNV3XMS');
 const hpl = (address, score = 0) => ({ address, name: address.slice(0, 6), score });
 function renderHistory(hist) {
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   setMock({ address: VIEWER, nfts: [] });
   const ui = new ArenaUI();
   ui.hist = hist;
@@ -415,8 +415,8 @@ console.log('\n[4] fmt: compact tiers, truncated, corners kept');
 // ================= [5] MOCK ADAPTER e2e: the chain rule, mirrored ===========
 console.log('\n[5] mock adapter earlyClose: refuses a seated table like the chain');
 {
-  store.set('gonna.arena.adapter', 'mock');
-  store.set('gonna.arena.v1', JSON.stringify({ nextId: 1, seeded: true, histSeeded: true, challenges: [], history: [] }));
+  store.set('gonna.arena.adapter.testnet', 'mock');
+  store.set('gonna.arena.v1.testnet', JSON.stringify({ nextId: 1, seeded: true, histSeeded: true, challenges: [], history: [] }));
   const adapter = new MockArenaAdapter();
   const creator = pl(CREATOR, 0);
   // sealedScore 0: no auto-rival — the roster starts with the creator alone

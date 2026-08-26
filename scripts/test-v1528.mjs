@@ -546,7 +546,7 @@ const mkCtx = () => ({
 });
 const FAKE_ART = { gecko: [null], snek: [null], coinsnek: [null], golem: { idle: null }, bull: [null], fud: { idle: null }, boss: { idle: null } };
 const mkUI = () => {
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   setMock({ address: ADDR58('VIEWERDEGEN'), nfts: [] });
   const ui = new ArenaUI();
   ui.hots = [];
@@ -656,11 +656,11 @@ console.log('\n[8] share links: ?st= for verified single-mode cards only');
   ok(shareStageOf(mkCardUI({ stageIdx: 4, stageVerified: true })) === 4, 'verified single card -> st hint 4');
   ok(shareStageOf(mkCardUI({ stageIdx: 4, stageVerified: false })) === null, 'UNVERIFIED card: the guess never propagates into links');
   ok(shareStageOf(mkCardUI({ stageMode: 'full', stageIdx: null })) === null, 'FULL RUN: no hint');
-  store.set('gonna.arena.adapter', 'testnet');
+  store.set('gonna.arena.adapter.testnet', 'testnet');
   ok(shareUrl(42, 4) === 'http://localhost/?arena=testnet&duel=42&st=4', 'testnet link carries &st=4');
   ok(shareUrl(42, null) === 'http://localhost/?arena=testnet&duel=42', 'no stage -> no hint');
   ok(shareUrl(42, 9) === 'http://localhost/?arena=testnet&duel=42', 'out-of-range stage -> no hint');
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   ok(shareUrl(42, 4) === 'http://localhost/?duel=42&st=4', 'mock link carries &st=4');
   ok(stageLine(mkCardUI({ stageIdx: 4, stageVerified: false })).endsWith('(UNVERIFIED)'), 'share card marks the unverified stage');
 }

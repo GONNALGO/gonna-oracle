@@ -522,7 +522,7 @@ const mkCtx = () => ({
 });
 const FAKE_ART = { gecko: [null], snek: [null], coinsnek: [null], golem: { idle: null }, bull: [null], fud: { idle: null }, boss: { idle: null } };
 function renderVersus(card) {
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   setMock({ address: ADDR58('VIEWERDEGEN'), nfts: [] });
   const ui = new ArenaUI();
   ui.current = card;
@@ -536,7 +536,7 @@ function renderVersus(card) {
   return { texts: TEXTLOG.slice(), hots: ui.hots.map((h) => h.id) };
 }
 const mkArenaUI = () => {
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   setMock({ address: ADDR58('VIEWERDEGEN'), nfts: [] });
   const ui = new ArenaUI();
   ui.hots = [];

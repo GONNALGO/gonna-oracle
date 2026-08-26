@@ -38,7 +38,9 @@ console.log('\n[0] SOURCE: close-tx memory, per-network explorer, sync tap path'
   const tk = readFileSync(join(ROOT, 'src/game/arena/testnetKit.ts'), 'utf8');
   const ca = readFileSync(join(ROOT, 'src/game/arena/chainAdapter.ts'), 'utf8');
   const ui = readFileSync(join(ROOT, 'src/game/arena/arenaUI.ts'), 'utf8');
-  ok(tk.includes("export const ARENA_NETWORK: ArenaNetwork = 'testnet';"), 'ARENA_NETWORK centralized in testnetKit (mainnet flip = one constant)');
+  // M-1: the constant moved to arenaKit.ts (VITE_ARENA_NETWORK build flag); testnetKit re-exports it
+  const ak = readFileSync(join(ROOT, 'src/game/arena/arenaKit.ts'), 'utf8');
+  ok(ak.includes("VITE_ARENA_NETWORK === 'mainnet' ? 'mainnet' : 'testnet'") && tk.includes("export { ARENA_NETWORK, IS_MAINNET };"), 'ARENA_NETWORK centralized in arenaKit, re-exported by testnetKit (mainnet flip = build flag)');
   ok(tk.includes("return 'https://lora.algokit.io/' + network + '/transaction/' + txid;"), 'lora.algokit.io/<network>/transaction/<txid> builder');
   ok(tk.includes('export function explorerTxUrlFor(') && tk.includes('export function explorerTxUrl('), 'explorerTxUrlFor (pure, per-network) + explorerTxUrl (active network)');
   ok(tk.includes('export function recordCloseTxid(') && tk.includes('export function getCloseTxid('), 'dedicated CLOSE-txid memory (never the latest random op)');
@@ -172,7 +174,7 @@ const mkHist = (over) => ({
   ...over,
 });
 function mkHistUI(opts = {}) {
-  store.set('gonna.arena.adapter', opts.mode ?? 'mock');
+  store.set('gonna.arena.adapter.testnet', opts.mode ?? 'mock');
   resetArenaAdapter();
   setMock({ address: VIEWER, nfts: [] });
   const ui = new ArenaUI();
@@ -291,7 +293,7 @@ console.log('\n[4] prefetch never blocks the render; the tap never awaits');
   g.ui.activate('hview');
   ok(openCalls.length === 0, 'hview with no close txid: window.open NEVER fires (no invented link)');
   // the live card detail (versus) settled branch + the closed card branch
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   resetArenaAdapter();
   setMock({ address: VIEWER, nfts: [] });
   const FIGHTER = { skin: 'gonna', assetId: null, name: 'GONNA' };

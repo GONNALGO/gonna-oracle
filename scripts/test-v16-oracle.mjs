@@ -44,7 +44,8 @@ console.log('\n[0] SOURCE: the 4 call sites moved to the server oracle, dev key 
   ok(ca.includes('if (opts?.continueRefId) await registerContinueReceipt(opts.continueRefId, address);'), 'continue gate: receipt REGISTERED before the sig ask');
   ok(!ca.includes('requireOracle'), 'the old hasDevOracle preflight gate is gone (the server answers honestly)');
   ok(oc.includes("export const ORACLE_BASE_URL_TESTNET = 'https://gonna-arena-oracle-testnet.onrender.com';"), 'oracleClient: testnet base URL constant');
-  ok(oc.includes("'gonna.arena.oracleurl'"), 'oracleClient: ?oracle= override persisted (arenaMode pattern)');
+  // M-1: the override key is network-scoped via netLsKey (mainnet-leak guard)
+  ok(oc.includes("netLsKey('gonna.arena.oracleurl')"), 'oracleClient: ?oracle= override persisted, NETWORK-SCOPED (M-1 leak guard)');
   ok(oc.includes("'THE ORACLE SAYS NO - '") && oc.includes("'THE ORACLE IS BUSY - RETRY IN A BREATH'"), 'honest slang error mapping present');
   ok(oc.includes("const TIMEOUT_MS = 8000;") && oc.includes('const MAX_ATTEMPTS = 2;'), '8s timeout + exactly 1 retry');
   ok(ol.includes("import.meta.env.VITE_QA_ORACLE === '1'"), 'oracleLink: build-time VITE_QA_ORACLE gate');
@@ -152,7 +153,7 @@ const jsonRes = (status, obj, headers) => new Response(JSON.stringify(obj), { st
 
   store.clear(); setWindow('?oracle=' + encodeURIComponent('http://qa-oracle:9999'));
   ok(oc.oracleBaseUrl() === 'http://qa-oracle:9999', '?oracle= query wins');
-  ok(store.get('gonna.arena.oracleurl') === 'http://qa-oracle:9999', 'override persisted to gonna.arena.oracleurl');
+  ok(store.get('gonna.arena.oracleurl.testnet') === 'http://qa-oracle:9999', 'override persisted to gonna.arena.oracleurl.testnet');
   setWindow(''); // query gone — the persisted override survives (arenaMode pattern)
   ok(oc.oracleBaseUrl() === 'http://qa-oracle:9999', 'persisted override survives without the query');
   store.clear(); setWindow('?oracle=dev');
@@ -289,7 +290,7 @@ console.log('\n[3] ORACLE LINK: refused without the build flag, armed with it');
   const mn = Array(25).fill('abandon').join(' ');
   const token = Buffer.from(mn, 'utf8').toString('base64url');
   const mkWindow = () => {
-    const s = new Map([['gonna.arena.adapter', 'testnet']]);
+    const s = new Map([['gonna.arena.adapter.testnet', 'testnet']]);
     const scrubbed = { n: 0 };
     globalThis.window = {
       localStorage: {

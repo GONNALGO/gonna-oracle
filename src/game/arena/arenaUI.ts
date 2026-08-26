@@ -23,6 +23,7 @@ import { SKIN_INFO, skinPortrait, skinPortraitFailed, SHELF_PAGE, shelfPages, sh
 import type { SkinId } from '../skins';
 import { getArenaAdapter, arenaMode, closeGate, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
 import { activeSignOp, explorerTxUrl, getCloseTxid, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
+import { ARENA_FIXTURES_ENABLED } from './arenaKit';
 import type { SignOpView } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
 import { qaActive, qaScore } from './qaSigner';
@@ -257,8 +258,10 @@ export class ArenaUI {
       const e = wallet.getEligibility();
       const opts: FighterOpt[] = [{ pick: { skin: 'gonna', assetId: null, name: 'GONNA' }, owned: true }];
       for (const n of e.nfts) opts.push({ pick: { skin: n.skin, assetId: n.id, name: n.name }, owned: true });
-      // TESTNET TEST FIXTURES — remove at mainnet (mainnet path never includes them)
-      if (arenaMode() === 'testnet') {
+      // TESTNET TEST FIXTURES — dev-only. M-1: hard-gated by the BUILD flag
+      // (ARENA_FIXTURES_ENABLED is false in every mainnet build, so the
+      // fixture path is dead code there), on top of the live-mode check.
+      if (ARENA_FIXTURES_ENABLED && arenaMode() === 'testnet') {
         const fixtures: FighterOpt[] = [
           { pick: { skin: 'fire', assetId: 7007, name: 'GONNA 7' }, owned: true },
           { pick: { skin: 'rainbow', assetId: 7042, name: 'GONNA 42' }, owned: true },

@@ -1,0 +1,144 @@
+// GONNA FIGHT — M-1 CLIENT MAINNET: network config, mainnet-leak guard,
+// fixture gating. Suite:
+//   [0] source guards (arenaKit, re-exports, oracle URL, scoped LS keys, fixtures)
+//   [1] behavioral TESTNET build (default env): constants, defaults, scoped LS
+//   [2] behavioral MAINNET build (VITE_ARENA_NETWORK=mainnet): mainnet row,
+//       placeholders, fixtures OFF, leak guard — legacy unscoped keys IGNORED
+//   [3] leak scenarios: seeded testnet state must not pollute a mainnet session
+// Run: node scripts/test-m1-mainnet.mjs   (ESBUILD_BINARY_PATH se serve)
+import { readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+let passed = 0, total = 0;
+const fails = [];
+function ok(cond, label) {
+  total++;
+  if (cond) { passed++; console.log('  PASS ' + label); }
+  else { fails.push(label); console.log('  FAIL ' + label); }
+}
+
+// ================= [0] SOURCE ==============================================
+console.log('\n[0] SOURCE: network config + leak guard + fixture gate');
+{
+  const ak = readFileSync(join(ROOT, 'src/game/arena/arenaKit.ts'), 'utf8');
+  const tk = readFileSync(join(ROOT, 'src/game/arena/testnetKit.ts'), 'utf8');
+  const oc = readFileSync(join(ROOT, 'src/game/arena/oracleClient.ts'), 'utf8');
+  const ca = readFileSync(join(ROOT, 'src/game/arena/chainAdapter.ts'), 'utf8');
+  const ui = readFileSync(join(ROOT, 'src/game/arena/arenaUI.ts'), 'utf8');
+  const tw = readFileSync(join(ROOT, 'src/game/arena/testnetWallet.ts'), 'utf8');
+  const aw = readFileSync(join(ROOT, 'src/game/arena/arenaWallet.ts'), 'utf8');
+  ok(ak.includes("VITE_ARENA_NETWORK === 'mainnet' ? 'mainnet' : 'testnet'"), 'arenaKit: network from VITE_ARENA_NETWORK (default testnet)');
+  ok(ak.includes('gonnaAsa: 2582294183,'), 'arenaKit: GONNA ASA mainnet 2582294183');
+  ok(ak.includes('gonnaAsa: 769688287,') && ak.includes('appId: 769907387,'), 'arenaKit: testnet row intact (app 769907387 / ASA 769688287)');
+  ok(ak.includes('appId: 0, // PLACEHOLDER'), 'arenaKit: mainnet appId is a 0 placeholder until M-2 deploy');
+  ok(ak.includes('export const ARENA_FIXTURES_ENABLED'), 'arenaKit: fixtures flag exported');
+  ok(ak.includes('export function netLsKey'), 'arenaKit: netLsKey helper exported');
+  ok(tk.includes("export { ARENA_NETWORK, IS_MAINNET };") && tk.includes('export const ARENA_APP_ID = NET.appId;'), 'testnetKit: re-exports network-resolved constants (compat)');
+  ok(tk.includes("export const GONNA_ASA = NET.gonnaAsa;") && tk.includes('GONNA_ASA_TESTNET'), 'testnetKit: GONNA_ASA canonical + deprecated alias kept');
+  ok(oc.includes('export const ORACLE_BASE_URL_MAINNET'), 'oracleClient: ORACLE_BASE_URL_MAINNET present');
+  ok(oc.includes("netLsKey('gonna.arena.oracleurl')"), 'oracleClient: oracle override key network-scoped');
+  ok(ca.includes("netLsKey('gonna.arena.adapter')") && ca.includes("netLsKey('gonna.arena.v1')"), 'chainAdapter: adapter flag + mock store network-scoped');
+  ok(tk.includes("netLsKey('gonna.arena.txids')") && tk.includes("netLsKey('gonna.arena.resolved')") && tk.includes("netLsKey('gonna.arena.closetx')"), 'testnetKit: txid memories network-scoped');
+  ok(tw.includes("netLsKey('gonna.arena.testnet.addr')"), 'testnetWallet: saved account network-scoped');
+  ok(aw.includes("netLsKey('gonna.arena.anon')"), 'arenaWallet: anon identity network-scoped');
+  ok(ui.includes('if (ARENA_FIXTURES_ENABLED && arenaMode() === \'testnet\') {'), 'arenaUI: testnet fixtures hard-gated by the BUILD flag');
+  // no unscoped leftovers of the network-bound keys anywhere in src
+  const all = [tk, oc, ca, tw, aw];
+  const leftovers = all.some((s) => /localStorage\.(getItem|setItem|removeItem)\('gonna\.arena\.(adapter|v1|oracleurl|testnet\.addr|anon|txids|resolved|closetx)'/.test(s));
+  ok(!leftovers, 'no unscoped network-bound localStorage access left in src');
+}
+
+// ================= behavioral bundles ======================================
+const ENTRY = join(ROOT, '.tmp-m1-entry.ts');
+writeFileSync(ENTRY, `
+export { ARENA_NETWORK, IS_MAINNET, NET, ARENA_NETS, ARENA_FIXTURES_ENABLED, netLsKey } from './src/game/arena/arenaKit';
+export { oracleBaseUrl, ORACLE_BASE_URL_MAINNET, ORACLE_BASE_URL_TESTNET } from './src/game/arena/oracleClient';
+export { arenaMode } from './src/game/arena/chainAdapter';
+`);
+function bundle(out, defines = []) {
+  execFileSync('npx', ['esbuild', ENTRY, '--bundle', '--format=esm', '--platform=node',
+    '--define:import.meta.env.DEV=false', '--define:import.meta.env.PROD=true', ...defines,
+    `--outfile=${out}`], { cwd: ROOT, stdio: 'pipe' });
+}
+function mkWindow(seed = {}) {
+  const store = new Map(Object.entries(seed));
+  const loc = { search: '', hostname: 'example.com', pathname: '/' };
+  globalThis.window = { localStorage: {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => void store.set(k, String(v)),
+    removeItem: (k) => void store.delete(k),
+  }, location: loc };
+  return { store, loc };
+}
+
+// ================= [1] TESTNET build (default) =============================
+console.log('\n[1] BEHAVIOR: default build == testnet, byte-identical defaults');
+const B1 = join(ROOT, '.tmp-m1-testnet.mjs');
+bundle(B1);
+const T = await import(B1);
+{
+  ok(T.ARENA_NETWORK === 'testnet' && T.IS_MAINNET === false, 'default build: ARENA_NETWORK=testnet');
+  ok(T.NET.appId === 769907387 && T.NET.legacyAppId === 769688298 && T.NET.gonnaAsa === 769688287 && T.NET.opUpAppId === 769688641, 'testnet ids intact');
+  ok(T.NET.treasuryAddr.startsWith('4OQ3') && T.NET.oracleAddr.startsWith('COI3'), 'testnet treasury/oracle addrs intact');
+  ok(T.NET.algodUrl === 'https://testnet-api.algonode.cloud', 'testnet algod intact');
+  ok(T.ARENA_FIXTURES_ENABLED === true, 'fixtures enabled on testnet');
+  ok(T.netLsKey('gonna.arena.adapter') === 'gonna.arena.adapter.testnet', 'netLsKey scopes with .testnet');
+  mkWindow({});
+  ok(T.oracleBaseUrl() === T.ORACLE_BASE_URL_TESTNET, 'oracleBaseUrl default = testnet Render service');
+  ok(T.arenaMode() === 'mock', 'arenaMode default = mock (public default unchanged)');
+}
+
+// ================= [2] MAINNET build =======================================
+console.log('\n[2] BEHAVIOR: VITE_ARENA_NETWORK=mainnet build');
+const B2 = join(ROOT, '.tmp-m1-mainnet.mjs');
+bundle(B2, ['--define:import.meta.env.VITE_ARENA_NETWORK="mainnet"']);
+const M = await import(B2);
+{
+  ok(M.ARENA_NETWORK === 'mainnet' && M.IS_MAINNET === true, 'mainnet build: ARENA_NETWORK=mainnet');
+  ok(M.NET.appId === 0 && M.NET.opUpAppId === 0 && M.NET.treasuryAddr === '' && M.NET.oracleAddr === '', 'mainnet ids are M-2 placeholders (unreachable on purpose)');
+  ok(M.NET.gonnaAsa === 2582294183, 'mainnet GONNA ASA 2582294183');
+  ok(M.NET.algodUrl === 'https://mainnet-api.algonode.cloud', 'mainnet algod');
+  ok(M.ARENA_FIXTURES_ENABLED === false, 'fixtures OFF in a mainnet build (dead path)');
+  ok(M.netLsKey('gonna.arena.adapter') === 'gonna.arena.adapter.mainnet', 'netLsKey scopes with .mainnet');
+  ok(M.ORACLE_BASE_URL_MAINNET === 'https://gonna-arena-oracle-testnet.onrender.com', 'mainnet oracle URL = same Render service (flip at M-2)');
+  mkWindow({});
+  ok(M.oracleBaseUrl() === M.ORACLE_BASE_URL_MAINNET, 'oracleBaseUrl default = mainnet row');
+}
+
+// ================= [3] LEAK scenarios ======================================
+console.log('\n[3] LEAK: testnet-era localStorage must not pollute mainnet (and vice versa)');
+{
+  // legacy UNSCOPED keys from a pre-M-1 testnet session
+  mkWindow({ 'gonna.arena.adapter': 'testnet', 'gonna.arena.oracleurl': 'dev' });
+  ok(M.arenaMode() === 'mock', 'mainnet session: legacy unscoped adapter=testnet IGNORED (stays mock)');
+  ok(M.oracleBaseUrl() === M.ORACLE_BASE_URL_MAINNET, "mainnet session: legacy unscoped oracleurl='dev' IGNORED (no dev-oracle leak!)");
+  // testnet-scoped keys must not leak into mainnet either
+  mkWindow({ 'gonna.arena.adapter.testnet': 'testnet', 'gonna.arena.oracleurl.testnet': 'http://evil-oracle.example' });
+  ok(M.arenaMode() === 'mock', 'mainnet session: testnet-scoped adapter flag IGNORED');
+  ok(M.oracleBaseUrl() === M.ORACLE_BASE_URL_MAINNET, 'mainnet session: testnet-scoped oracle override IGNORED');
+  // mainnet-scoped keys ARE honored on mainnet
+  const { store } = mkWindow({ 'gonna.arena.oracleurl.mainnet': 'http://qa-oracle:9999' });
+  ok(M.oracleBaseUrl() === 'http://qa-oracle:9999', 'mainnet session: mainnet-scoped override honored');
+  // and writes go to the scoped key
+  mkWindow({});
+  M.arenaMode();
+  ok(!store.has('gonna.arena.adapter'), 'no unscoped writes');
+  // symmetric check on the testnet build
+  mkWindow({ 'gonna.arena.adapter.mainnet': 'testnet', 'gonna.arena.oracleurl.mainnet': 'http://evil.example' });
+  ok(T.arenaMode() === 'mock', 'testnet session: mainnet-scoped adapter flag IGNORED');
+  ok(T.oracleBaseUrl() === T.ORACLE_BASE_URL_TESTNET, 'testnet session: mainnet-scoped oracle override IGNORED');
+  const s2 = mkWindow({ 'gonna.arena.adapter.testnet': 'testnet' });
+  ok(T.arenaMode() === 'testnet', 'testnet session: testnet-scoped adapter flag honored');
+}
+
+rmSync(ENTRY, { force: true });
+rmSync(B1, { force: true });
+rmSync(B2, { force: true });
+
+console.log('\n=================================================');
+console.log('RESULT: ' + passed + '/' + total + ' passed');
+if (fails.length > 0) console.log('FAILURES:\n - ' + fails.join('\n - '));
+process.exit(fails.length === 0 ? 0 : 1);

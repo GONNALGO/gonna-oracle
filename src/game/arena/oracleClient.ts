@@ -6,16 +6,23 @@
 // receipts) BEFORE it signs. Every failure surfaces as an honest GONNA line —
 // a network error NEVER falls back to the dev-oracle in silence.
 //
-// Base URL: ORACLE_BASE_URL_TESTNET, overridable for QA via ?oracle=<url>
-// (persisted in localStorage gonna.arena.oracleurl — the arenaMode pattern).
+// Base URL: per-network default from arenaKit (M-1), overridable for QA via
+// ?oracle=<url> (persisted in a NETWORK-SCOPED localStorage key — a testnet
+// override must never leak into a mainnet session, M-1 leak guard).
 // The reserved value '?oracle=dev' is the EXPLICIT local-QA fallback: sigs
 // come from the armed dev-oracle key (a VITE_QA_ORACLE=1 build + the #oracle=
 // master link, or harness injection). Production never sets it.
 // ============================================================================
 import { b64ToBytes } from '../b64';
+import { ARENA_NETWORK, NET, netLsKey } from './arenaKit';
 
 export const ORACLE_BASE_URL_TESTNET = 'https://gonna-arena-oracle-testnet.onrender.com'; // public Render oracle (free tier); localhost still available via ?oracle=
-const LS_ORACLE_URL = 'gonna.arena.oracleurl';
+// M-1: same Render service today — the mainnet flip is env-side at M-2
+// (rename of the Render service is an infra decision, tracked there).
+export const ORACLE_BASE_URL_MAINNET = NET.oracleBaseUrl;
+const ORACLE_BASE_URL_DEFAULT = ARENA_NETWORK === 'mainnet' ? ORACLE_BASE_URL_MAINNET : ORACLE_BASE_URL_TESTNET;
+// network-scoped: 'gonna.arena.oracleurl.testnet' | '...mainnet'
+const LS_ORACLE_URL = netLsKey('gonna.arena.oracleurl');
 // reserved ?oracle= value: sign locally with the armed QA dev-oracle key
 export const ORACLE_DEV = 'dev';
 
@@ -32,7 +39,7 @@ export function oracleBaseUrl(): string {
   } catch {
     /* no window/storage (node tests) */
   }
-  return ORACLE_BASE_URL_TESTNET;
+  return ORACLE_BASE_URL_DEFAULT;
 }
 
 export function oracleIsDev(): boolean {

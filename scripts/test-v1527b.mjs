@@ -454,7 +454,7 @@ const modB = await import(BUNDLE_B);
 const { ArenaUI, setMock, getArenaAdapter, MSG } = modB;
 {
   store.clear();
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   setMock({ address: ADDR58('DEGEN'), nfts: [] });
   const ad = getArenaAdapter();
   const hint = await ad.peekNextId(); // the mock counter BEFORE the race
@@ -488,7 +488,7 @@ const { ArenaUI, setMock, getArenaAdapter, MSG } = modB;
 
   // sanity: with the counter NOT moved, the same UI flow creates the card
   store.clear();
-  store.set('gonna.arena.adapter', 'mock');
+  store.set('gonna.arena.adapter.testnet', 'mock');
   const ad2 = getArenaAdapter();
   const hint2 = await ad2.peekNextId();
   const ui2 = new ArenaUI();
