@@ -127,7 +127,6 @@ export const ALGO_WORDMARK_SRC = 'brand/algorand-wordmark.png';
 export const ALGO_WORDMARK_H = 10;
 export const ALGO_WORDMARK_W = Math.round((152 / 42) * ALGO_WORDMARK_H); // 36
 let algoWordmarkImg: HTMLImageElement | null = null;
-let algoWordmarkDead = false;
 const algoWordmarkTints = new Map<string, HTMLCanvasElement>();
 (function bootAlgoWordmark(): void {
   if (typeof Image === 'undefined') return; // node/CI: no DOM
@@ -136,7 +135,8 @@ const algoWordmarkTints = new Map<string, HTMLCanvasElement>();
     algoWordmarkImg = img;
   };
   img.onerror = () => {
-    algoWordmarkDead = true; // 404/offline: row just keeps the pixel text
+    // 404/offline: algoWordmarkImg stays null -> draw is a graceful no-op,
+    // the row just keeps the pixel text
   };
   img.src = ALGO_WORDMARK_SRC;
 })();

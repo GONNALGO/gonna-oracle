@@ -42,8 +42,8 @@ writeFileSync(
   "// M2 replay bundle entry (SPEC-m2 §6) — generated, never committed\n" +
     "export { Game } from '../../src/game/engine';\n" +
     "export { buildArt } from '../../src/game/sprites';\n" +
-    "export { decodeInputLog, encodeInputLog, encodeInputLogB64, maskFromDown, INPUT_LOG_CAP } from '../../src/game/arena/inputLog';\n" +
-    "export { hashSeed, makeRng } from '../../src/game/rng';\n",
+    "export { decodeInputLog, decodeInputLogB64, encodeInputLog, encodeInputLogB64, maskFromDown, INPUT_LOG_CAP } from '../../src/game/arena/inputLog';\n" +
+    "export { hashSeed, makeRng, makeRngFromLabel } from '../../src/game/rng';\n",
 );
 
 const out = path.join(OUT_DIR, `engine-${VER}.mjs`);

@@ -67,10 +67,19 @@ write or signature, `/v1/sign-score` replays the submitted v2 log headless:
 4. no bundle `replay-bundles/engine-<build>.mjs` → 400 `BUILD UNKNOWN TO THE ORACLE`
 5. header `seedLabel` != chain-derived `PIT-<cid>` (stage) / `RUN-<cid>` (full)
    → 400 `SEED MISMATCH`
-6. headless replay (fresh Game per request, bundle cached per build, intro
-   force-skipped like the QA harness) → **exact integer score equality**,
-   else 400 `REPLAY MISMATCH`
+6. headless replay (fresh Game per request, bundle cached per build) →
+   **exact integer score equality**, else 400 `REPLAY MISMATCH`
 7. wall-clock guard `REPLAY_TIMEOUT_MS` (default 30000) → 500 `REPLAY TIMEOUT - RETRY`
+
+M2-4: the replay boots through the EXACT client entries —
+`startArenaRun('stage', idx, {seedTag: 'PIT-<cid>'})` / `debugFullRun('RUN-<cid>')`
+(v16.1 engine self-installs the seeded streams) — and drives the log with the
+scene-aware contract promoted from `scripts/test-v1610.mjs`: mask consumed per
+**play-scene frame only**, intro force-skipped, clear/victory scenes stepped
+with an auto START (player-mashing-START semantics), driver stuck in non-play
+scenes → 400 `REPLAY MISMATCH`. `globalThis.__GONNA_VER` is pinned per request
+so the bundle's sealed-log build stamp matches `<VER>`. RNG parity:
+`makeRngFromLabel(label) === makeRng(hashSeed(label))` (src/game/rng.ts).
 
 Bundles are built per released client build and committed:
 
@@ -82,8 +91,17 @@ Boot assert: with enforcement on, at least one bundle must exist or the
 server exits 1. FULL mode campaign boot mirrors SPEC-m2 §4 (single
 `mulberry32(hashSeed('RUN-<cid>'))` stream over the whole arena run);
 DESCENT uses the engine-seeded `PIT-<cid>`. Determinism proof: M2-0
-(`M2-0-REPORT.md`) — bit-exact Node↔Chromium. FULL-mode client parity
-end-to-end is pending the m2-client merge (seeded campaign).
+(`M2-0-REPORT.md`) — bit-exact Node↔Chromium. Client parity is proven by the
+GATE suite (`test/replayIntegration.test.ts`): real GIL v2 logs recorded by
+the client path (recorder + sealed artifacts) replay bit-exact, stageIdx
+0..3 + full campaign + death-sealed runs.
+
+**Frozen-contract tie bug (found by M2-4 E2E, cid 56)**: a perfect tie at the
+top score BRICKS a full+signed card — `resolve` deletes both boxes, then the
+tie branch lazily `box_extract`s the deleted players box
+(QuantumArena.approval.teal:3036-3090) → "no such box" forever. The contract
+is FROZEN; callers MUST avoid top-score ties (the E2E sim re-rolls honest
+runs until the top is unique).
 
 **Hardening M3**: the replay runs in-process (justified: 300k frame cap +
 rate limits + wall-clock guard). For mainnet, isolate it in a

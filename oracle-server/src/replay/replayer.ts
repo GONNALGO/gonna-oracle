@@ -36,6 +36,13 @@ export class ReplayTimeoutError extends Error {
   }
 }
 
+export class ReplayStuckError extends Error {
+  constructor() {
+    super('driver stuck in non-play scene');
+    this.name = 'ReplayStuckError';
+  }
+}
+
 /** Scan replay-bundles/ for engine-<build>.mjs artifacts. */
 export function scanReplayBundles(dir: string): Map<string, string> {
   const out = new Map<string, string>();
@@ -66,58 +73,79 @@ export function startDescent(game: any, stageIdx: number, seedLabel: string): vo
   game.debugDescent(stageIdx, seedLabel);
 }
 
+/** Stage run boot — the EXACT arena stage-mode client entry (v16.1). */
+export function startStageRun(game: any, stageIdx: number, seedLabel: string): void {
+  game.startArenaRun('stage', stageIdx, { seedTag: seedLabel });
+}
+
 /**
- * FULL RUN (campaign) seeded boot — SPEC-m2 §4 mirror. The client (m2-client
- * branch) seeds the arena campaign from 'RUN-<cid>'; here we inject the SAME
- * single mulberry32 stream over every loadStage (loadStage re-assigns
- * `this.rng = mathRng` at each stage transition — the override keeps the one
- * seeded stream for the whole run, exactly per SPEC). Until m2-client merges,
- * this path is self-consistent server-side; client-parity e2e is pending.
+ * FULL RUN (campaign) seeded boot — the EXACT arena full-mode client entry
+ * (SPEC-m2 §4, m2-client): the engine self-installs ONE
+ * makeRngFromLabel(seedLabel) campaign stream for the whole run
+ * (startArenaRun -> loadStage -> this.rng = arenaRunRng ?? mathRng).
+ * RNG parity: makeRngFromLabel(label) === makeRng(hashSeed(label)) (rng.ts).
  */
 export function startFullRunSeeded(eng: ReplayEngine, game: any, seedLabel: string): void {
-  const seeded = eng.makeRng(eng.hashSeed(seedLabel));
-  const origLoadStage = game.loadStage.bind(game);
-  game.loadStage = (idx: number) => {
-    origLoadStage(idx);
-    game.rng = seeded;
-  };
-  game.startNewGame(); // scene 'intro'; the replay driver force-skips to play
+  game.debugFullRun(seedLabel); // scene 'intro'; the replay driver force-skips
 }
 
 export interface ReplayResult {
   score: number;
-  frames: number;
-  wave: number;
+  playFrames: number;
+  steps: number;
+  stageIdx: number;
   scene: string;
   elapsedMs: number;
 }
 
 /**
- * Replay a GIL mask stream: per frame, levels -> down + rising-edge pressed,
- * then step(). Cooperative wall-clock guard: checked every 256 frames, aborts
- * with ReplayTimeoutError once the budget is exceeded (budget 0 = abort at
- * the first checkpoint — deterministic in tests). In-process by design for
- * M2 (frame cap 300k + rate limits); worker_threads isolation = M3 hardening.
+ * Scene-aware replay driver — the M2 replay CONTRACT, promoted verbatim from
+ * the client reference (scripts/test-v1610.mjs replayCampaign). GIL v2 log
+ * frames are PLAY-scene frames ONLY:
+ *   - intro: force-skip (debugSim-equivalent), consumes no mask;
+ *   - clear tally / victory: auto START (player mashing START — the bonus
+ *     lands the instant the press registers), consumes no mask;
+ *   - play: consume one mask (levels + rising-edge pressed), step.
+ * Cooperative wall-clock guard every 1024 steps (budget 0 = abort at the
+ * first checkpoint — deterministic in tests). In-process by design for M2
+ * (frame cap 300k + rate limits); worker_threads isolation = M3 hardening.
  */
-export function replayMasks(game: any, masks: Uint8Array, timeoutMs: number): ReplayResult {
-  const t0 = Date.now();
+export function replayCampaign(game: any, masks: Uint8Array, timeoutMs: number): ReplayResult {
   const down = game.input.down;
   const pressed = game.input.pressed;
-  if (game.scene === 'intro') game.setScene('play'); // debugSim-equivalent skip
-  for (let f = 0; f < masks.length; f++) {
-    if ((f & 0xff) === 0 && Date.now() - t0 >= timeoutMs) throw new ReplayTimeoutError();
-    const m = masks[f]!;
-    for (let i = 0; i < 8; i++) {
-      const v = ((m >> i) & 1) === 1;
-      if (v && !down[BTNS[i]!]) pressed[BTNS[i]!] = true;
-      down[BTNS[i]!] = v;
+  const t0 = Date.now();
+  let i = 0;
+  let steps = 0;
+  while (i < masks.length) {
+    if (++steps > masks.length * 4 + 20000) throw new ReplayStuckError();
+    if ((steps & 0x3ff) === 0 && Date.now() - t0 >= timeoutMs) throw new ReplayTimeoutError();
+    const sc = game.scene;
+    if (sc === 'intro') {
+      game.setScene('play');
+      continue;
+    }
+    if (sc === 'clear' || sc === 'victory') {
+      game.input.pressed.start = true;
+      game.step();
+      continue;
+    }
+    if (sc !== 'play') {
+      game.step();
+      continue;
+    }
+    const m = masks[i++]!;
+    for (let b = 0; b < 8; b++) {
+      const v = ((m >> b) & 1) === 1;
+      if (v && !down[BTNS[b]!]) pressed[BTNS[b]!] = true;
+      down[BTNS[b]!] = v;
     }
     game.step();
   }
   return {
     score: game.score,
-    frames: masks.length,
-    wave: game.descent?.wave ?? -1,
+    playFrames: i,
+    steps,
+    stageIdx: game.stageIdx,
     scene: game.scene,
     elapsedMs: Date.now() - t0,
   };
@@ -148,6 +176,10 @@ export class ReplayVerifier {
     let p = this.cache.get(build);
     if (!p) {
       installBrowserStubs(); // before the bundle's module bodies run
+      // the engine's recorder stamps sealed logs with buildVer() ==
+      // globalThis.__GONNA_VER (fallback 'DEV') — pin it to THIS bundle so the
+      // artifact behaves exactly like the released client build <VER>
+      (globalThis as Record<string, unknown>)['__GONNA_VER'] = build;
       p = import(pathToFileURL(file).href) as Promise<ReplayEngine>;
       this.cache.set(build, p);
     }
@@ -177,12 +209,15 @@ export class ReplayVerifier {
     }
     let result: ReplayResult;
     try {
+      (globalThis as Record<string, unknown>)['__GONNA_VER'] = opts.build; // per-request pin (multi-bundle processes)
       const game = bootGame(eng);
-      if (opts.stageMode === 'stage') startDescent(game, opts.stageIdx ?? 0, opts.seedLabel);
+      // EXACT client boot entries (v16.1): same scene/RNG wiring as the live run
+      if (opts.stageMode === 'stage') startStageRun(game, opts.stageIdx ?? 0, opts.seedLabel);
       else startFullRunSeeded(eng, game, opts.seedLabel);
-      result = replayMasks(game, opts.masks, this.timeoutMs);
+      result = replayCampaign(game, opts.masks, this.timeoutMs);
     } catch (e) {
       if (e instanceof ReplayTimeoutError) return { ok: false, reason: 'REPLAY TIMEOUT - RETRY', status: 500 };
+      if (e instanceof ReplayStuckError) return { ok: false, reason: 'REPLAY MISMATCH', status: 400 }; // log never reaches a play frame for the tail masks
       throw e; // engine crash = genuine internal error (500 via onError)
     }
     if (result.score !== opts.score) return { ok: false, reason: 'REPLAY MISMATCH', status: 400 };

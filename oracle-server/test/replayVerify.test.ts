@@ -8,15 +8,49 @@ import { mkFixture, mkMeta, mkPlayer, PLAYER_A, PLAYER_B, testConfig, StubChain,
 import { signerFromMnemonic } from '../src/sign.js';
 import { bootChecks } from '../src/index.js';
 import { encodeInputLog } from '../src/verify.js';
-import { ReplayVerifier, bootGame, startDescent, startFullRunSeeded, replayMasks, type ReplayEngine } from '../src/replay/replayer.js';
+import { ReplayVerifier, bootGame, startStageRun, startFullRunSeeded, type ReplayEngine } from '../src/replay/replayer.js';
 import { b64encode } from '../src/util.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const BUNDLES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../replay-bundles');
-// the committed fixture bundle for the current tree build
-const VER = 'v9fe01156';
+// the committed fixture bundle for the current tree build (v16.1 engine)
+const VER = 'vb1d23c1a';
 const FRAMES = 3600;
+
+const BTNS = ['up', 'down', 'left', 'right', 'punch', 'kick', 'jump', 'special'] as const;
+
+/**
+ * Produce an HONEST v2 log through the REAL client path: boot via the exact
+ * arena entries (startArenaRun / debugFullRun), feed a continuous input
+ * stream (every step, like a live player), let the v16.1 recorder capture
+ * PLAY-scene frames only. Returns the recorded masks + the score the client
+ * would seal. The server must replay this to the same score.
+ */
+function recordRun(eng: ReplayEngine, boot: (g: any) => void, stream: Uint8Array): { masks: Uint8Array; score: number } {
+  const game = bootGame(eng);
+  boot(game);
+  const down = game.input.down;
+  const pressed = game.input.pressed;
+  for (let f = 0; f < stream.length && game.inputLogMasks; f++) {
+    const m = stream[f]!;
+    for (let b = 0; b < 8; b++) {
+      const v = ((m >> b) & 1) === 1;
+      if (v && !down[BTNS[b]!]) pressed[BTNS[b]!] = true;
+      down[BTNS[b]!] = v;
+    }
+    game.step();
+  }
+  // sealed mid-stream (death): the recorder buffer is gone — read the REAL
+  // sealed artifact instead (same thing the client would submit)
+  const sealed = game.arena?.sealedRun;
+  if (sealed?.inputLogB64) {
+    const dec = eng.decodeInputLogB64(sealed.inputLogB64);
+    return { masks: dec.masks, score: game.score };
+  }
+  const n: number = game.inputLogFrames ?? 0;
+  return { masks: Uint8Array.from(game.inputLogMasks.subarray(0, n)), score: game.score };
+}
 
 const BTN_BIT: Record<string, number> = { up: 1, down: 2, left: 4, right: 8, punch: 16, kick: 32, jump: 64, special: 128 };
 
@@ -84,30 +118,26 @@ beforeAll(async () => {
   if (!p) throw new Error(`fixture bundle engine-${VER}.mjs missing — run: node scripts/build-replay-bundle.mjs ${VER}`);
   eng = await p;
 
-  { // stage mode: DESCENT 'PIT-42' on stage 2
-    const masks = tapeToMasks(buildTape(FRAMES), FRAMES);
-    const game = bootGame(eng);
-    startDescent(game, 2, 'PIT-42');
-    const r = replayMasks(game, masks, 30_000);
-    stage = { masks, score: r.score, gil: gilV2(VER, 'PIT-42', masks) };
+  const stream = tapeToMasks(buildTape(FRAMES), FRAMES);
+  { // stage mode: DESCENT 'PIT-42' on stage 2 — real client path + recorder
+    const r = recordRun(eng, (g) => startStageRun(g, 2, 'PIT-42'), stream);
+    stage = { masks: r.masks, score: r.score, gil: eng.encodeInputLogB64({ v: 2, build: VER, seedLabel: 'PIT-42', frames: r.masks.length, truncated: false, masks: r.masks }) };
+    if (stage.masks.length < 600) throw new Error('stage fixture too short: ' + stage.masks.length);
   }
-  { // full mode: campaign 'RUN-42' (SPEC-m2 §4 seeded mirror)
-    const masks = tapeToMasks(buildTape(FRAMES), FRAMES);
-    const game = bootGame(eng);
-    startFullRunSeeded(eng, game, 'RUN-42');
-    const r = replayMasks(game, masks, 30_000);
-    full = { masks, score: r.score, gil: gilV2(VER, 'RUN-42', masks) };
+  { // full mode: seeded campaign 'RUN-42' — real client path + recorder
+    const r = recordRun(eng, (g) => startFullRunSeeded(eng, g, 'RUN-42'), stream);
+    full = { masks: r.masks, score: r.score, gil: eng.encodeInputLogB64({ v: 2, build: VER, seedLabel: 'RUN-42', frames: r.masks.length, truncated: false, masks: r.masks }) };
+    if (full.masks.length < 600) throw new Error('full fixture too short: ' + full.masks.length);
   }
   { // create flow seat 0: cid = next_challenge_id = 50 -> 'PIT-50'
-    const masks = tapeToMasks(buildTape(FRAMES), FRAMES);
-    const game = bootGame(eng);
-    startDescent(game, 2, 'PIT-50');
-    const r = replayMasks(game, masks, 30_000);
-    create0 = { masks, score: r.score, gil: gilV2(VER, 'PIT-50', masks) };
+    const r = recordRun(eng, (g) => startStageRun(g, 2, 'PIT-50'), stream);
+    create0 = { masks: r.masks, score: r.score, gil: eng.encodeInputLogB64({ v: 2, build: VER, seedLabel: 'PIT-50', frames: r.masks.length, truncated: false, masks: r.masks }) };
   }
 }, 120_000);
 
 const CFG = { replayEnforce: true, ratePerMinIp: 1000, ratePerMinAddr: 100 };
+
+const dur = (frames: number): number => Math.ceil(frames / 60) + 2;
 
 function body(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -118,7 +148,7 @@ function body(over: Record<string, unknown> = {}): Record<string, unknown> {
     stageMode: 'stage',
     stageIdx: 2,
     build: VER,
-    run: { seedLabel: 'PIT-42', frames: FRAMES, durationSec: 62, inputLogB64: stage.gil },
+    run: { seedLabel: 'PIT-42', frames: stage.masks.length, durationSec: dur(stage.masks.length), inputLogB64: stage.gil },
     ...over,
   };
 }
@@ -144,7 +174,7 @@ describe('M2 replay verification (SPEC-m2 §5)', () => {
       stageMode: 'stage',
       stageIdx: 2,
       build: VER,
-      run: { seedLabel: 'PIT-50', frames: FRAMES, durationSec: 62, inputLogB64: create0.gil },
+      run: { seedLabel: 'PIT-50', frames: create0.masks.length, durationSec: dur(create0.masks.length), inputLogB64: create0.gil },
     });
     expect(r.status).toBe(200);
     expect(typeof r.json['sigB64']).toBe('string');
@@ -161,7 +191,7 @@ describe('M2 replay verification (SPEC-m2 §5)', () => {
       score: full.score,
       stageMode: 'full',
       build: VER,
-      run: { seedLabel: 'RUN-42', frames: FRAMES, durationSec: 62, inputLogB64: full.gil },
+      run: { seedLabel: 'RUN-42', frames: full.masks.length, durationSec: dur(full.masks.length), inputLogB64: full.gil },
     });
     expect(r.status).toBe(200);
     expect(typeof r.json['sigB64']).toBe('string');
@@ -174,7 +204,7 @@ describe('M2 replay verification (SPEC-m2 §5)', () => {
     f.chain.metas = stageChain().metas;
     f.chain.players = stageChain().players;
     f.chain.stages = stageChain().stages;
-    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: FRAMES, durationSec: 62, inputLogB64: gilV2(VER, 'PIT-42', bad) } }));
+    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: stage.masks.length, durationSec: dur(stage.masks.length), inputLogB64: gilV2(VER, 'PIT-42', bad) } }));
     expect(r.status).toBe(400);
     expect(r.json['error']).toBe('REPLAY MISMATCH');
   }, 60_000);
@@ -195,7 +225,7 @@ describe('M2 replay verification (SPEC-m2 §5)', () => {
     f.chain.metas = stageChain().metas;
     f.chain.players = stageChain().players;
     f.chain.stages = stageChain().stages;
-    const r = await f.post('/v1/sign-score', body({ build: 'vNOPE0000', run: { seedLabel: 'PIT-42', frames: FRAMES, durationSec: 62, inputLogB64: gil } }));
+    const r = await f.post('/v1/sign-score', body({ build: 'vNOPE0000', run: { seedLabel: 'PIT-42', frames: stage.masks.length, durationSec: dur(stage.masks.length), inputLogB64: gil } }));
     expect(r.status).toBe(400);
     expect(r.json['error']).toBe('BUILD UNKNOWN TO THE ORACLE');
   });
@@ -206,7 +236,7 @@ describe('M2 replay verification (SPEC-m2 §5)', () => {
     f.chain.metas = stageChain().metas;
     f.chain.players = stageChain().players;
     f.chain.stages = stageChain().stages;
-    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: FRAMES, durationSec: 62, inputLogB64: gil } }));
+    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: stage.masks.length, durationSec: dur(stage.masks.length), inputLogB64: gil } }));
     expect(r.status).toBe(400);
     expect(r.json['error']).toBe('RUN LOG TRUNCATED');
   });
@@ -217,29 +247,29 @@ describe('M2 replay verification (SPEC-m2 §5)', () => {
     f.chain.metas = stageChain().metas;
     f.chain.players = stageChain().players;
     f.chain.stages = stageChain().stages;
-    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-999', frames: FRAMES, durationSec: 62, inputLogB64: gil } }));
+    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-999', frames: stage.masks.length, durationSec: dur(stage.masks.length), inputLogB64: gil } }));
     expect(r.status).toBe(400);
     expect(r.json['error']).toBe('SEED MISMATCH');
   });
 
   it('legacy v1: allowed when ALLOW_LEGACY_GIL=1 (M1 structural path, no replay)', async () => {
-    const gil = b64encode(encodeInputLog({ build: VER, seedLabel: 'PIT-42', frames: FRAMES }, stage.masks)); // v1
+    const gil = b64encode(encodeInputLog({ build: VER, seedLabel: 'PIT-42', frames: stage.masks.length }, stage.masks)); // v1
     const f = mkFixture({}, CFG);
     f.chain.metas = stageChain().metas;
     f.chain.players = stageChain().players;
     f.chain.stages = stageChain().stages;
-    const r = await f.post('/v1/sign-score', body({ score: 100_000, run: { seedLabel: 'PIT-42', frames: FRAMES, durationSec: 62, inputLogB64: gil } }));
+    const r = await f.post('/v1/sign-score', body({ score: 100_000, run: { seedLabel: 'PIT-42', frames: stage.masks.length, durationSec: dur(stage.masks.length), inputLogB64: gil } }));
     expect(r.status).toBe(200);
     expect(typeof r.json['sigB64']).toBe('string');
   });
 
   it('legacy v1: refused when ALLOW_LEGACY_GIL=0 -> LEGACY LOG REFUSED', async () => {
-    const gil = b64encode(encodeInputLog({ build: VER, seedLabel: 'PIT-42', frames: FRAMES }, stage.masks));
+    const gil = b64encode(encodeInputLog({ build: VER, seedLabel: 'PIT-42', frames: stage.masks.length }, stage.masks));
     const f = mkFixture({}, { ...CFG, allowLegacyGil: false });
     f.chain.metas = stageChain().metas;
     f.chain.players = stageChain().players;
     f.chain.stages = stageChain().stages;
-    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: FRAMES, durationSec: 62, inputLogB64: gil } }));
+    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: stage.masks.length, durationSec: dur(stage.masks.length), inputLogB64: gil } }));
     expect(r.status).toBe(400);
     expect(r.json['error']).toBe('LEGACY LOG REFUSED');
   });
@@ -249,7 +279,7 @@ describe('M2 replay verification (SPEC-m2 §5)', () => {
     f.chain.metas = stageChain().metas;
     f.chain.players = stageChain().players;
     f.chain.stages = stageChain().stages;
-    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: FRAMES, durationSec: 62 } }));
+    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: stage.masks.length, durationSec: dur(stage.masks.length) } }));
     expect(r.status).toBe(400);
     expect(r.json['error']).toBe('RUN LOG REQUIRED');
   });
@@ -259,7 +289,7 @@ describe('M2 replay verification (SPEC-m2 §5)', () => {
     f.chain.metas = stageChain().metas;
     f.chain.players = stageChain().players;
     f.chain.stages = stageChain().stages;
-    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: FRAMES, durationSec: 62 } }));
+    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: stage.masks.length, durationSec: dur(stage.masks.length) } }));
     expect(r.status).toBe(200);
     expect(typeof r.json['sigB64']).toBe('string');
   });

@@ -236,7 +236,10 @@ export function installBrowserStubs(): void {
   g.Audio = AudioStub;
   g.AudioContext = AudioContextStub;
   g.webkitAudioContext = AudioContextStub;
-  g.fetch = () => Promise.reject(new Error('headless replay: no network'));
+  // keep the native fetch (the server makes REAL algod/indexer calls); only
+  // stub when absent. The engine's fire-and-forget skin fetch fails fast and
+  // is caught engine-side either way.
+  if (typeof g.fetch !== 'function') g.fetch = () => Promise.reject(new Error('headless replay: no network'));
   g.prompt = () => null;
   g.alert = noop;
   if (typeof g.performance === 'undefined') g.performance = { now: () => Date.now() };
