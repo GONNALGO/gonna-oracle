@@ -106,3 +106,29 @@ Conforme all'atteso post-fix. Per gli origin non in allow-list la risposta arriv
 4. Pruning bundle legacy su mainnet come leva di igiene (non urgente: zero drift rilevato).
 
 *Raw results: `/tmp/waveb/results.json` (33 entries) + run log `/tmp/waveb/run1.log`. Script: `/tmp/waveb/attack.mjs`, `/tmp/waveb/gil.mjs`.*
+
+---
+
+# POST-FIX VERIFICATION (deploy `dep-da7iqg142hec73c07ii0`, ALLOW_LEGACY_GIL=0 LIVE)
+
+Re-eseguite le ESATTE 3 request v1 che pre-fix davano 200, più controllo v2 (script `/tmp/waveb/retest.mjs`, raw `/tmp/waveb/retest-results.json`):
+
+| # | Request | Pre-fix | Post-fix | Esito |
+|---|---------|---------|----------|-------|
+| R2a | v1 + score onesto | **200** | **400 `LEGACY LOG REFUSED`** (462ms) | ✅ |
+| R2b | v1 + score gonfiato +99999 | **200** | **400 `LEGACY LOG REFUSED`** (451ms) | ✅ |
+| R2c | v1 + build `vnonesiste` + 499999 | **200** | **400 `LEGACY LOG REFUSED`** (446ms) | ✅ |
+| R2d | CONTROLLO v2 onesta | 200 | **200 + sigB64** (1541ms) | ✅ nessuna regressione |
+
+**SEV-1: CHIUSO ✅.** Il ramo legacy v1 ora rifiuta tutto (REPLAY_ENFORCE=1 + ALLOW_LEGACY_GIL=0); il path v2 onesto è intatto. Resta valida la raccomandazione di assertare `ALLOW_LEGACY_GIL=0` in deploy-time per mainnet.
+
+## 🟠 NUOVO FINDING — SEV-2b: receipts/anti-replay state NON sopravvivono al redeploy (DB effimero)
+
+**Test R1 (conferma reuse receipt Wave A):** `POST /v1/continue/receipt` con il receipt REALE di Wave A (`WAVE-C-31-mtadomg5`, txid `6GUQD4T7…CWDQ`, registrato+consumato da Wave A prima del redeploy) → **atteso 409, ottenuto 200 `{"ok":true}`**.
+**Probe di conferma ipotesi:**
+- ri-registrato il MIO receipt `E2EV161-1-B` (registrato+consumato pre-redeploy) → **200** (accettato di nuovo);
+- ri-registrato `WAVE-C-31-mtadomg5` un minuto dopo la mia registrazione → **409 `receipt already registered`** ✅ (la logica di dedup funziona — entro la vita del DB).
+
+**Conclusione:** il redeploy Render ha **wipato il DB SQLite** (`/data/oracle.db` su disco effimero): receipts, sig rows e rate buckets non sopravvivono a un deploy/restart. La protezione anti-reuse dei continue è quindi vincolata alla vita del processo: un receipt consumato può essere **ri-registrato e ri-consumato dopo ogni redeploy** → un continue pagato vale una firma extra per finestra di deploy. Anche l'anti-replay delle sig (upsertSig) e lo storico IP/audit si azzerano (la chain resta la source of truth).
+**Fix raccomandato:** disco persistente Render montato su `/data` (o Postgres gestito); boot-check che logghi un warning se il DB è vuoto a freddo con `REPLAY_ENFORCE=1`.
+**Nota:** la ri-registrazione post-wipe di `E2EV161-1-B` e `WAVE-C-31-mtadomg5` è stata fatta dai test qui sopra (stato DB corrente: entrambi registered, non consumed).
