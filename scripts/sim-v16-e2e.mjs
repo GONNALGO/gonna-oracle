@@ -32,6 +32,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // repo's deploy dir (secrets never enter this tree).
 const DEPLOY = process.env.QA_DEPLOY_DIR ?? path.join(ROOT, 'contracts/quantum-arena/deploy');
 const BASE = process.env.ORACLE_URL ?? 'http://localhost:8787';
+// SIM_ONLY=A,B,C,D (default all) — run a subset of cards (e.g. public-oracle smoke)
+const ONLY = new Set((process.env.SIM_ONLY ?? 'A,C,D,B').split(',').map((x) => x.trim().toUpperCase()));
 // the pinned engine bundle the server verifies against (replay-bundles/)
 const BUILD = 'v002d77d0';
 
@@ -450,6 +452,7 @@ const cidA = await kit.nextChallengeId();
   report.txids.cardA.winner = res.winner;
 }
 
+if (ONLY.has('C')) {
 // ============================ CARD C — TIE PROOF (v2.1) =====================
 // THE transaction that was IMPOSSIBLE on the frozen v2 app: two players
 // honestly produce the SAME score (identical input stream on the same
@@ -532,6 +535,9 @@ const cidC = await kit.nextChallengeId();
   report.txids.cardC.round = res.round;
 }
 
+}
+
+if (ONLY.has('D')) {
 // ================= CARD D — minimum honest gap => NON-tie path ==============
 console.log('\n================ CARD D: DUEL smallest honest score gap — classic 95/5 path ================');
 const cidD = await kit.nextChallengeId();
@@ -563,6 +569,9 @@ const cidD = await kit.nextChallengeId();
   report.txids.cardD.winner = res.winner;
 }
 
+}
+
+if (ONLY.has('B')) {
 // ============================ CARD B — 5-SEAT (FULL) ==========================
 console.log('\n================ CARD B: 5-SEAT full-mode (create PLAYER_A, join B+ORACLE+TREASURY+DEPLOYER) ================');
 const cidB = await kit.nextChallengeId();
@@ -610,17 +619,20 @@ const cidB = await kit.nextChallengeId();
 }
 
 
+}
+
 // ============================ INDEXER CROSS-CHECK ==============================
+const DONE_CIDS = [ONLY.has('A') && cidA, ONLY.has('B') && cidB, ONLY.has('C') && cidC, ONLY.has('D') && cidD].filter((x) => x !== false && x !== undefined);
 console.log('\n================ EVENT-LOG cross-check (indexer, kit.fetchArenaCloseEvents) ================');
 let evs = [];
 for (let tries = 0; tries < 6; tries++) {
   try {
     evs = await kit.fetchArenaCloseEvents(4);
-    if ([cidA, cidB, cidC, cidD].every((c) => evs.some((e) => e.cid === c && e.kind === 'resolved'))) break;
+    if (DONE_CIDS.every((c) => evs.some((e) => e.cid === c && e.kind === 'resolved'))) break;
   } catch (e) { console.log('  indexer not ready: ' + e.message); }
   await sleep(8000);
 }
-for (const c of [cidA, cidB, cidC, cidD]) {
+for (const c of DONE_CIDS) {
   const e = evs.find((x) => x.cid === c && x.kind === 'resolved');
   ok(!!e, `event-log: indexer lists ChallengeResolved for cid ${c}${e ? ` (winner=${e.winner ? short(e.winner) : 'tie'} payout=${e.payout} fee=${e.fee} round=${e.round})` : ''}`);
 }
