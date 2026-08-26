@@ -19,6 +19,10 @@ const nacl = require('tweetnacl');
 const { default: algosdk } = await import('algosdk');
 
 const ORACLE = (process.env.ORACLE_BASE ?? 'https://gonna-arena-oracle-testnet.onrender.com').replace(/\/$/, '');
+// SMOKE_NETWORK=mainnet: verify against the mainnet app/nodes (M-4).
+const NET = process.env.SMOKE_NETWORK === 'mainnet' ? 'mainnet' : 'testnet';
+const APP_ID = NET === 'mainnet' ? 3686311434 : 769907387;
+const ALGOD_URL = NET === 'mainnet' ? 'https://mainnet-api.algonode.cloud' : 'https://testnet-api.algonode.cloud';
 function resolveBuild() {
   if (process.env.SMOKE_BUILD) return process.env.SMOKE_BUILD;
   const zip = process.env.SMOKE_ZIP ?? '/mnt/agents/output/gonnafight-arena-testnet.zip';
@@ -92,12 +96,12 @@ const ok = (c, msg) => { if (c) { pass++; console.log('  ok', msg); } else { fai
 
 console.log(`oracle: ${ORACLE}`);
 const health = await (await fetch(`${ORACLE}/v1/health`)).json();
-ok(health.ok === true && health.appId === 769907387, `health ok appId=${health.appId} oracle=${health.oracleAddr?.slice(0, 10)}…`);
+ok(health.ok === true && health.appId === APP_ID, `health ok appId=${health.appId} oracle=${health.oracleAddr?.slice(0, 10)}…`);
 
 // sign-score needs a real cid: use the on-chain next_challenge_id (the
 // pre-create sign flow — same as the game's create wizard)
-const algod = new algosdk.Algodv2('', 'https://testnet-api.algonode.cloud', '');
-const app = await algod.getApplicationByID(769907387).do();
+const algod = new algosdk.Algodv2('', ALGOD_URL, '');
+const app = await algod.getApplicationByID(APP_ID).do();
 const gs = Object.fromEntries(app.params.globalState.map((e) => [Buffer.from(e.key, 'base64').toString(), e.value.uint]));
 const cid = Number(gs.next_challenge_id);
 console.log(`  next_challenge_id = ${cid}`);
@@ -120,7 +124,7 @@ if (res.status === 200) {
   // reconstruct the signed message: 'QA-SCORE|' + u64be(app) + u64be(cid) + seat + addr(32) + u64be(score)
   const u64 = (n) => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(n)); return b; };
   const msg = new Uint8Array(Buffer.concat([
-    Buffer.from('QA-SCORE|'), u64(769907387), u64(cid), Buffer.from([0]),
+    Buffer.from('QA-SCORE|'), u64(APP_ID), u64(cid), Buffer.from([0]),
     Buffer.from(algosdk.decodeAddress(signer.addr.toString()).publicKey), u64(run.score),
   ]));
   const sig = new Uint8Array(Buffer.from(j.sigB64, 'base64'));

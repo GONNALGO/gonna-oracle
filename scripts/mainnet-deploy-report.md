@@ -68,3 +68,20 @@ Verifiche:
   ORACLE_URL default già pubblico; serve una variante mainnet del kit
   (testnetKit → mainnet params: appId/ASA/url).
 - next_challenge_id mainnet = 0 al deploy.
+
+## M-4 — bundle v4fc0b66e live + smoke (2026-08-26)
+
+- Bundle `engine-v4fc0b66e.mjs` syncato su gonna-oracle (`scripts/sync-oracle-repo.mjs`,
+  secret scan pulito) + deploy manuale Render `dep-da7m2pbbc2fs738q1fk0` → live.
+- Boot log: 5 bundle (v002d77d0, **v4fc0b66e**, v53365263, v9fe01156, vb1d23c1a),
+  store=turso(libsql), legacyGil=off, reconciliation ok.
+- Smoke pubblico vs zip mainnet (`SMOKE_NETWORK=mainnet SMOKE_ZIP=…mainnet.zip`,
+  VER derivato da `__GONNA_VER` = v4fc0b66e): **8/8 PASS** — honest 200 + sig
+  verificata su pubkey oracle, inflated → 400 REPLAY MISMATCH, wrong-seed → 400
+  SEED MISMATCH, CORS gonna.bond ✓ / evil ✗.
+- Smoke script ora parametrizzato (`SMOKE_NETWORK=mainnet` → appId 3686311434 +
+  nodi mainnet; default testnet invariato).
+- On-chain micro-duel smoke: **in attesa dei ~100 GONNA dal Principe**.
+  DEPLOYER mainnet opted-in ASA 2582294183 (txid
+  `JNCLJFTG5FPUX7U3XWIJTONYG5322GEF4RUJY4IFO2K53Y5RY3GQ`, round 64450714,
+  balance 0) — il send del Principe ora non fallirà per missing opt-in.
