@@ -1,4 +1,8 @@
 // scripts/vault-door.mjs — post-build armor (v9.6 THE VAULT DOOR)
+// ⚠️ SHIPPING RULE: a new VER REQUIRES pushing oracle-server/replay-bundles/engine-<VER>.mjs
+// to the public gonna-oracle repo + a Render redeploy BEFORE users get the zip,
+// or every real sign-score dies with 400 BUILD UNKNOWN (v16.1.1 incident).
+// Use: node scripts/sync-oracle-repo.mjs  then  node scripts/smoke-public-oracle.mjs (8/8).
 //
 // WHY: the host's antivirus quarantines our entry chunk (false positive),
 // both on upload AND on later scheduled disk sweeps. This script encodes the

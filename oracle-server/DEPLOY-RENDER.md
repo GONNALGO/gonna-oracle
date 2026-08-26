@@ -1,5 +1,20 @@
 # DEPLOY-RENDER — l'oracle GONNA ARENA su Render (testnet, app 769907387)
 
+## ⚠️ REGOLA D'ORO — ogni nuovo VER shippato
+
+Ogni volta che la pipeline produce un nuovo VER (zip client), il suo bundle
+`oracle-server/replay-bundles/engine-<VER>.mjs` DEVE essere pushato sul repo
+pubblico `gonna-oracle` E il servizio Render redeployato, PRIMA che gli
+utenti ricevano lo zip. Altrimenti ogni sign-score reale fallisce con
+**400 BUILD UNKNOWN** (incidente v16.1.1: lo zip mandava v53365263 ma
+l'oracle aveva solo v002d77d0; lo smoke non lo vedeva perché hardcodava la
+build vecchia — ora il VER è derivato dallo zip).
+
+Procedura: `GITHUB_TOKEN=… node scripts/sync-oracle-repo.mjs` (idempotente,
+secret-scan incluso) → poi POST /v1/services/<id>/deploys → poi
+`node scripts/smoke-public-oracle.mjs` (8/8 atteso).
+
+
 Guida per il Principe. L'oracle è il server che firma punteggi e verdetti
 dopo averli riverificati. Metterlo su Render lo rende pubblico: il gioco
 smette di dipendere dal `localhost:8787`.
