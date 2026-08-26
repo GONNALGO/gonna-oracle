@@ -171,7 +171,14 @@ export function installBrowserStubs() {
   g.sessionStorage = new StorageStub();
   g.location = { href: 'http://localhost/', origin: 'http://localhost', pathname: '/', search: '', hash: '', replace: noop, assign: noop };
   g.history = { replaceState: noop, pushState: noop };
-  g.navigator = { userAgent: 'm2-replay-headless', vibrate: () => false, maxTouchPoints: 0, clipboard: { writeText: () => Promise.resolve() }, mediaDevices: undefined };
+  // Node 21+ exposes globalThis.navigator as a GETTER-ONLY accessor — a plain
+  // assignment throws and would abort stub installation halfway (Render
+  // build/node 22 lesson). defineProperty overrides it safely.
+  Object.defineProperty(g, 'navigator', {
+    value: { userAgent: 'm2-replay-headless', vibrate: () => false, maxTouchPoints: 0, clipboard: { writeText: () => Promise.resolve() }, mediaDevices: undefined },
+    configurable: true,
+    writable: true,
+  });
   g.innerWidth = 1280;
   g.innerHeight = 720;
   g.devicePixelRatio = 1;
