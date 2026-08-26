@@ -46,9 +46,10 @@ services:
         value: https://gonna.bond
       - key: REPLAY_ENFORCE
         value: "1"
-      # testnet only — mainnet must run with ALLOW_LEGACY_GIL=0
+      # 0 everywhere (testnet included): 1 lets GIL v1 logs bypass the full
+      # replay -> arbitrary scores signed (SEV-1, Wave B dogfood 2026-08-26)
       - key: ALLOW_LEGACY_GIL
-        value: "1"
+        value: "0"
       - key: DB_PATH
         value: /data/oracle.db
       # REPLAY_BUNDLES_DIR: intentionally unset (default <pkg>/replay-bundles,

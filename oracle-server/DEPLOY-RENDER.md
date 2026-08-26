@@ -52,6 +52,16 @@ smette di dipendere dal `localhost:8787`.
   evil.example no, e una card duel completa creata→join→resolve con sole
   firme dell'oracle pubblico (txid nel report di missione).
 
+## Sicurezza — ALLOW_LEGACY_GIL=0 ovunque (SEV-1 fix 2026-08-26)
+
+Con ALLOW_LEGACY_GIL=1 i log GIL v1 (byte versione 1) saltano il replay
+completo: l'oracle firmava punteggi arbitrari (provato live da Wave B). Il
+servizio Render gira con **ALLOW_LEGACY_GIL=0** dal 2026-08-26: v1 →
+`400 LEGACY LOG REFUSED`, v2 onesto → 200 (verificato post-flip). Non
+riattivare MAI su nessun ambiente: nessun cliente shippato usa v1 (GIL v2
+dalla v16.1.0). Rate limit reale del servizio: 30 req/min per IP, 6/min per
+address (boot log `rate=30/ip,6/addr`).
+
 ## Keep-alive (free tier) e costi
 
 **Spin-down**: il piano free spegne l'istanza dopo 15 minuti senza traffico
