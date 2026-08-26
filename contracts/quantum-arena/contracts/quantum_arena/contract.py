@@ -740,21 +740,22 @@ class QuantumArena(ARC4Contract):
         pot = meta.paid_total
         mbr_paid = meta.mbr_paid
         creator = Account(meta.creator)
-        del self.challenges[challenge_id]
-        del self.players[challenge_id]
 
         # --- interactions
         if tie:
             # perfect tie: every payer gets the full stake back, zero fee,
             # forfeits are refunded too (simplest anti-dispute rule).
-            for i in urange(n):
-                entry = roster[i].copy()
-                self._pay_gonna(entry.addr, meta.stake)
-            itxn.Payment(
-                receiver=creator,
-                amount=mbr_paid,
-                fee=UInt64(0),
-            ).submit()
+            # C-FIX (v2.1): the tie branch MUST NOT read `roster` after the
+            # box deletes — Puya keeps a box-backed array lazy (per-element
+            # box_extract), so the old inline loop read the players box
+            # AFTER `del self.players[...]` and the pool killed the call
+            # ("no such box"): a perfect tie bricked the pot forever (live:
+            # testnet cid 56). The event is emitted FIRST so the external
+            # order stays [ChallengeResolved, ChallengeRefunded], then the
+            # shared refund path runs: `_refund_all` receives `roster` as a
+            # subroutine argument — a MATERIALIZED copy in the callee frame
+            # — so its box deletes are safe. Same refunds, same MBR payback,
+            # same events, same event order as before.
             arc4.emit(
                 ChallengeResolved(
                     challenge_id=arc4.UInt64(challenge_id),
@@ -763,11 +764,11 @@ class QuantumArena(ARC4Contract):
                     fee=arc4.UInt64(0),
                 )
             )
-            arc4.emit(
-                ChallengeRefunded(challenge_id=arc4.UInt64(challenge_id), reason=arc4.UInt64(3))
-            )
+            self._refund_all(challenge_id, meta, roster, arc4.UInt64(3))
             return Bytes(b"")
         else:
+            del self.challenges[challenge_id]
+            del self.players[challenge_id]
             fee = protocol_fee(pot)
             payout = pot - fee
             self._pay_gonna(winner, payout)
