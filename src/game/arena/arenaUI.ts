@@ -23,7 +23,7 @@ import { SKIN_INFO, skinPortrait, skinPortraitFailed, SHELF_PAGE, shelfPages, sh
 import type { SkinId } from '../skins';
 import { getArenaAdapter, arenaMode, closeGate, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
 import { activeSignOp, explorerTxUrl, getCloseTxid, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
-import { ARENA_FIXTURES_ENABLED } from './arenaKit';
+import { ARENA_FIXTURES_ENABLED, ARENA_NETWORK } from './arenaKit';
 import type { SignOpView } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
 import { qaActive, qaScore } from './qaSigner';
@@ -246,7 +246,7 @@ export class ArenaUI {
   // already shows the truth; the arena shelf must agree).
   private walletConnected(): boolean {
     if (wallet.isConnected()) return true; // gate session (mainnet or mock QA)
-    if (arenaMode() === 'testnet') {
+    if (arenaMode() === 'live') {
       const a = arenaAddress(); // QA signer, Pera testnet, or adopted gate identity
       return !(a.startsWith('ANON') || a.startsWith('DEGEN'));
     }
@@ -258,10 +258,12 @@ export class ArenaUI {
       const e = wallet.getEligibility();
       const opts: FighterOpt[] = [{ pick: { skin: 'gonna', assetId: null, name: 'GONNA' }, owned: true }];
       for (const n of e.nfts) opts.push({ pick: { skin: n.skin, assetId: n.id, name: n.name }, owned: true });
-      // TESTNET TEST FIXTURES — dev-only. M-1: hard-gated by the BUILD flag
-      // (ARENA_FIXTURES_ENABLED is false in every mainnet build, so the
-      // fixture path is dead code there), on top of the live-mode check.
-      if (ARENA_FIXTURES_ENABLED && arenaMode() === 'testnet') {
+      // TESTNET TEST FIXTURES — dev-only. M-1/M-4: hard-gated by the BUILD
+      // flag. The FIRST condition is the RAW STATIC env expression on purpose:
+      // vite replaces it at build time and the minifier drops the whole block
+      // (fixture strings included) from every mainnet bundle — the zip audit
+      // must find ZERO fixture data, not just a dead branch.
+      if (import.meta.env?.VITE_ARENA_NETWORK !== 'mainnet' && ARENA_FIXTURES_ENABLED && arenaMode() === 'live') {
         const fixtures: FighterOpt[] = [
           { pick: { skin: 'fire', assetId: 7007, name: 'GONNA 7' }, owned: true },
           { pick: { skin: 'rainbow', assetId: 7042, name: 'GONNA 42' }, owned: true },
@@ -944,6 +946,16 @@ export class ArenaUI {
       if (ch) this.prefetchCloseTx(ch.id, true);
       return { act: 'move' };
     }
+    // M-4: mock piazza is the public default — the LIVE ingress must be one
+    // thumb-tap away. ?arena=live persists the choice and reloads the build.
+    if (id === 'golive') {
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.set('arena', 'live');
+        window.location.href = u.toString();
+      } catch { /* no window (node tests) */ }
+      return { act: 'none' };
+    }
     if (id === 'wallet') {
       // testnet: real Pera connect (chainId 416002); mock: mainnet gate wallet
       this.walletMsgT = 0;
@@ -1171,7 +1183,7 @@ export class ArenaUI {
       if (this.sealRuns !== 1) return this.fail('CONTINUE ALREADY USED');
       if (this.continuePaying) return { act: 'none' };
       const refId = String(this.current?.id ?? 0); // joiner: the receipt is bound to the card id
-      if (this.adapter().mode === 'testnet') {
+      if (this.adapter().mode === 'live') {
         this.continuePaying = true;
         console.debug('[arena] CONTINUE — 5 ALGO payment start (ref ' + refId + ')');
         void this.run(
@@ -1371,7 +1383,7 @@ export class ArenaUI {
       cfg.stageIdx = this.shuffleTarget;
     }
     // never a dead click: on testnet a real create NEEDS a sealed run score
-    if (this.adapter().mode === 'testnet' && !qaActive() && this.sealedScore === null) {
+    if (this.adapter().mode === 'live' && !qaActive() && this.sealedScore === null) {
       return this.fail('PLAY YOUR RUN FIRST');
     }
     // v14.4: creator replays are FREE pre-commitment — the sealed draft is
@@ -1745,9 +1757,9 @@ export class ArenaUI {
     // LIVE feed on its OWN dedicated strip (44..55), cards start at y=60
     drawTextSh(c, 'THE PIT', VW / 2, 10, 2, GOLD, 'center', GOLD_DK);
     drawText(c, 'THE STAKING PIT', VW / 2, 30, 1, DIM, 'center');
-    // v11: testnet mode tag + wallet connect (real Pera, chainId 416002)
-    if (arenaMode() === 'testnet') {
-      drawTextSh(c, 'TESTNET', 10, 4, 1, FLUO, 'left', '#0a3d00');
+    // v11/M-4: network tag + wallet connect (live mode rides ARENA_NETWORK)
+    if (arenaMode() === 'live') {
+      drawTextSh(c, ARENA_NETWORK.toUpperCase(), 10, 4, 1, FLUO, 'left', '#0a3d00');
       const addr = arenaAddress();
       const isAnon = addr.startsWith('ANON') || addr.startsWith('DEGEN');
       if (this.walletMsgT > 0 && this.walletMsg) {
@@ -1757,6 +1769,11 @@ export class ArenaUI {
       } else {
         drawText(c, addr.slice(0, 6) + '..' + addr.slice(-4), VW - 10, 4, 1, GOLD, 'right');
       }
+    } else {
+      // M-4: mock piazza is the public default — the LIVE ingress (real ALGO,
+      // same build network) stays one thumb-tap away, mirroring CONNECT's spot
+      drawTextSh(c, 'PRACTICE', 10, 4, 1, DIM, 'left', '#0a3d00');
+      this.btn(c, frame, { id: 'golive', x: VW - 96, y: 2, w: 88, h: 12 }, 'GO LIVE', { green: true });
     }
     c.fillStyle = '#04140a';
     c.fillRect(4, 44, VW - 8, 11);
@@ -2114,7 +2131,7 @@ export class ArenaUI {
     }
     // FEE ENGINE: Falcon (PQ) accounts pay the resource-based fee
     const acct = arenaSession().accountType;
-    drawTextSh(c, 'NETWORK FEE: ' + feeLine('create', acct, this.adapter().mode === 'testnet'), VW / 2, 120, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
+    drawTextSh(c, 'NETWORK FEE: ' + feeLine('create', acct, this.adapter().mode === 'live'), VW / 2, 120, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
     if (acct === 'falcon') {
       drawText(c, 'FALCON ACCOUNT - PQ SIGNATURE PRICING', VW / 2, 132, 1, DIM, 'center');
       this.quantumSeal(c, x + 10, 120, frame);
@@ -2122,7 +2139,7 @@ export class ArenaUI {
     if (this.rematchOf !== null) drawText(c, 'REMATCH OF CARD #' + this.rematchOf, VW / 2, 144, 1, '#ff8a3c', 'center');
     // v16: the oracle key lives on the SERVER — the wizard honestly shows
     // WHICH oracle will sign (the ?oracle=dev QA override says so out loud)
-    if (this.adapter().mode === 'testnet') {
+    if (this.adapter().mode === 'live') {
       const dev = oracleLine().startsWith('QA DEV');
       drawTextSh(c, oracleLine(), VW / 2, 152, 1, dev ? '#ff8a3c' : FLUO, 'center', dev ? '#2a1503' : '#0a3d00');
     }
@@ -2158,7 +2175,7 @@ export class ArenaUI {
     const lines: [string, string][] = [
       ['STAKE', fmtStake(stake) + ' $GONNA A SEAT'],
       ['POT', fmtStake(pot) + ' $GONNA'],
-      ['FEE', feeLine(joiner ? 'submit' : 'create', arenaSession().accountType, this.adapter().mode === 'testnet')],
+      ['FEE', feeLine(joiner ? 'submit' : 'create', arenaSession().accountType, this.adapter().mode === 'live')],
       ['FIGHTER', this.cfg.fighter.name],
     ];
     const ly = joiner ? 104 : 116; // creator: two rule lines eat 12px
@@ -2353,7 +2370,7 @@ export class ArenaUI {
       this.drawVerdict(c, frame, card);
     } else {
       const acct = arenaSession().accountType;
-      const testnet = this.adapter().mode === 'testnet';
+      const testnet = this.adapter().mode === 'live';
       const myEntry = card.players.find((p) => p.address === me) ?? null;
       const joiners = card.players.slice(1);
       const tableFull = card.players.length >= card.seatsTotal;
@@ -2602,7 +2619,7 @@ export class ArenaUI {
     if (getCloseTxid(card.id)) {
       const label = card.forfeited ? 'VIEW THE FORFEIT ON-CHAIN' : 'VIEW THE REFUND ON-CHAIN';
       this.btn(c, frame, { id: 'viewchain', x: 92, y: Math.min(y + 4, 176), w: 200, h: 16 }, label, { gold: true });
-    } else if (this.adapter().mode === 'testnet') {
+    } else if (this.adapter().mode === 'live') {
       this.prefetchCloseTx(card.id);
       if (this.txPrefetch[card.id] === 'miss') {
         this.btn(c, frame, { id: 'viewchain:retry', x: 92, y: Math.min(y + 4, 176), w: 200, h: 16 }, 'TX INDEXING - RETRY', { dim: true });
@@ -2690,7 +2707,7 @@ export class ArenaUI {
   // genuinely claimable states (mock pots awaiting claim; nothing on-chain).
   private histPaid(h: HistoryEntry): boolean {
     if (h.claimed) return true;
-    if (this.adapter().mode === 'testnet') return true;
+    if (this.adapter().mode === 'live') return true;
     return getTxid(h.id) !== null; // local record of the resolve tx
   }
 
@@ -2796,7 +2813,7 @@ export class ArenaUI {
     if (txid) {
       const label = h.forfeited ? 'VIEW THE FORFEIT ON-CHAIN' : h.winner ? 'VIEW THE PAYOUT ON-CHAIN' : 'VIEW THE REFUND ON-CHAIN';
       this.btn(c, frame, { id: 'hview', x: 92, y: 176, w: 200, h: 18 }, label, { gold: true });
-    } else if (this.adapter().mode === 'testnet') {
+    } else if (this.adapter().mode === 'live') {
       this.prefetchCloseTx(h.id); // non-blocking: the tap path stays synchronous
       if (this.txPrefetch[h.id] === 'miss') {
         this.btn(c, frame, { id: 'htxretry', x: 92, y: 176, w: 200, h: 18 }, 'TX INDEXING - RETRY', { dim: true });

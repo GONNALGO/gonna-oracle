@@ -6,7 +6,7 @@ import { isGonnaName, loadSkinMap, skinForAsset } from './skins';
 import type { SkinId } from './skins';
 import { maybeSovereign } from './sovereign';
 import { b64ToBytes, bytesToB64 } from './b64';
-import { arenaMode } from './arena/chainAdapter';
+import { arenaUsesTestnetChain } from './arena/chainAdapter';
 import { adoptTestnetAddress, clearTestnetAddress } from './arena/testnetWallet';
 
 // ---------- official on-chain data ----------
@@ -83,7 +83,7 @@ const elig: Eligibility = {
 // v9.0.1: per-provider singletons (garage pattern) — a single shared instance
 // returned the wrong wallet when the user switched providers mid-session.
 const libs: Partial<Record<string, WalletLib>> = {}; // keyed provider:chainId
-const libKey = (p: WalletProvider): string => p + ':' + (arenaMode() === 'testnet' ? 416002 : 416001);
+const libKey = (p: WalletProvider): string => p + ':' + (arenaUsesTestnetChain() ? 416002 : 416001);
 // the cache key of the ACTIVE session's lib — disconnect/sign must use THIS
 // (a mode flip between connect and disconnect must not orphan the session)
 let activeLibKey: string | null = null;
@@ -348,9 +348,10 @@ function applyElig(p: Partial<Eligibility>): void {
 
 // ---------- wallet libraries (lazy, per-provider instances) ----------
 async function loadLib(provider: WalletProvider): Promise<WalletLib> {
-  // ONE GATE, ONE NETWORK: on the arena-testnet staging path the gate speaks
-  // TESTNET (chainId 416002); production /gonnafight/ stays mainnet 416001.
-  const chainId = arenaMode() === 'testnet' ? 416002 : 416001;
+  // ONE GATE, ONE NETWORK: a testnet BUILD in live arena mode speaks TESTNET
+  // (chainId 416002); everything else (main game, mainnet arena) rides mainnet
+  // 416001. M-4: keyed on arenaUsesTestnetChain, not the mode name.
+  const chainId = arenaUsesTestnetChain() ? 416002 : 416001;
   const cacheKey = provider + ':' + chainId;
   const cached = libs[cacheKey];
   if (cached) return cached;
@@ -373,7 +374,7 @@ function sessionEnded(): void {
   activeLibKey = null;
   lsDel(KEY_WALLET);
   lsDel(KEY_ELIG);
-  if (arenaMode() === 'testnet') clearTestnetAddress();
+  if (arenaUsesTestnetChain()) clearTestnetAddress();
   applyElig({ checked: false, ok: false, algo: 0, gonna: 0, nfts: [], ts: 0, source: null });
   clearIdentity();
   if (sessionListener) sessionListener();
@@ -393,7 +394,7 @@ function applySession(provider: WalletProvider, w: WalletLib, accounts: string[]
   lsSet(KEY_WALLET, JSON.stringify({ provider, address: state.address }));
   // identity bridge: a gate connect on the arena-testnet staging path is
   // ALSO the ARENA identity (same origin, same WC session storage)
-  if (arenaMode() === 'testnet') adoptTestnetAddress(accounts[0]);
+  if (arenaUsesTestnetChain()) adoptTestnetAddress(accounts[0]);
   watchDisconnect(w);
   resolveIdentity(state.address!);
   void refreshEligibility(true);

@@ -39,53 +39,48 @@ var __toESM = (mod2, isNodeMode, target) => (target = mod2 != null ? __create(__
 var __toCommonJS = (mod2) => __copyProps(__defProp({}, "__esModule", { value: true }), mod2);
 
 // src/game/arena/arenaKit.ts
-function envNetwork() {
-  try {
-    return import.meta.env?.VITE_ARENA_NETWORK === "mainnet" ? "mainnet" : "testnet";
-  } catch {
-    return "testnet";
-  }
-}
 function netLsKey(base) {
   return base + "." + ARENA_NETWORK;
 }
-var ARENA_NETWORK, IS_MAINNET, ARENA_NETS, NET, ARENA_FIXTURES_ENABLED;
+var ARENA_NETWORK, IS_MAINNET, TESTNET_CFG, MAINNET_CFG, NET, ARENA_FIXTURES_ENABLED;
 var init_arenaKit = __esm({
   "src/game/arena/arenaKit.ts"() {
-    ARENA_NETWORK = envNetwork();
+    ARENA_NETWORK = import.meta.env?.VITE_ARENA_NETWORK === "mainnet" ? "mainnet" : "testnet";
     IS_MAINNET = ARENA_NETWORK === "mainnet";
-    ARENA_NETS = {
-      testnet: {
-        appId: 769907387,
-        // ARENA APP v2.1
-        legacyAppId: 769688298,
-        // QuantumArena v1 (superseded)
-        gonnaAsa: 769688287,
-        opUpAppId: 769688641,
-        treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
-        oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
-        algodUrl: "https://testnet-api.algonode.cloud",
-        oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
-      },
-      mainnet: {
-        appId: 0,
-        // PLACEHOLDER — M-2 deploy flips this (0 = unreachable on purpose)
-        legacyAppId: 0,
-        // no legacy on mainnet
-        gonnaAsa: 2582294183,
-        // REAL mainnet $GONNA (same id as src/game/wallet.ts)
-        opUpAppId: 0,
-        // PLACEHOLDER — M-2
-        treasuryAddr: "",
-        // PLACEHOLDER — M-2
-        oracleAddr: "",
-        // PLACEHOLDER — M-2
-        algodUrl: "https://mainnet-api.algonode.cloud",
-        oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
-        // same Render service; flipped at M-2
-      }
+    TESTNET_CFG = {
+      appId: 769907387,
+      // ARENA APP v2.1
+      legacyAppId: 769688298,
+      // QuantumArena v1 (superseded)
+      gonnaAsa: 769688287,
+      opUpAppId: 769688641,
+      treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
+      oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
+      algodUrl: "https://testnet-api.algonode.cloud",
+      oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
     };
-    NET = ARENA_NETS[ARENA_NETWORK];
+    MAINNET_CFG = {
+      // M-2 mainnet deploy (scripts/mainnet-deploy-report.md): app 3686311434,
+      // escrow 3XEQEDORZHI…47UM (app address, derived — never hardcoded below).
+      appId: 3686311434,
+      legacyAppId: 0,
+      // no legacy on mainnet
+      gonnaAsa: 2582294183,
+      // REAL mainnet $GONNA (same id as src/game/wallet.ts)
+      // M-4: NO OpUp donor app on mainnet — contract.py never references it
+      // (it is a CLIENT-side pooled-budget booster, not a contract dependency)
+      // and the mainnet bootstrap did only the GONNA opt-in. opupTxns() omits
+      // the donor calls when this is 0. If a create/join/close group ever hits
+      // the opcode budget on mainnet, deploy the donor (deploy/opup.ts) and
+      // fill this id — documented in the M-4 report.
+      opUpAppId: 0,
+      treasuryAddr: "GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU",
+      oracleAddr: "3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y",
+      algodUrl: "https://mainnet-api.algonode.cloud",
+      oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+      // same Render service; flipped env-side to mainnet
+    };
+    NET = IS_MAINNET ? MAINNET_CFG : TESTNET_CFG;
     ARENA_FIXTURES_ENABLED = ARENA_NETWORK === "testnet";
   }
 });
@@ -293,6 +288,7 @@ function boxRef(cid, prefix) {
   return { appIndex: ARENA_APP_ID, name: new Uint8Array([prefix, ...u64be(cid)]) };
 }
 async function opupTxns(sender, cid) {
+  if (!OPUP_APP_ID) return [];
   const a3 = await sdk();
   const out = [];
   for (let i3 = 0; i3 < 4; i3++) {
@@ -53355,7 +53351,7 @@ function shortAddr(addr) {
   return addr.slice(0, 6) + ".." + addr.slice(-4);
 }
 var TestnetArenaAdapter = class {
-  mode = "testnet";
+  mode = "live";
   async id() {
     const me2 = providerRef() ? await providerRef()() : null;
     if (!me2) throw new Error("CONNECT WALLET FIRST (TESTNET)");
@@ -53958,30 +53954,37 @@ function feeLine(op, accountType, testnet) {
 }
 var LS_ADAPTER = netLsKey("gonna.arena.adapter");
 var current = null;
+function normMode(v5) {
+  if (v5 === "live" || v5 === "mock") return v5;
+  if (v5 === "testnet") return "live";
+  return null;
+}
 function arenaMode() {
   try {
-    const q4 = new URLSearchParams(window.location.search).get("arena");
-    if (q4 === "testnet") {
-      window.localStorage.setItem(LS_ADAPTER, "testnet");
-      return "testnet";
-    }
-    if (q4 === "mock") {
-      window.localStorage.setItem(LS_ADAPTER, "mock");
-      return "mock";
+    const q4 = normMode(new URLSearchParams(window.location.search).get("arena"));
+    if (q4) {
+      window.localStorage.setItem(LS_ADAPTER, q4);
+      return q4;
     }
     if (window.location.hostname.includes("gonna.bond") && window.location.pathname.includes("arena-testnet")) {
-      return "testnet";
+      return "live";
     }
-    const stored = window.localStorage.getItem(LS_ADAPTER);
-    if (stored === "testnet" || stored === "mock") return stored;
+    const stored = normMode(window.localStorage.getItem(LS_ADAPTER));
+    if (stored) {
+      window.localStorage.setItem(LS_ADAPTER, stored);
+      return stored;
+    }
     return "mock";
   } catch {
     return "mock";
   }
 }
+function arenaUsesTestnetChain() {
+  return !IS_MAINNET && arenaMode() === "live";
+}
 function getArenaAdapter() {
   if (current) return current;
-  current = arenaMode() === "testnet" ? new TestnetArenaAdapter() : new MockArenaAdapter();
+  current = arenaMode() === "live" ? new TestnetArenaAdapter() : new MockArenaAdapter();
   return current;
 }
 
@@ -53989,7 +53992,7 @@ function getArenaAdapter() {
 init_testnetKit();
 init_arenaKit();
 var PROBE_TIMEOUT_MS = 12e3;
-var LS_ACCT = netLsKey("gonna.arena.testnet.addr");
+var LS_ACCT = netLsKey("gonna.arena.live.addr");
 var pera = null;
 async function peraInstance() {
   if (pera) return pera;
@@ -54108,7 +54111,7 @@ var elig = {
   error: false
 };
 var libs = {};
-var libKey = (p4) => p4 + ":" + (arenaMode() === "testnet" ? 416002 : 416001);
+var libKey = (p4) => p4 + ":" + (arenaUsesTestnetChain() ? 416002 : 416001);
 var activeLibKey = null;
 var pendingProvider = null;
 var visHookInstalled = false;
@@ -54307,7 +54310,7 @@ function applyElig(p4) {
   Object.assign(elig, p4, { busy: false, error: false });
 }
 async function loadLib(provider) {
-  const chainId = arenaMode() === "testnet" ? 416002 : 416001;
+  const chainId = arenaUsesTestnetChain() ? 416002 : 416001;
   const cacheKey = provider + ":" + chainId;
   const cached = libs[cacheKey];
   if (cached) return cached;
@@ -54328,7 +54331,7 @@ function sessionEnded() {
   activeLibKey = null;
   lsDel(KEY_WALLET);
   lsDel(KEY_ELIG);
-  if (arenaMode() === "testnet") clearTestnetAddress();
+  if (arenaUsesTestnetChain()) clearTestnetAddress();
   applyElig({ checked: false, ok: false, algo: 0, gonna: 0, nfts: [], ts: 0, source: null });
   clearIdentity();
   if (sessionListener) sessionListener();
@@ -54344,7 +54347,7 @@ function applySession(provider, w5, accounts) {
   state.address = accounts[0];
   activeLibKey = libKey(provider);
   lsSet(KEY_WALLET, JSON.stringify({ provider, address: state.address }));
-  if (arenaMode() === "testnet") adoptTestnetAddress(accounts[0]);
+  if (arenaUsesTestnetChain()) adoptTestnetAddress(accounts[0]);
   watchDisconnect(w5);
   resolveIdentity(state.address);
   void refreshEligibility(true);
@@ -54594,7 +54597,7 @@ function arenaSession() {
 var LS_ANON = netLsKey("gonna.arena.anon");
 var LS_QA_ADDR = "gonna.qa.player.addr";
 function arenaAddress() {
-  if (arenaMode() === "testnet") {
+  if (arenaMode() === "live") {
     try {
       const qa = window.localStorage.getItem(LS_QA_ADDR);
       if (qaActive() && qa) return qa;
@@ -54617,7 +54620,7 @@ function arenaAddress() {
   }
 }
 async function connectArenaWallet(provider) {
-  if (arenaMode() === "testnet") return connectTestnetPera();
+  if (arenaMode() === "live") return connectTestnetPera();
   return connect(provider);
 }
 setTestnetIdentityProvider(async () => {
@@ -54652,7 +54655,7 @@ setSignRecoverHook(async () => {
   const ov = window.__arenaRecover;
   if (ov) return ov();
   if (qaActive()) return;
-  if (arenaMode() === "testnet") {
+  if (arenaMode() === "live") {
     if (testnetAddress()) {
       await recoverTestnetSession();
       return;
@@ -54702,7 +54705,7 @@ function shareStageOf(ch) {
 function shareUrl(id, stageIdx) {
   const base = window.location.origin + window.location.pathname;
   const st = typeof stageIdx === "number" && stageIdx >= 0 && stageIdx <= 6 ? "&st=" + stageIdx : "";
-  return arenaMode() === "testnet" ? base + "?arena=testnet&duel=" + id + st : base + "?duel=" + id + st;
+  return arenaMode() === "live" ? base + "?arena=live&duel=" + id + st : base + "?duel=" + id + st;
 }
 function coin(c3, x4, y5, s4) {
   c3.fillStyle = GOLD_DK;
@@ -54969,7 +54972,7 @@ var ArenaUI = class {
   // already shows the truth; the arena shelf must agree).
   walletConnected() {
     if (isConnected()) return true;
-    if (arenaMode() === "testnet") {
+    if (arenaMode() === "live") {
       const a3 = arenaAddress();
       return !(a3.startsWith("ANON") || a3.startsWith("DEGEN"));
     }
@@ -54980,7 +54983,7 @@ var ArenaUI = class {
       const e3 = getEligibility();
       const opts = [{ pick: { skin: "gonna", assetId: null, name: "GONNA" }, owned: true }];
       for (const n3 of e3.nfts) opts.push({ pick: { skin: n3.skin, assetId: n3.id, name: n3.name }, owned: true });
-      if (ARENA_FIXTURES_ENABLED && arenaMode() === "testnet") {
+      if (import.meta.env?.VITE_ARENA_NETWORK !== "mainnet" && ARENA_FIXTURES_ENABLED && arenaMode() === "live") {
         const fixtures = [
           { pick: { skin: "fire", assetId: 7007, name: "GONNA 7" }, owned: true },
           { pick: { skin: "rainbow", assetId: 7042, name: "GONNA 42" }, owned: true }
@@ -55553,6 +55556,15 @@ var ArenaUI = class {
       if (ch) this.prefetchCloseTx(ch.id, true);
       return { act: "move" };
     }
+    if (id === "golive") {
+      try {
+        const u5 = new URL(window.location.href);
+        u5.searchParams.set("arena", "live");
+        window.location.href = u5.toString();
+      } catch {
+      }
+      return { act: "none" };
+    }
     if (id === "wallet") {
       this.walletMsgT = 0;
       console.debug("[arena] CONNECT \u2014 wallet connect start");
@@ -55755,7 +55767,7 @@ var ArenaUI = class {
       if (this.sealRuns !== 1) return this.fail("CONTINUE ALREADY USED");
       if (this.continuePaying) return { act: "none" };
       const refId = String(this.current?.id ?? 0);
-      if (this.adapter().mode === "testnet") {
+      if (this.adapter().mode === "live") {
         this.continuePaying = true;
         console.debug("[arena] CONTINUE \u2014 5 ALGO payment start (ref " + refId + ")");
         void this.run(
@@ -55920,7 +55932,7 @@ var ArenaUI = class {
       cfg.stageMode = "single";
       cfg.stageIdx = this.shuffleTarget;
     }
-    if (this.adapter().mode === "testnet" && !qaActive() && this.sealedScore === null) {
+    if (this.adapter().mode === "live" && !qaActive() && this.sealedScore === null) {
       return this.fail("PLAY YOUR RUN FIRST");
     }
     const best = this.sealBest > 0 ? this.sealBest : this.sealedScore;
@@ -56250,8 +56262,8 @@ var ArenaUI = class {
   drawBoard(c3, frame) {
     drawTextSh2(c3, "THE PIT", VW / 2, 10, 2, GOLD2, "center", GOLD_DK2);
     drawText2(c3, "THE STAKING PIT", VW / 2, 30, 1, DIM2, "center");
-    if (arenaMode() === "testnet") {
-      drawTextSh2(c3, "TESTNET", 10, 4, 1, FLUO2, "left", "#0a3d00");
+    if (arenaMode() === "live") {
+      drawTextSh2(c3, ARENA_NETWORK.toUpperCase(), 10, 4, 1, FLUO2, "left", "#0a3d00");
       const addr = arenaAddress();
       const isAnon = addr.startsWith("ANON") || addr.startsWith("DEGEN");
       if (this.walletMsgT > 0 && this.walletMsg) {
@@ -56261,6 +56273,9 @@ var ArenaUI = class {
       } else {
         drawText2(c3, addr.slice(0, 6) + ".." + addr.slice(-4), VW - 10, 4, 1, GOLD2, "right");
       }
+    } else {
+      drawTextSh2(c3, "PRACTICE", 10, 4, 1, DIM2, "left", "#0a3d00");
+      this.btn(c3, frame, { id: "golive", x: VW - 96, y: 2, w: 88, h: 12 }, "GO LIVE", { green: true });
     }
     c3.fillStyle = "#04140a";
     c3.fillRect(4, 44, VW - 8, 11);
@@ -56575,13 +56590,13 @@ var ArenaUI = class {
       drawText2(c3, lines[i3][1], x4 + w5 - 10, 50 + i3 * 13, 1, i3 === 3 ? GOLD2 : "#c8ccd4", "right");
     }
     const acct = arenaSession().accountType;
-    drawTextSh2(c3, "NETWORK FEE: " + feeLine("create", acct, this.adapter().mode === "testnet"), VW / 2, 120, 1, acct === "falcon" ? PQCYAN2 : GRAY2, "center");
+    drawTextSh2(c3, "NETWORK FEE: " + feeLine("create", acct, this.adapter().mode === "live"), VW / 2, 120, 1, acct === "falcon" ? PQCYAN2 : GRAY2, "center");
     if (acct === "falcon") {
       drawText2(c3, "FALCON ACCOUNT - PQ SIGNATURE PRICING", VW / 2, 132, 1, DIM2, "center");
       this.quantumSeal(c3, x4 + 10, 120, frame);
     }
     if (this.rematchOf !== null) drawText2(c3, "REMATCH OF CARD #" + this.rematchOf, VW / 2, 144, 1, "#ff8a3c", "center");
-    if (this.adapter().mode === "testnet") {
+    if (this.adapter().mode === "live") {
       const dev = oracleLine().startsWith("QA DEV");
       drawTextSh2(c3, oracleLine(), VW / 2, 152, 1, dev ? "#ff8a3c" : FLUO2, "center", dev ? "#2a1503" : "#0a3d00");
     }
@@ -56611,7 +56626,7 @@ var ArenaUI = class {
     const lines = [
       ["STAKE", fmtStake(stake) + " $GONNA A SEAT"],
       ["POT", fmtStake(pot) + " $GONNA"],
-      ["FEE", feeLine(joiner ? "submit" : "create", arenaSession().accountType, this.adapter().mode === "testnet")],
+      ["FEE", feeLine(joiner ? "submit" : "create", arenaSession().accountType, this.adapter().mode === "live")],
       ["FIGHTER", this.cfg.fighter.name]
     ];
     const ly = joiner ? 104 : 116;
@@ -56768,7 +56783,7 @@ var ArenaUI = class {
       this.drawVerdict(c3, frame, card);
     } else {
       const acct = arenaSession().accountType;
-      const testnet = this.adapter().mode === "testnet";
+      const testnet = this.adapter().mode === "live";
       const myEntry = card.players.find((p4) => p4.address === me2) ?? null;
       const joiners = card.players.slice(1);
       const tableFull = card.players.length >= card.seatsTotal;
@@ -56949,7 +56964,7 @@ var ArenaUI = class {
     if (getCloseTxid(card.id)) {
       const label = card.forfeited ? "VIEW THE FORFEIT ON-CHAIN" : "VIEW THE REFUND ON-CHAIN";
       this.btn(c3, frame, { id: "viewchain", x: 92, y: Math.min(y5 + 4, 176), w: 200, h: 16 }, label, { gold: true });
-    } else if (this.adapter().mode === "testnet") {
+    } else if (this.adapter().mode === "live") {
       this.prefetchCloseTx(card.id);
       if (this.txPrefetch[card.id] === "miss") {
         this.btn(c3, frame, { id: "viewchain:retry", x: 92, y: Math.min(y5 + 4, 176), w: 200, h: 16 }, "TX INDEXING - RETRY", { dim: true });
@@ -57029,7 +57044,7 @@ var ArenaUI = class {
   // genuinely claimable states (mock pots awaiting claim; nothing on-chain).
   histPaid(h5) {
     if (h5.claimed) return true;
-    if (this.adapter().mode === "testnet") return true;
+    if (this.adapter().mode === "live") return true;
     return getTxid(h5.id) !== null;
   }
   drawHistory(c3, frame) {
@@ -57109,7 +57124,7 @@ var ArenaUI = class {
     if (txid) {
       const label = h5.forfeited ? "VIEW THE FORFEIT ON-CHAIN" : h5.winner ? "VIEW THE PAYOUT ON-CHAIN" : "VIEW THE REFUND ON-CHAIN";
       this.btn(c3, frame, { id: "hview", x: 92, y: 176, w: 200, h: 18 }, label, { gold: true });
-    } else if (this.adapter().mode === "testnet") {
+    } else if (this.adapter().mode === "live") {
       this.prefetchCloseTx(h5.id);
       if (this.txPrefetch[h5.id] === "miss") {
         this.btn(c3, frame, { id: "htxretry", x: 92, y: 176, w: 200, h: 18 }, "TX INDEXING - RETRY", { dim: true });

@@ -139,7 +139,7 @@ export interface LegacyStats {
 }
 
 export interface ArenaAdapter {
-  readonly mode: 'mock' | 'testnet';
+  readonly mode: 'mock' | 'live';
   createChallenge(cfg: ChallengeConfig, creator: ChallengePlayer): Promise<Challenge>;
   join(id: number, player: ChallengePlayer): Promise<Challenge>;
   submitScore(id: number, address: string, score: number, opts?: { continueRefId?: string; sealedRun?: SealedRunInfo }): Promise<Challenge>;
@@ -913,7 +913,7 @@ export class MockArenaAdapter implements ArenaAdapter {
 // ======================================================================
 import * as kit from './testnetKit';
 import { oracleScoreSig, oracleVerdictSig, registerContinueReceipt } from './oracleClient';
-import { netLsKey } from './arenaKit';
+import { IS_MAINNET, netLsKey } from './arenaKit';
 import { buildVer } from '../ver';
 import { qaScore } from './qaSigner';
 export { ARENA_APP_ID, GONNA_ASA_TESTNET } from './testnetKit';
@@ -944,7 +944,7 @@ function shortAddr(addr: string): string {
 }
 
 export class TestnetArenaAdapter implements ArenaAdapter {
-  readonly mode = 'testnet' as const;
+  readonly mode = 'live' as const;
 
   private async id(): Promise<TestnetIdentity> {
     const me = providerRef() ? await providerRef()!() : null;
@@ -1665,39 +1665,55 @@ export function feeLine(op: kit.ArenaOp, accountType: AccountType, testnet: bool
 
 // ---------- selector ----------
 // MOCK is the PUBLIC default (the Prince flips the preview explicitly).
-// ?arena=testnet enables the live testnet adapter and PERSISTS the choice.
-// M-1: the persisted choice is NETWORK-SCOPED — a stored 'testnet' flag from
-// a testnet build must not light the live adapter inside a mainnet build.
+// ?arena=live enables the live chain adapter and PERSISTS the choice.
+// M-1: the persisted choice is NETWORK-SCOPED — a stored flag from a testnet
+// build must not light the live adapter inside a mainnet build.
+// M-4 (Prince-approved): the mode was RENAMED 'testnet' -> 'live' — the
+// network is now a BUILD flag (VITE_ARENA_NETWORK), the mode just says
+// mock-piazza vs on-chain. Legacy ?arena=testnet links and stored 'testnet'
+// values MIGRATE to 'live' on read (the stored value is rewritten).
 const LS_ADAPTER = netLsKey('gonna.arena.adapter');
 let current: ArenaAdapter | null = null;
-export function arenaMode(): 'mock' | 'testnet' {
+export type ArenaMode = 'mock' | 'live';
+/** normalize a raw mode value — legacy 'testnet' reads as 'live' (M-4 rename) */
+function normMode(v: string | null): ArenaMode | null {
+  if (v === 'live' || v === 'mock') return v;
+  if (v === 'testnet') return 'live'; // legacy migration
+  return null;
+}
+export function arenaMode(): ArenaMode {
   try {
-    // explicit query ALWAYS wins (and persists)
-    const q = new URLSearchParams(window.location.search).get('arena');
-    if (q === 'testnet') {
-      window.localStorage.setItem(LS_ADAPTER, 'testnet');
-      return 'testnet';
-    }
-    if (q === 'mock') {
-      window.localStorage.setItem(LS_ADAPTER, 'mock');
-      return 'mock';
+    // explicit query ALWAYS wins (and persists): ?arena=live / ?arena=mock
+    // (?arena=testnet kept as a legacy alias of live for old links)
+    const q = normMode(new URLSearchParams(window.location.search).get('arena'));
+    if (q) {
+      window.localStorage.setItem(LS_ADAPTER, q);
+      return q;
     }
     // STAGING FLAG (beats any stored flag — a leftover 'mock' from old tests
     // must NOT win on the staging path): gonna.bond/arena-testnet/ lands
     // straight on-chain; public previews (any other origin/path) stay MOCK.
     if (window.location.hostname.includes('gonna.bond') && window.location.pathname.includes('arena-testnet')) {
-      return 'testnet';
+      return 'live';
     }
-    const stored = window.localStorage.getItem(LS_ADAPTER);
-    if (stored === 'testnet' || stored === 'mock') return stored;
+    const stored = normMode(window.localStorage.getItem(LS_ADAPTER));
+    if (stored) {
+      window.localStorage.setItem(LS_ADAPTER, stored); // rewrite migrated value
+      return stored;
+    }
     return 'mock';
   } catch {
     return 'mock';
   }
 }
+// M-4: is the WALLET supposed to talk testnet? Only a testnet BUILD in live
+// mode (main game wallet + mainnet-build arena sessions always ride mainnet).
+export function arenaUsesTestnetChain(): boolean {
+  return !IS_MAINNET && arenaMode() === 'live';
+}
 export function getArenaAdapter(): ArenaAdapter {
   if (current) return current;
-  current = arenaMode() === 'testnet' ? new TestnetArenaAdapter() : new MockArenaAdapter();
+  current = arenaMode() === 'live' ? new TestnetArenaAdapter() : new MockArenaAdapter();
   return current;
 }
 // CI/QA hook: force a fresh adapter pick

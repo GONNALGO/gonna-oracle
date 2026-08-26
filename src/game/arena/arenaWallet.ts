@@ -51,7 +51,7 @@ export function arenaSession(): ArenaSession {
 const LS_ANON = netLsKey('gonna.arena.anon');
 const LS_QA_ADDR = 'gonna.qa.player.addr'; // injected by the QA harness
 export function arenaAddress(): string {
-  if (arenaMode() === 'testnet') {
+  if (arenaMode() === 'live') {
     // TESTNET identity: QA signer first (automation), then Pera testnet
     try {
       const qa = window.localStorage.getItem(LS_QA_ADDR);
@@ -77,7 +77,7 @@ export function arenaAddress(): string {
 // the ARENA signs with the SAME Pera/Defly session as THE GATE in mock/mainnet
 // mode; on testnet it uses the dedicated chainId-416002 Pera instance.
 export async function connectArenaWallet(provider: ArenaWalletProvider): Promise<string> {
-  if (arenaMode() === 'testnet') return connectTestnetPera();
+  if (arenaMode() === 'live') return connectTestnetPera();
   return wallet.connect(provider);
 }
 
@@ -128,7 +128,7 @@ setSignRecoverHook(async () => {
   const ov = (window as unknown as { __arenaRecover?: () => Promise<void> }).__arenaRecover;
   if (ov) return ov();
   if (qaActive()) return; // the QA signer never wedges — nothing to heal
-  if (arenaMode() === 'testnet') {
+  if (arenaMode() === 'live') {
     if (testnetAddress()) {
       await recoverTestnetSession(); // arena-side Pera (chainId 416002)
       return;

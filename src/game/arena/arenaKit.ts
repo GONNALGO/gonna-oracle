@@ -12,14 +12,12 @@
 // ============================================================================
 export type ArenaNetwork = 'testnet' | 'mainnet';
 
-function envNetwork(): ArenaNetwork {
-  try {
-    return import.meta.env?.VITE_ARENA_NETWORK === 'mainnet' ? 'mainnet' : 'testnet';
-  } catch {
-    return 'testnet'; // node/test bundles without import.meta.env
-  }
-}
-export const ARENA_NETWORK: ArenaNetwork = envNetwork();
+// NOTE: top-level foldable expression (NO function wrapper) — vite statically
+// replaces import.meta.env?.VITE_ARENA_NETWORK and the minifier folds the
+// whole chain, so IS_MAINNET/NET are build-time constants and the inactive
+// network row is dead-code-eliminated from the shipped bundle.
+// (import.meta.env is simply undefined under node/test bundles — `?.` never throws)
+export const ARENA_NETWORK: ArenaNetwork = import.meta.env?.VITE_ARENA_NETWORK === 'mainnet' ? 'mainnet' : 'testnet';
 export const IS_MAINNET = ARENA_NETWORK === 'mainnet';
 
 export interface ArenaNetConfig {
@@ -33,8 +31,13 @@ export interface ArenaNetConfig {
   oracleBaseUrl: string; // same Render service on both rows today; the mainnet flip is env-side at M-2
 }
 
-export const ARENA_NETS: Record<ArenaNetwork, ArenaNetConfig> = {
-  testnet: {
+// M-4: separate named rows + a STATIC conditional for NET. vite replaces
+// import.meta.env.VITE_ARENA_NETWORK at build time, so on a mainnet build
+// IS_MAINNET folds to `true`, the ternary folds to MAINNET_CFG, and the
+// whole testnet row is dead-code-eliminated from the bundle (zip audit:
+// zero testnet ids/addrs in the mainnet artifact). Keep ARENA_NETS only as
+// a tooling/testing export — nothing in src may import it.
+const TESTNET_CFG: ArenaNetConfig = {
     appId: 769907387, // ARENA APP v2.1
     legacyAppId: 769688298, // QuantumArena v1 (superseded)
     gonnaAsa: 769688287,
@@ -43,20 +46,32 @@ export const ARENA_NETS: Record<ArenaNetwork, ArenaNetConfig> = {
     oracleAddr: 'COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA',
     algodUrl: 'https://testnet-api.algonode.cloud',
     oracleBaseUrl: 'https://gonna-arena-oracle-testnet.onrender.com',
-  },
-  mainnet: {
-    appId: 0, // PLACEHOLDER — M-2 deploy flips this (0 = unreachable on purpose)
-    legacyAppId: 0, // no legacy on mainnet
-    gonnaAsa: 2582294183, // REAL mainnet $GONNA (same id as src/game/wallet.ts)
-    opUpAppId: 0, // PLACEHOLDER — M-2
-    treasuryAddr: '', // PLACEHOLDER — M-2
-    oracleAddr: '', // PLACEHOLDER — M-2
-    algodUrl: 'https://mainnet-api.algonode.cloud',
-    oracleBaseUrl: 'https://gonna-arena-oracle-testnet.onrender.com', // same Render service; flipped at M-2
-  },
 };
 
-export const NET: ArenaNetConfig = ARENA_NETS[ARENA_NETWORK];
+const MAINNET_CFG: ArenaNetConfig = {
+    // M-2 mainnet deploy (scripts/mainnet-deploy-report.md): app 3686311434,
+    // escrow 3XEQEDORZHI…47UM (app address, derived — never hardcoded below).
+    appId: 3686311434,
+    legacyAppId: 0, // no legacy on mainnet
+    gonnaAsa: 2582294183, // REAL mainnet $GONNA (same id as src/game/wallet.ts)
+    // M-4: NO OpUp donor app on mainnet — contract.py never references it
+    // (it is a CLIENT-side pooled-budget booster, not a contract dependency)
+    // and the mainnet bootstrap did only the GONNA opt-in. opupTxns() omits
+    // the donor calls when this is 0. If a create/join/close group ever hits
+    // the opcode budget on mainnet, deploy the donor (deploy/opup.ts) and
+    // fill this id — documented in the M-4 report.
+    opUpAppId: 0,
+    treasuryAddr: 'GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU',
+    oracleAddr: '3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y',
+    algodUrl: 'https://mainnet-api.algonode.cloud',
+    oracleBaseUrl: 'https://gonna-arena-oracle-testnet.onrender.com', // same Render service; flipped env-side to mainnet
+};
+
+// tooling/testing export — src must consume NET, never ARENA_NETS
+export const ARENA_NETS: Record<ArenaNetwork, ArenaNetConfig> = { testnet: TESTNET_CFG, mainnet: MAINNET_CFG };
+// static conditional: folds at build time (see comment above) — the inactive
+// row never ships inside a bundle of the other network
+export const NET: ArenaNetConfig = IS_MAINNET ? MAINNET_CFG : TESTNET_CFG;
 
 // M-1: testnet demo fixtures (GONNA 7/42 on the connected shelf, mock piazza
 // dressing) are DEV-ONLY — a mainnet build must never show fake holdings.

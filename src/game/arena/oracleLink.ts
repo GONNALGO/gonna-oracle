@@ -6,14 +6,15 @@
 // On boot we decode it into localStorage (the key devOracle.ts reads) and
 // IMMEDIATELY scrub the hash via history.replaceState — the key must never
 // linger in the address bar, screenshots or copy-pasted links.
-// HARD GUARD: adoption happens ONLY when arenaMode()==='testnet'. On any
-// mock/mainnet context the hash is ignored (and left untouched).
+// HARD GUARD: adoption happens ONLY on a testnet BUILD in live mode
+// (arenaUsesTestnetChain). On any mock/mainnet context the hash is ignored
+// (and left untouched) — the dev-oracle can NEVER arm inside a mainnet build.
 // v16 HARD GUARD #2 (SPEC-oracle §7): the oracle key LIVES ON THE SERVER now.
 // The master link arms the QA dev-oracle ONLY in builds compiled with
 // VITE_QA_ORACLE=1 (local QA harness). Every served bundle refuses it with an
 // honest line — the key must never ride the shipped client again.
 // ============================================================================
-import { arenaMode } from './chainAdapter';
+import { arenaUsesTestnetChain } from './chainAdapter';
 import { armDevOracle } from './devOracle';
 
 export const ORACLE_LINK_REFUSED_MSG = 'ORACLE KEY LIVES ON THE SERVER NOW';
@@ -52,7 +53,7 @@ export function adoptOracleFromHash(): boolean {
     // scrub FIRST, in every mode: an #oracle= hash is not a route and would
     // break the HashRouter even when we refuse to arm (mock/mainnet)
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
-    if (arenaMode() !== 'testnet') return false; // HARD GUARD — never arm outside testnet
+    if (!arenaUsesTestnetChain()) return false; // HARD GUARD — never arm outside a testnet build
     if (!qaOracleBuild()) {
       // v16: served bundles never adopt a key — the SERVER oracle signs now
       console.warn('[arena] #oracle= master link refused: ' + ORACLE_LINK_REFUSED_MSG);

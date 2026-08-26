@@ -253,6 +253,11 @@ function boxRef(cid: number, prefix: number) {
 
 // 4 NoOp calls to the budget-donor app, unique notes (OpUp pattern v5.0.0)
 async function opupTxns(sender: string, cid: number): Promise<Txn[]> {
+  // M-4: no OpUp donor app on mainnet (opUpAppId 0 in arenaKit) — the donors
+  // are a client-side budget booster, NOT a contract dependency, so the group
+  // is built without them. Deploy deploy/opup.ts + fill the id if a group
+  // ever hits the opcode budget on mainnet.
+  if (!OPUP_APP_ID) return [];
   const a = await sdk();
   const out: Txn[] = [];
   for (let i = 0; i < 4; i++) {

@@ -47,21 +47,30 @@ writeFileSync(
 );
 
 const out = path.join(OUT_DIR, `engine-${VER}.mjs`);
+// M-4: this package's bin/esbuild is the raw ELF (noexec on the sandbox mount)
+// and npx may resolve a foreign esbuild — drive the JS API instead; it honors
+// ESBUILD_BINARY_PATH for the actual compiler binary.
+const ENV = JSON.stringify({
+  DEV: false,
+  PROD: true,
+  VITE_QA_ORACLE: '',
+  // M-4: bake the SAME network as the client build (VITE_ARENA_NETWORK env)
+  VITE_ARENA_NETWORK: process.env.VITE_ARENA_NETWORK === 'mainnet' ? 'mainnet' : 'testnet',
+});
+const RUNNER = `
+const esbuild = require('esbuild');
+esbuild.buildSync({
+  entryPoints: [process.argv[1]],
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  define: { 'import.meta.env': ${JSON.stringify(ENV)} },
+  banner: { js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
+  outfile: process.argv[2],
+});
+`;
 try {
-  execFileSync(
-    'npx',
-    [
-      'esbuild',
-      ENTRY,
-      '--bundle',
-      '--format=esm',
-      '--platform=node',
-      '--define:import.meta.env={"DEV":false,"PROD":true,"VITE_QA_ORACLE":""}',
-      `--banner:js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
-      `--outfile=${out}`,
-    ],
-    { cwd: ROOT, stdio: 'inherit' },
-  );
+  execFileSync(process.execPath, ['-e', RUNNER, ENTRY, out], { cwd: ROOT, stdio: 'inherit' });
 } finally {
   rmSync(ENTRY, { force: true });
 }

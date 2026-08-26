@@ -15,7 +15,9 @@ const PROBE_TIMEOUT_MS = 12_000;
 type PeraWalletConnectT = import('@perawallet/connect').PeraWalletConnect;
 
 // M-1: NETWORK-SCOPED — a saved live-adapter account must not leak cross-net
-const LS_ACCT = netLsKey('gonna.arena.testnet.addr');
+// M-4: base key renamed testnet->live (the network scope already carries
+// .testnet/.mainnet) — a stale testnet-named key must not ship in mainnet
+const LS_ACCT = netLsKey('gonna.arena.live.addr');
 
 let pera: PeraWalletConnectT | null = null;
 

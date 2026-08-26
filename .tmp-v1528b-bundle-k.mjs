@@ -1,44 +1,40 @@
 // src/game/arena/arenaKit.ts
-function envNetwork() {
-  try {
-    return import.meta.env?.VITE_ARENA_NETWORK === "mainnet" ? "mainnet" : "testnet";
-  } catch {
-    return "testnet";
-  }
-}
-var ARENA_NETWORK = envNetwork();
-var ARENA_NETS = {
-  testnet: {
-    appId: 769907387,
-    // ARENA APP v2.1
-    legacyAppId: 769688298,
-    // QuantumArena v1 (superseded)
-    gonnaAsa: 769688287,
-    opUpAppId: 769688641,
-    treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
-    oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
-    algodUrl: "https://testnet-api.algonode.cloud",
-    oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
-  },
-  mainnet: {
-    appId: 0,
-    // PLACEHOLDER — M-2 deploy flips this (0 = unreachable on purpose)
-    legacyAppId: 0,
-    // no legacy on mainnet
-    gonnaAsa: 2582294183,
-    // REAL mainnet $GONNA (same id as src/game/wallet.ts)
-    opUpAppId: 0,
-    // PLACEHOLDER — M-2
-    treasuryAddr: "",
-    // PLACEHOLDER — M-2
-    oracleAddr: "",
-    // PLACEHOLDER — M-2
-    algodUrl: "https://mainnet-api.algonode.cloud",
-    oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
-    // same Render service; flipped at M-2
-  }
+var ARENA_NETWORK = import.meta.env?.VITE_ARENA_NETWORK === "mainnet" ? "mainnet" : "testnet";
+var IS_MAINNET = ARENA_NETWORK === "mainnet";
+var TESTNET_CFG = {
+  appId: 769907387,
+  // ARENA APP v2.1
+  legacyAppId: 769688298,
+  // QuantumArena v1 (superseded)
+  gonnaAsa: 769688287,
+  opUpAppId: 769688641,
+  treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
+  oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
+  algodUrl: "https://testnet-api.algonode.cloud",
+  oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
 };
-var NET = ARENA_NETS[ARENA_NETWORK];
+var MAINNET_CFG = {
+  // M-2 mainnet deploy (scripts/mainnet-deploy-report.md): app 3686311434,
+  // escrow 3XEQEDORZHI…47UM (app address, derived — never hardcoded below).
+  appId: 3686311434,
+  legacyAppId: 0,
+  // no legacy on mainnet
+  gonnaAsa: 2582294183,
+  // REAL mainnet $GONNA (same id as src/game/wallet.ts)
+  // M-4: NO OpUp donor app on mainnet — contract.py never references it
+  // (it is a CLIENT-side pooled-budget booster, not a contract dependency)
+  // and the mainnet bootstrap did only the GONNA opt-in. opupTxns() omits
+  // the donor calls when this is 0. If a create/join/close group ever hits
+  // the opcode budget on mainnet, deploy the donor (deploy/opup.ts) and
+  // fill this id — documented in the M-4 report.
+  opUpAppId: 0,
+  treasuryAddr: "GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU",
+  oracleAddr: "3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y",
+  algodUrl: "https://mainnet-api.algonode.cloud",
+  oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+  // same Render service; flipped env-side to mainnet
+};
+var NET = IS_MAINNET ? MAINNET_CFG : TESTNET_CFG;
 function netLsKey(base) {
   return base + "." + ARENA_NETWORK;
 }

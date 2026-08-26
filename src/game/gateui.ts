@@ -14,7 +14,7 @@ import {
 import type { Fighter, SkinId } from './skins';
 import * as wallet from './wallet';
 import type { OwnedNft } from './wallet';
-import { arenaMode } from './arena/chainAdapter';
+import { arenaUsesTestnetChain } from './arena/chainAdapter';
 
 export type GateScene = 'connect' | 'gate' | 'fighter';
 
@@ -744,7 +744,7 @@ export class GateUI {
     // ONE GATE, ONE NETWORK: on the arena-testnet staging path the gate is
     // TESTNET-only (Defly has no testnet mode — offering it is a guaranteed
     // network mismatch). Production/mock paths are untouched.
-    const testnet = arenaMode() === 'testnet';
+    const testnet = arenaUsesTestnetChain();
     if (testnet) drawTextSh(ctx, 'TESTNET - SET PERA TO TESTNET', VW / 2, 106, 1, '#39FF14', 'center', '#0a3d00');
     this.pushBtn({ id: 'pera', label: 'CONNECT PERA', x: testnet ? 137 : 72, y: 116, w: 110, h: 20 });
     if (!testnet) this.pushBtn({ id: 'defly', label: 'CONNECT DEFLY', x: 202, y: 116, w: 110, h: 20 });

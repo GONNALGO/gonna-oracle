@@ -240,7 +240,7 @@ console.log('\n[3] battle detail: the button only with a real close txid');
   ok(!has(d.texts, 'LOOKING UP THE PAYOUT TX...'), 'mock: no lookup line either');
   // (e) testnet + indexer miss -> LOOKUP, then honest TX INDEXING - RETRY
   let calls = 0;
-  const miss = { mode: 'testnet', closeTxid: () => { calls++; return Promise.resolve(null); } };
+  const miss = { mode: 'live', closeTxid: () => { calls++; return Promise.resolve(null); } };
   const uiE = mkHistUI({ adapter: miss }); // SAME instance across renders (the prefetch state lives on it)
   const e1 = drawHist(uiE, mkHist({ id: 50 }));
   ok(!e1.hots.includes('hview') && has(e1.texts, 'LOOKING UP THE PAYOUT TX...'), 'testnet, txid unknown: lookup in flight, no fake link yet');
@@ -251,7 +251,7 @@ console.log('\n[3] battle detail: the button only with a real close txid');
   ok(calls === 2, 'RETRY re-asks the indexer (forced refetch)');
   // (f) testnet + event hit -> the button appears on the next render
   const hit = {
-    mode: 'testnet',
+    mode: 'live',
     closeTxid: (id) => { recordCloseTxid(id, 'EVENTTX51'); return Promise.resolve('EVENTTX51'); }, // banks like the real adapter
   };
   const uiF = mkHistUI({ adapter: hit });
@@ -269,7 +269,7 @@ console.log('\n[4] prefetch never blocks the render; the tap never awaits');
   let resolveGate;
   const gate = new Promise((r) => (resolveGate = r));
   let calls = 0;
-  const slow = { mode: 'testnet', closeTxid: () => { calls++; return gate; } };
+  const slow = { mode: 'live', closeTxid: () => { calls++; return gate; } };
   const uiS = mkHistUI({ adapter: slow }); // SAME instance: the in-flight guard lives on it
   const s1 = drawHist(uiS, mkHist({ id: 52 }));
   ok(has(s1.texts, 'LOOKING UP THE PAYOUT TX...'), 'slow indexer: the card RENDERS (non-blocking prefetch)');

@@ -52,7 +52,7 @@ export function shareUrl(id: number, stageIdx?: number | null): string {
   // (preview origins wipe localStorage; mock ids and chain ids collide)
   const base = window.location.origin + window.location.pathname;
   const st = typeof stageIdx === 'number' && stageIdx >= 0 && stageIdx <= 6 ? '&st=' + stageIdx : '';
-  return arenaMode() === 'testnet' ? base + '?arena=testnet&duel=' + id + st : base + '?duel=' + id + st;
+  return arenaMode() === 'live' ? base + '?arena=live&duel=' + id + st : base + '?duel=' + id + st;
 }
 
 // pixel coin at any integer scale (decoration)

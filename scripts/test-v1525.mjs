@@ -39,10 +39,10 @@ console.log('\n[1] SOURCE: arenaUI.ts carries both fixes, guarded');
   ok(shelfStart > 0 && shelfEnd > shelfStart, 'fighterShelf located in source');
   ok(shelf.includes('assetId: 7007') && shelf.includes("name: 'GONNA 7'"), 'fixture GONNA 7 (assetId 7007) inside fighterShelf');
   ok(shelf.includes('assetId: 7042') && shelf.includes("name: 'GONNA 42'"), 'fixture GONNA 42 (assetId 7042) inside fighterShelf');
-  ok(shelf.includes("arenaMode() === 'testnet'"), 'fixtures guarded by arenaMode() === testnet');
+  ok(shelf.includes("arenaMode() === 'live'"), 'fixtures guarded by live mode (M-4 rename)');
   ok(/!opts\.some\(\(o\)\s*=>\s*o\.pick\.assetId === f\.pick\.assetId\)/.test(shelf), 'dedup vs real holdings (no duplicate assetId)');
   // M-1: the fixtures are now hard-gated by the BUILD flag (ARENA_FIXTURES_ENABLED=false in every mainnet build)
-  ok(shelf.includes("if (ARENA_FIXTURES_ENABLED && arenaMode() === 'testnet') {"), 'fixtures gated by ARENA_FIXTURES_ENABLED build flag (dead path on mainnet)');
+  ok(shelf.includes("import.meta.env?.VITE_ARENA_NETWORK !== 'mainnet' && ARENA_FIXTURES_ENABLED && arenaMode() === 'live'"), 'fixtures gated by static env + build flag (DCEd from mainnet bundles, M-4)');
   ok(!shelf.includes('MOCK_SHELF') || shelf.indexOf('MOCK_SHELF') === -1 || true, 'mock shelf path untouched (asserted behaviorally below)');
 
   // placeStakeInput: visualViewport branch
@@ -118,11 +118,11 @@ const shelf = (ui) => ui.fighterShelf().map((o) => ({ assetId: o.pick.assetId, n
 const count = (s, assetId) => s.filter((x) => x.assetId === assetId).length;
 {
   // testnet + connected wallet, real holding IS GONNA 7 -> exactly once
-  store.set('gonna.arena.adapter.testnet', 'testnet');
+  store.set('gonna.arena.adapter.testnet', 'live'); // M-4: mode renamed to 'live' (network-scoped key keeps the .testnet suffix)
   setMock({ address: 'TNETDEGEN' + 'Q'.repeat(50), nfts: [{ id: 7007, name: 'GONNA 7', skin: 'fire' }] });
   const ui = new ArenaUI();
   const s = shelf(ui);
-  ok(arenaMode() === 'testnet', 'adapter stubbed to testnet');
+  ok(arenaMode() === 'live', 'adapter stubbed to live');
   ok(count(s, 7007) === 1, 'testnet + real GONNA 7 holding: GONNA 7 exactly ONCE (dedup) — got ' + count(s, 7007));
   ok(count(s, 7042) === 1 && s.find((x) => x.assetId === 7042).owned, 'testnet: fixture GONNA 42 appended OWNED');
   ok(count(s, null) === 1 && s.length === 3, 'testnet: base GONNA + real 7007 + fixture 7042 (3 entries)');
