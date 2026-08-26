@@ -52,6 +52,48 @@ smette di dipendere dal `localhost:8787`.
   evil.example no, e una card duel completa creata→join→resolve con sole
   firme dell'oracle pubblico (txid nel report di missione).
 
+## Keep-alive (free tier) e costi
+
+**Spin-down**: il piano free spegne l'istanza dopo 15 minuti senza traffico
+(prossima richiesta = cold start ~30-60s). Rimedi:
+
+- **Render Cron Job (ATTIVO, 2026-08-26)**: servizio `crn-da7g7h0u01pc739b94qg`
+  (`gonna-oracle-keepalive`), schedule `*/10 * * * *` UTC, runtime image
+  `docker.io/curlimages/curl:latest`, dockerCommand
+  `curl -fsS --max-time 25 https://gonna-arena-oracle-testnet.onrender.com/v1/health`.
+  Ogni run dura ~2s (200 OK verificato nei job logs). **Costo**: cron job =
+  addebito al secondo con **minimo $1/mese per servizio** → ~$1/mese.
+  Ricrearlo: POST /v1/services type=cron_job, image {ownerId, imagePath},
+  serviceDetails {runtime:image, schedule, plan:starter, region:frankfurt,
+  envSpecificDetails:{dockerCommand}}. Cancellarlo: DELETE /v1/services/crn-…
+  (o suspend). Run manuale: POST /v1/cron-jobs/crn-…/runs.
+- **Alternativa GitHub Actions** (gratis, repo pubblico): file pronto in
+  `ops/keepalive.yml` nel repo gonna-oracle — da spostare in
+  `.github/workflows/` via web UI o token con scope `workflow` (il token QA
+  non ce l'ha). GitHub disattiva gli schedule dopo 60 giorni di inattivita'
+  del repo: basta un commit qualunque per riattivarli.
+- **COSTI (audit 2026-08-26)**: il workspace ha 3 web service free attivi
+  (`gonna-arena-oracle-testnet`, `gonna-verse-airdrop`, `gonna-net-airdrop`)
+  + il cron job (~$1/mese). Il free tier dà **750 istanza-ore/mese per
+  workspace** = UN servizio 24/7 (744h). Con il keep-alive l'oracle consuma
+  ~744h da solo: gli altri due servizi restano a ~6h/mese — se ricevono
+  traffico si sfora e Render sospende TUTTI i free fino al reset mensile.
+  Regola: keep-alive 24/7 solo se gli altri servizi free restano idle;
+  altrimenti starter.
+- **Upgrade**: quando serve (mainnet, o sforamento ore) → piano starter:
+  render.yaml già pronto (disk 1GB /data incluso); via API basta
+  `PATCH /v1/services/<id> {"serviceDetails":{"plan":"starter","disk":{...}}}`
+  (richiede metodo di pagamento registrato).
+
+**Rischio residuo accettato (SOLO testnet) — DB effimero**: senza disco il
+receipt store SQLite si azzera a ogni redeploy/restart. Un receipt
+`continue` già usato può essere ri-accettato dopo un redeploy (finestra
+receipt-reuse). Su testnet lo accettiamo (niente valore reale); **mainnet =
+starter + disk obbligatori** (la finestra si chiude: i receipt sopravvivono
+ai redeploy). Il server fa **fail fast** se il DB non è scrivibile: boot
+abortito con `fatal: unable to open database file` (verificato sul deploy
+dep-da7e5l8 — niente avvio in stato degradato).
+
 ## (a) Cosa serve
 
 1. Un **account Render** (render.com) — email e password bastano.
