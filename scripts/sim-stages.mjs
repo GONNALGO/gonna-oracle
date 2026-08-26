@@ -1,6 +1,6 @@
 // ============================================================================
 // GONNAFIGHT ARENA v15.2.8 — CREATOR-CHOSEN LEVEL E2E PROOF (Algorand TESTNET,
-// v2 app 769767443). The owner decree: "il primo giocatore sceglie il livello
+// v2.1 app 769907387). The owner decree: "il primo giocatore sceglie il livello
 // e chi partecipa gioca lo stesso esatto livello con gli stessi nemici".
 //
 // The 5-card matrix (creator-chosen DESCENT duel, 1 GONNA a seat, create note

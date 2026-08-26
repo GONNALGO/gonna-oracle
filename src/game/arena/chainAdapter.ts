@@ -900,7 +900,7 @@ export class MockArenaAdapter implements ArenaAdapter {
 }
 
 // ======================================================================
-// TESTNET ADAPTER — QuantumArena v2 is LIVE on testnet (app 769767443;
+// TESTNET ADAPTER — QuantumArena v2.1 is LIVE on testnet (app 769907387;
 // v1 app 769688298 kept as legacy in deploy/testnet.json).
 // Exact atomic groups + OpUp donor calls live in ./testnetKit.ts.
 // Identity (Pera testnet via ./testnetWallet.ts, or the QA signer) is

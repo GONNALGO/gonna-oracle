@@ -1,5 +1,5 @@
 const H = () => globalThis.__KIT;
-export const ARENA_APP_ID = 769767443;
+export const ARENA_APP_ID = 769907387;
 export const GONNA_ASA_TESTNET = 769688287;
 export const OPUP_APP_ID = 769688641;
 export const TREASURY_ADDR = 'TREASURYSTUB';

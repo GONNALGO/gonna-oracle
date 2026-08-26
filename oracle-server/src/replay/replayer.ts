@@ -8,7 +8,7 @@
 // Determinism contract:
 //   - fresh Game per replay (no shared state between requests);
 //   - bundle module cached per build (import() once);
-//   - intro force-skipped exactly like the debugSim harness (GIL v2 frame 0 =
+//   - intro STEPPED THROUGH (fixed 151-frame title card; GIL v2 frame 0 =
 //     first frame of scene==='play'; START is not in the mask, M2-0 finding);
 //   - DESCENT stage mode seeds 'PIT-<cid>' (already seeded in the engine);
 //   - FULL mode mirrors SPEC-m2 §4: a single mulberry32(hashSeed('RUN-<cid>'))
@@ -102,7 +102,7 @@ export interface ReplayResult {
  * Scene-aware replay driver — the M2 replay CONTRACT, promoted verbatim from
  * the client reference (scripts/test-v1610.mjs replayCampaign). GIL v2 log
  * frames are PLAY-scene frames ONLY:
- *   - intro: force-skip (debugSim-equivalent), consumes no mask;
+ *   - intro: stepped through (fixed 151 frames, unskippable), consumes no mask;
  *   - clear tally / victory: auto START (player mashing START — the bonus
  *     lands the instant the press registers), consumes no mask;
  *   - play: consume one mask (levels + rising-edge pressed), step.
@@ -121,7 +121,7 @@ export function replayCampaign(game: any, masks: Uint8Array, timeoutMs: number):
     if ((steps & 0x3ff) === 0 && Date.now() - t0 >= timeoutMs) throw new ReplayTimeoutError();
     const sc = game.scene;
     if (sc === 'intro') {
-      game.setScene('play');
+      game.step(); // faithful: the real client stepped these 151 frames (D-E2E)
       continue;
     }
     if (sc === 'clear' || sc === 'victory') {

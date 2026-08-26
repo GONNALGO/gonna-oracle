@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const BUNDLES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../replay-bundles');
 // the committed fixture bundle for the current tree build (v16.1 engine)
-const VER = 'vb1d23c1a';
+const VER = 'v002d77d0';
 const FRAMES = 3600;
 
 const BTNS = ['up', 'down', 'left', 'right', 'punch', 'kick', 'jump', 'special'] as const;

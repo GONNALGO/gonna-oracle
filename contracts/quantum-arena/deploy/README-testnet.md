@@ -115,7 +115,8 @@ della chiave privata algosdk di ORACLE).
 
 | Voce | Valore |
 |---|---|
-| App ID **v2** | **769767443** |
+| App ID **v2.1 (C-FIX tie, LIVE)** | **769907387** |
+| App ID v2 (superseded) | 769767443 |
 | App escrow v2 | `GISV2JNJTT7XCOQFN7BBLKPT3HQKXAUSFKCODTYQ7U7B2XJ2BIMAQIBNM4` |
 | Deploy tx v2 | `U4ZT77JXKHJRJQGJLVGN4WXKLD4UVKPTB6GQXNY5ZAWK4B6C4VWQ` |
 | Bootstrap tx v2 | `IWIUGC7T6BWRCSJYLH2Y3JDG3FWUR2ZFAPMJ4ZDATQOMWDH7YCRQ` |
@@ -136,7 +137,7 @@ Note v2:
   lasciato APERTO per QA.
 - La v1 (app 769688298) resta risolvibile on-chain; in `testnet.json` le sue
   chiavi sono `legacy_*`. Il frontend punta alla v2.
-- Explorer: `https://lora.algokit.io/testnet/application/769767443`
+- Explorer: `https://lora.algokit.io/testnet/application/769907387` (v2.1 live) · `.../application/769767443` (v2 storico)
 
 ## Risultati del run del 2026-08-23 (v1, LEGACY)
 

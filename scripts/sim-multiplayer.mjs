@@ -1,6 +1,6 @@
 // ============================================================================
 // GONNAFIGHT ARENA — QA MULTIPLAYER SIMULATION (Algorand TESTNET, v2 app
-// 769767443). Reproducible full-lifecycle harness:
+// 769907387 v2.1). Reproducible full-lifecycle harness:
 //   PHASE 0  RECON (read-only): dump every live challenge box, QA balances.
 //   PHASE 1  SETUP: fund the ORACLE QA wallet if it cannot play (ALGO + opt-in).
 //   PHASE 2  SIM-RUMBLE: spawn a 4-seat rumble (permissionless spawn_rumble,

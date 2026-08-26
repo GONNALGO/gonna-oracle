@@ -120,7 +120,7 @@ describe('health', () => {
     const j = (await res.json()) as Record<string, unknown>;
     expect(j['ok']).toBe(true);
     expect(j['network']).toBe('testnet');
-    expect(j['appId']).toBe(769767443);
+    expect(j['appId']).toBe(769907387);
     expect(j['oracleAddr']).toBe(ORACLE.addr);
     expect(typeof j['uptimeSec']).toBe('number');
     expect(JSON.stringify(j)).not.toMatch(/mnemonic|seed/i);

@@ -1,5 +1,5 @@
-export * from '/home/kimi/work-m2-client/src/game/font';
-import { drawText as od, drawTextSh as ods } from '/home/kimi/work-m2-client/src/game/font';
+export * from '/home/kimi/work-d21/src/game/font';
+import { drawText as od, drawTextSh as ods } from '/home/kimi/work-d21/src/game/font';
 export const TEXTLOG = [];
 export function drawText(ctx, str, x, y, scale, color, align) {
   TEXTLOG.push({ str, x, y, scale, color, align: align ?? 'left' });

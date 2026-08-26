@@ -2,10 +2,10 @@
 // THE ARENA — TESTNET KIT. TESTNET ONLY — NEVER SHIP TO MAINNET.
 // Exact atomic groups for the QuantumArena v2 contract (deploy/smoke_v2_testnet.py
 // is the reference implementation; v5.0.0 pooled-opcode-budget via OpUp).
-//   ARENA APP v2 769767443 · $GONNA ASA 769688287 · OPUP DONOR 769688641
+//   ARENA APP v2.1 769907387 · $GONNA ASA 769688287 · OPUP DONOR 769688641
 //   v1 app 769688298 is LEGACY — old cards stay resolvable on-chain there.
 // ============================================================================
-export const ARENA_APP_ID = 769767443;
+export const ARENA_APP_ID = 769907387;
 export const LEGACY_ARENA_APP_ID = 769688298; // QuantumArena v1 (superseded)
 export const GONNA_ASA_TESTNET = 769688287;
 export const OPUP_APP_ID = 769688641;
@@ -1070,7 +1070,7 @@ export async function fetchArenaCloseEvents(maxPages = 5): Promise<ArenaCloseEve
 // write cid+1 contract.py:420) and spawn_rumble (read contract.py:486, write
 // cid+1 contract.py:515). A confirmed create-ish call can never fail (a
 // failed txn never confirms), so the Nth (1-based) successful create/spawn
-// app call on app 769767443 created cid N-1. The scan below therefore maps
+// app call on app 769907387 created cid N-1. The scan below therefore maps
 // cid -> stage WITHOUT any stage field in the frozen v2 contract.
 // Cache: localStorage 'gonna.arena.stages' {fromCid, stages} — fromCid is the
 // watermark (number of create-ish calls already mapped). The indexer pages

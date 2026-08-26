@@ -88,7 +88,9 @@ export function startStageRun(game, stageIdx, seedLabel) {
 // ---------------------------------------------------------------------------
 // Scene-aware replay driver (promoted from scripts/test-v1610.mjs — the M2
 // replay CONTRACT). GIL v2 log frames are PLAY-scene frames ONLY:
-//   - intro: force-skip (debugSim-equivalent), consumes no mask;
+//   - intro: STEPPED THROUGH (fixed 151-frame title card, unskippable) —
+//     consumes no mask; D-E2E fix: force-skipping left this.frame 151 behind
+//     the real client and broke long runs at the first frame-keyed element;
 //   - clear tally / victory: auto START (a player mashing START — the bonus
 //     lands the instant the press registers), consumes no mask;
 //   - play: consume one mask (levels + rising-edge pressed), step.
@@ -108,7 +110,7 @@ export function replayCampaign(game, masks, { timeoutMs = 30_000 } = {}) {
       throw e;
     }
     const sc = game.scene;
-    if (sc === 'intro') { game.setScene('play'); continue; }
+    if (sc === 'intro') { game.step(); continue; } // faithful: the client stepped these 151 frames
     if (sc === 'clear' || sc === 'victory') { game.input.pressed.start = true; game.step(); continue; }
     if (sc !== 'play') { game.step(); continue; }
     const m = masks[i++];

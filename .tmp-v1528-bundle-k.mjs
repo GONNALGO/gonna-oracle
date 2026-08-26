@@ -1,5 +1,5 @@
 // src/game/arena/testnetKit.ts
-var ARENA_APP_ID = 769767443;
+var ARENA_APP_ID = 769907387;
 var ALGOD_TESTNET = "https://testnet-api.algonode.cloud";
 var STAGE_NOTE_PREFIX = "gonna:v2:stage:";
 function stageNote(stageIdx) {

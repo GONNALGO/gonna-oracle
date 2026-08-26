@@ -19,7 +19,7 @@ export const PLAYER_A = throwawayAccount();
 export const PLAYER_B = throwawayAccount();
 export const PLAYER_C = throwawayAccount();
 
-export const TEST_APP_ID = 769767443;
+export const TEST_APP_ID = 769907387;
 
 export function testConfig(overrides: Partial<OracleConfig> = {}): OracleConfig {
   return {

@@ -1,6 +1,7 @@
 // Byte-exact vectors vs contract.py (FROZEN). The expected hex below was
 // generated with an independent Python port of contract.py (PyNaCl +
-// hashlib) using the fixed THROWAWAY seed bytes(range(32)) — never a real
+// hashlib) using the fixed THROWAWAY seed bytes(range(32)) — regenerated
+// for app v2.1 769907387 (app id is inside every signed message) — never a real
 // key. If these pass, our messages/signatures are what the chain verifies.
 import { describe, expect, it } from 'vitest';
 import nacl from 'tweetnacl';
@@ -19,7 +20,7 @@ const hex = (s: string): Uint8Array => new Uint8Array(Buffer.from(s, 'hex'));
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
 
 const SEED = new Uint8Array(Array.from({ length: 32 }, (_, i) => i)); // throwaway
-const APP_ID = 769767443;
+const APP_ID = 769907387;
 const ADDR1 = hex('a4f35b1c9a855872d68c176a6d59c517ff747790cf003a7e6f97b402765c91d9');
 const ADDR2 = hex('141ab516b1c4946f6657c53c17d73a02cb1735fc111df956776c256c532773b4');
 const ADDR3 = hex('48e4c34ad462a04db75363526af52fa721559e7cbae31d8fd901842fdf719548');
@@ -30,7 +31,7 @@ describe('score message (SPEC §1, contract.py build_score_msg)', () => {
     expect(m.length).toBe(66);
     expect(SCORE_MSG_LEN).toBe(66);
     expect(toHex(m)).toBe(
-      '51412d53434f52457c000000002de1b813000000000000002a03' +
+      '51412d53434f52457c000000002de3dabb000000000000002a03' +
         'a4f35b1c9a855872d68c176a6d59c517ff747790cf003a7e6f97b402765c91d9' +
         '00000000000f1206',
     );
@@ -40,7 +41,7 @@ describe('score message (SPEC §1, contract.py build_score_msg)', () => {
     const m = scoreMsg(APP_ID, 42, 3, ADDR1, 987654);
     const sig = signerFromSeed(SEED).sign(m);
     expect(toHex(sig)).toBe(
-      'd65e3928c8fa51647b0b438bc301c7219f1c20b6cb4b2fd6f7758d1b0da93a5d6cacde7251a332d5528fb71d5cd67b9c7bf8bc3b2bf776d8c092607ec5051e05',
+      'c5546dd71a4a90404947fcbe26524896e864da589b4cc1b1e20048a572d0228bac669060b9d35a383460c0ca1706a07df407551bf78a75e2b5b0b90ad752460a',
     );
     // and it verifies against the derived public key
     const pub = signerFromSeed(SEED).publicKey;
@@ -75,12 +76,12 @@ describe('verdict message (SPEC §1, contract.py resolve)', () => {
     const m = verdictMsg(APP_ID, 42, 0, verdictExtraFull(), d);
     expect(m.length).toBe(VERDICT_MSG_LEN);
     expect(toHex(m)).toBe(
-      '51412d564552444943547c000000002de1b813000000000000002a00' +
+      '51412d564552444943547c000000002de3dabb000000000000002a00' +
         '0000000000000000000000000000000000000000000000000000000000000000' +
         '915afa657a71d173e2673e2b9f0fcab193c1937c0ca3a02aa98882bc8a7f9479',
     );
     expect(toHex(signerFromSeed(SEED).sign(m))).toBe(
-      '2bd57cadd10467d5b8fed87920519600d0e9c969de210403b9787225e4e8236f3160d179a8664d6f16f0d46b68261d124c52df644e02e3d14e71903e33096b0e',
+      '1296687d75328f3eb9725b165f663cfb4fdde1a8fe051c34d2cc4af838da2b8dd46dd77abaef2a69bff211d9c5155351ad6179f3d6ece6add0281bc631810903',
     );
   });
 
@@ -89,12 +90,12 @@ describe('verdict message (SPEC §1, contract.py resolve)', () => {
     const m = verdictMsg(APP_ID, 42, 1, verdictExtraStage(5), d);
     expect(m.length).toBe(VERDICT_MSG_LEN);
     expect(toHex(m)).toBe(
-      '51412d564552444943547c000000002de1b813000000000000002a01' +
+      '51412d564552444943547c000000002de3dabb000000000000002a01' +
         '0000000000000000000000000000000000000000000000000000000000000005' +
         '915afa657a71d173e2673e2b9f0fcab193c1937c0ca3a02aa98882bc8a7f9479',
     );
     expect(toHex(signerFromSeed(SEED).sign(m))).toBe(
-      '7d6e43dd49915feb70d565035dd1dbd7bdac61636afe25eebf7947745dfe5849782b0b1931f7f389f3ce8bd3a8005a6d6f24639930e833332cd78cf5e9a72d04',
+      '0935385004abc80cf9952692f1eef491fa6f785b67e685f3372c0f8f2e5669cc4a10bc91fa138f4b1b653a8123b605df9632e217879597bec21623dfbed2670e',
     );
   });
 });

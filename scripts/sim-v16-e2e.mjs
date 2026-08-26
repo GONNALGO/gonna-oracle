@@ -1,6 +1,6 @@
 // ============================================================================
 // GONNAFIGHT ARENA — v16.1 M2 SERVER-ORACLE E2E (Algorand TESTNET, app
-// 769767443). Full lifecycle signed ONLY via the local HTTP oracle
+// 769907387 v2.1 C-FIX). Full lifecycle signed ONLY via the local HTTP oracle
 // (localhost:8787) WITH M2 REPLAY VERIFICATION ON: every score is the output
 // of an HONEST headless run recorded through the REAL client path
 // (startArenaRun / debugFullRun + the v16.1 play-scene recorder), sealed as a
@@ -19,7 +19,7 @@
 //
 // Mnemonics are NEVER printed. Live txids/rounds ARE (audit trail).
 // Usage: node scripts/sim-v16-e2e.mjs   (oracle server on :8787 with
-//        REPLAY_ENFORCE=1 and the vb1d23c1a bundle — default config)
+//        REPLAY_ENFORCE=1 and the v002d77d0 bundle — default config)
 // ============================================================================
 import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -33,7 +33,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEPLOY = process.env.QA_DEPLOY_DIR ?? path.join(ROOT, 'contracts/quantum-arena/deploy');
 const BASE = process.env.ORACLE_URL ?? 'http://localhost:8787';
 // the pinned engine bundle the server verifies against (replay-bundles/)
-const BUILD = 'vb1d23c1a';
+const BUILD = 'v002d77d0';
 
 // ---- bundle the chain mirror (same .tmp-kit pattern as sim-multiplayer) ----
 const KIT_OUT = path.join(ROOT, '.tmp-kit-v16e2e.mjs');
@@ -171,11 +171,10 @@ function playHonestRun({ stageMode, stageIdx, seedLabel, frames = 7200, phase = 
   };
 }
 
-// FROZEN-CONTRACT BUG GUARD: a perfect tie at the top score BRICKS resolve
-// (resolve deletes both boxes, then the tie branch lazily box_extracts the
-// deleted players box — QuantumArena.approval.teal:3036-3090). cid 56 proved
-// it on-chain. Runs are deterministic, so we PRE-COMPUTE and re-roll the
-// input stream (phase) until the top score is unique. All runs stay honest.
+// v2 FROZEN tie bug guard (PRE-v2.1 only): on the OLD app a perfect tie
+// bricked resolve. On v2.1 (this app) ties RESOLVE correctly — CARD C below
+// proves it live. The guard stays for the non-tie cards so their legs stay
+// the classic 95/5. All runs stay honest regardless.
 function tieSafePhase({ stageMode, stageIdx, seedLabel, phase, bannedTop }) {
   let p = phase;
   for (let tries = 0; tries < 40; tries++) {
@@ -184,6 +183,24 @@ function tieSafePhase({ stageMode, stageIdx, seedLabel, phase, bannedTop }) {
     p += 13;
   }
   throw new Error('tie-guard: could not find a non-tying run');
+}
+
+// find the two honest runs with the SMALLEST positive score gap
+// (deterministic scan). NOTE: stage-mode scores are multiples of 50 (kill
+// values x combo + wave bonuses), so an exact +/-1 gap is unreachable by
+// honest play — the minimum-gap pair is the closest honest approach to a tie.
+function minGapRuns({ stageMode, stageIdx, seedLabel, phase = 0, tries = 50 }) {
+  const runs = [];
+  for (let p = phase; p < phase + tries; p++) runs.push({ run: playHonestRun({ stageMode, stageIdx, seedLabel, phase: p }), phase: p });
+  let best = null;
+  for (let i = 0; i < runs.length; i++)
+    for (let j = i + 1; j < runs.length; j++) {
+      const gap = Math.abs(runs[i].run.score - runs[j].run.score);
+      if (gap > 0 && (!best || gap < best.gap)) best = { gap, a: runs[i], b: runs[j] };
+    }
+  if (!best) throw new Error('min-gap: all runs tied');
+  const [low, high] = best.a.run.score < best.b.run.score ? [best.a, best.b] : [best.b, best.a];
+  return { gap: best.gap, low, high };
 }
 
 // server-signed score for an honestly played run (expects 200)
@@ -258,6 +275,24 @@ console.log('\n================ PHASE 0.5: expired QA-leftover cleanup =========
       console.log(`  cid ${cid}: multi-seat partial table — left for deadline flows`);
     }
   }
+  // settle RESOLVABLE leftovers (filled + fully signed), tie or not — frees
+  // the MBR and exercises resolve on cards left by crashed runs
+  for (const cid of await kit.scanChallengeIds()) {
+    const m = await kit.readMeta(cid);
+    if (!m) continue;
+    const roster = await kit.readPlayers(cid);
+    const full = Number(m.seatsTaken) === Number(m.seatsTotal);
+    const allSigned = roster.length > 0 && roster.every((p) => p.signed);
+    if (!full || !allSigned) continue;
+    const scores = roster.map((p) => Number(p.score));
+    const top = Math.max(...scores);
+    const tied = scores.filter((x) => x === top).length > 1;
+    console.log(`  SETTLE leftover cid=${cid} (${tied ? 'TIE' : 'win'} @ ${top})`);
+    const rr = tied
+      ? await verdictAndResolveTie(cid, 'TREASURY', `SETTLE cid ${cid} (tie)`)
+      : await verdictAndResolve(cid, 'TREASURY', Number(m.stageMode) === 1 ? 'stage' : 'full', Number(m.stageMode) === 1 ? Number((await kit.fetchArenaCreateStages({ force: true }))?.[String(cid)] ?? 0) : null, `SETTLE cid ${cid}`);
+    (report.txids.settle ??= []).push(rr.txid);
+  }
 }
 
 // ---- funding check -----------------------------------------------------------
@@ -268,7 +303,12 @@ console.log('\n================ QA funding check ================');
     const a = await algoBal(addr(role));
     const g = await gonnaBal(addr(role));
     console.log(`  ${role.padEnd(9)} ${short(addr(role))} ALGO=${(a / 1e6).toFixed(3)} GONNA=${g === null ? 'NOT-OPTED' : (g / 1e6).toFixed(1)}`);
-    if (a < 900_000) need.push({ role, kind: 'algo' }); // join+submit fees + create MBR 358200 + min balance
+    // per-role ALGO targets (sequential cards -> MBRs return before reuse):
+    //   A creates CARD B+C (one MBR at a time) + fees; ORACLE joins+submits
+    // DEPLOYER is min-balance-bound since it deployed the v2.1 app (min
+    // ~1.7135 ALGO) — top it just above min + join/submit fees
+    const ALGO_TARGET = { PLAYER_A: 600_000, PLAYER_B: 620_000, ORACLE: 230_000, DEPLOYER: 1_740_000 };
+    if (ALGO_TARGET[role] && a < ALGO_TARGET[role]) need.push({ role, kind: 'algo', top: ALGO_TARGET[role] - a + 20_000 });
     if (g === null) need.push({ role, kind: 'optin' });
     if ((g ?? 0) < 2 * STAKE) need.push({ role, kind: 'gonna' });
   }
@@ -278,7 +318,7 @@ console.log('\n================ QA funding check ================');
     const txns = [], signers = [];
     for (const n of need) {
       // ALGO top-ups from TREASURY (banks the QA continue fees); GONNA from DEPLOYER (ASA creator)
-      if (n.kind === 'algo') { txns.push(algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: addr('TREASURY'), receiver: addr(n.role), amount: 700_000, suggestedParams: mk({}) })); signers.push(W.TREASURY); }
+      if (n.kind === 'algo') { txns.push(algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: addr('TREASURY'), receiver: addr(n.role), amount: n.top, suggestedParams: mk({}) })); signers.push(W.TREASURY); }
       if (n.kind === 'optin') { txns.push(algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({ sender: addr(n.role), receiver: addr(n.role), assetIndex: kit.GONNA_ASA_TESTNET, amount: 0, suggestedParams: mk({}) })); signers.push(W[n.role]); }
       if (n.kind === 'gonna') { txns.push(algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({ sender: addr('DEPLOYER'), receiver: addr(n.role), assetIndex: kit.GONNA_ASA_TESTNET, amount: 3 * STAKE, suggestedParams: mk({}) })); signers.push(W.DEPLOYER); }
     }
@@ -286,31 +326,6 @@ console.log('\n================ QA funding check ================');
     console.log(`  GONNA top-up txid=${r.txid} round=${r.round}`);
     report.txids.topup = r.txid;
   } else console.log('  all QA wallets GONNA-funded — no top-up needed');
-
-  // continue-flow pooling: PLAYER_B pays the flat 5 ALGO continue to TREASURY
-  const CONTINUE_PAYER = 'PLAYER_B';
-  const WANT = 5_350_000;
-  const FLOORS = { PLAYER_A: 980_000, ORACLE: 265_000, TREASURY: 206_000, DEPLOYER: 1_218_500 };
-  let bBal = await algoBal(addr(CONTINUE_PAYER));
-  if (bBal < WANT) {
-    const sp = await algod.getTransactionParams().do();
-    const mk = (o) => ({ ...sp, fee: 1000, flatFee: true, ...o });
-    const txns = [], signers = [];
-    for (const [role, floor] of Object.entries(FLOORS)) {
-      if (bBal >= WANT) break;
-      const avail = Math.max(0, (await algoBal(addr(role))) - floor);
-      const give = Math.min(avail, WANT - bBal);
-      if (give > 0) {
-        txns.push(algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: addr(role), receiver: addr(CONTINUE_PAYER), amount: give, suggestedParams: mk({}) }));
-        signers.push(W[role]);
-        bBal += give;
-      }
-    }
-    if (bBal < WANT) throw new Error(`QA ALGO pool too thin for the 5-ALGO continue (have ${bBal})`);
-    const r = await send(txns, signers);
-    console.log(`  continue pooling -> PLAYER_B txid=${r.txid} round=${r.round} (PLAYER_B now ${(bBal / 1e6).toFixed(3)} ALGO)`);
-    report.txids.pooling = r.txid;
-  } else console.log('  PLAYER_B already funded for the 5-ALGO continue');
 }
 
 // ---- shared submit / verdict / resolve flows ---------------------------------
@@ -429,10 +444,123 @@ const cidA = await kit.nextChallengeId();
   const sr = await submitViaServer(cidA, 'PLAYER_A', 'stage', 2, { phase: 23, bannedTop: s0.score });
   report.txids.cardA.submit = sr.txid;
 
-  const res = await verdictAndResolve(cidA, 'DEPLOYER', 'stage', 2, 'CARD A');
+  const res = await verdictAndResolve(cidA, 'TREASURY', 'stage', 2, 'CARD A');
   report.txids.cardA.resolve = res.txid;
   report.txids.cardA.round = res.round;
   report.txids.cardA.winner = res.winner;
+}
+
+// ============================ CARD C — TIE PROOF (v2.1) =====================
+// THE transaction that was IMPOSSIBLE on the frozen v2 app: two players
+// honestly produce the SAME score (identical input stream on the same
+// stage+seed -> identical replay -> identical score) and the tie resolve
+// MUST pass on-chain: full refund to each, zero fee, MBR back to creator,
+// events [ChallengeResolved(zero,0,0), ChallengeRefunded(3)], boxes gone.
+async function verdictAndResolveTie(cid, callerRole, label) {
+  const meta = await kit.readMeta(cid);
+  const roster = await kit.readPlayers(cid);
+  const signed = roster.map((p, i) => ({ seat: i, addr: p.addr, score: Number(p.score), signed: p.signed })).filter((e) => e.signed);
+  const top = signed.reduce((a, b) => (b.score > a.score ? b : a));
+  const tieCount = signed.filter((e) => e.score === top.score).length;
+  ok(tieCount > 1, `${label}: roster really tied at top score ${top.score} (${tieCount} players)`);
+
+  const v = await oraclePost('/v1/verdict', { cid }, { retriesOn503: 6 });
+  if (v.status !== 200) throw new Error(`verdict cid=${cid} refused: ${v.status} ${v.json.error ?? ''}`);
+  const verdictSig = b64ToBytes(v.json.verdictSigB64);
+
+  const ZERO = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ';
+  const stake = Number(meta.stakeBase ?? meta.stake ?? 0);
+  const creator = enc(meta.creator);
+  const pre = new Map();
+  for (const e of signed) pre.set(enc(e.addr), await gonnaBal(enc(e.addr)));
+  const preTre = await gonnaBal(kit.TREASURY_ADDR);
+  const preCreatorA = await algoBal(creator);
+
+  const txns = await kit.buildResolveGroup({ caller: addr(callerRole), cid, stageIdx: v.json.stageIdx ?? 0, seedReveal: new Uint8Array(0), verdictSig, winner: ZERO, tie: true });
+  const r = await send(txns, W[callerRole]);
+  const events = decodeCloseEvents(r.info);
+  console.log(`  TIE RESOLVED cid=${cid} txid=${r.txid} round=${r.round}`);
+  for (const e of events) console.log(`  event ${e.kind} cid=${e.cid}${e.winner ? ' winner=' + short(e.winner) : ''} payout=${e.payout ?? '-'} fee=${e.fee ?? '-'}${e.reason !== undefined ? ' reason=' + e.reason : ''}`);
+
+  const iRes = events.findIndex((e) => e.kind === 'ChallengeResolved' && e.cid === cid);
+  const iRef = events.findIndex((e) => e.kind === 'ChallengeRefunded' && e.cid === cid);
+  ok(iRes !== -1 && iRef !== -1 && iRes < iRef, `${label}: events [ChallengeResolved, ChallengeRefunded] in order`);
+  const evR = events[iRes];
+  ok(evR && evR.winner === null && evR.payout === 0 && evR.fee === 0, `${label}: ChallengeResolved zero-winner, payout 0, fee 0`);
+  const evF = events[iRef];
+  ok(evF && evF.reason === 3, `${label}: ChallengeRefunded reason=3 (tie)`);
+
+  for (const e of signed) {
+    const a = enc(e.addr);
+    const delta = (await gonnaBal(a)) - pre.get(a);
+    ok(delta === Number(meta.paidTotal) / signed.length || delta === stake, `${label}: ${short(a)} refund delta ${delta} == stake ${stake}`);
+  }
+  const treDelta = (await gonnaBal(kit.TREASURY_ADDR)) - preTre;
+  ok(treDelta === 0, `${label}: treasury delta ${treDelta} == 0 (no fee on tie)`);
+  const mbrDelta = (await algoBal(creator)) - preCreatorA;
+  ok(mbrDelta === MBR, `${label}: creator MBR refund ${mbrDelta} == ${MBR}`);
+  const boxGone = (await kit.readMeta(cid)) === null && (await kit.readPlayers(cid)).length === 0;
+  ok(boxGone, `${label}: both boxes deleted after tie resolve`);
+  return { txid: r.txid, round: r.round };
+}
+
+console.log('\n================ CARD C: DUEL tie — THE v2.1 PROOF (same honest score twice) ================');
+const cidC = await kit.nextChallengeId();
+{
+  // identical runs: same stage, same seedLabel, same input phase => same score
+  const TIE_PHASE = 41;
+  const s0 = await serverSignScore({ cid: cidC, seat: 0, role: 'PLAYER_A', stageMode: 'stage', stageIdx: 2, phase: TIE_PHASE });
+  const txns = await kit.buildCreateGroup({
+    creator: addr('PLAYER_A'), cid: cidC, stakeBase: STAKE, seats: 1, durationSecs: 86400,
+    stageMode: 1, creatorScore: s0.score, creatorScoreSig: s0.sig, stageIdx: 2,
+  });
+  const r = await send(txns, W.PLAYER_A);
+  console.log(`  CREATE cid=${cidC} PLAYER_A stage 2 score=${s0.score} txid=${r.txid} round=${r.round}`);
+  report.txids.cardC = { cid: cidC, create: r.txid };
+
+  const jr = await send(await kit.buildJoinGroup({ joiner: addr('PLAYER_B'), cid: cidC, stakeBase: STAKE }), W.PLAYER_B);
+  console.log(`  JOIN cid=${cidC} PLAYER_B txid=${jr.txid} round=${jr.round}`);
+  report.txids.cardC.join = jr.txid;
+
+  // PLAYER_B plays the EXACT same stream -> identical replay -> identical score
+  const sr = await submitViaServer(cidC, 'PLAYER_B', 'stage', 2, { phase: TIE_PHASE });
+  report.txids.cardC.submit = sr.txid;
+  ok(sr.score === s0.score, `CARD C: both scores identical (${s0.score} == ${sr.score}) — honest tie`);
+
+  const res = await verdictAndResolveTie(cidC, 'TREASURY', 'CARD C (TIE)');
+  report.txids.cardC.resolve = res.txid;
+  report.txids.cardC.round = res.round;
+}
+
+// ================= CARD D — minimum honest gap => NON-tie path ==============
+console.log('\n================ CARD D: DUEL smallest honest score gap — classic 95/5 path ================');
+const cidD = await kit.nextChallengeId();
+{
+  const pair = minGapRuns({ stageMode: 'stage', stageIdx: 2, seedLabel: `PIT-${cidD}` });
+  console.log(`  min-gap pair: low=${pair.low.run.score} (phase ${pair.low.phase}) high=${pair.high.run.score} (phase ${pair.high.phase}) gap=${pair.gap} (stage scores are multiples of 50 — +/-1 is unreachable by honest play)`);
+  ok(pair.gap > 0, `CARD D: scores not tied (gap ${pair.gap})`);
+  const s0 = await serverSignScore({ cid: cidD, seat: 0, role: 'PLAYER_B', stageMode: 'stage', stageIdx: 2, phase: pair.low.phase });
+  ok(s0.score === pair.low.run.score, `CARD D: creator score ${s0.score} == low run ${pair.low.run.score}`);
+  const txns = await kit.buildCreateGroup({
+    creator: addr('PLAYER_B'), cid: cidD, stakeBase: STAKE, seats: 1, durationSecs: 86400,
+    stageMode: 1, creatorScore: s0.score, creatorScoreSig: s0.sig, stageIdx: 2,
+  });
+  const r = await send(txns, W.PLAYER_B);
+  console.log(`  CREATE cid=${cidD} PLAYER_B stage 2 score=${s0.score} txid=${r.txid} round=${r.round}`);
+  report.txids.cardD = { cid: cidD, create: r.txid };
+
+  const jr = await send(await kit.buildJoinGroup({ joiner: addr('PLAYER_A'), cid: cidD, stakeBase: STAKE }), W.PLAYER_A);
+  console.log(`  JOIN cid=${cidD} PLAYER_A txid=${jr.txid} round=${jr.round}`);
+  report.txids.cardD.join = jr.txid;
+
+  const sr = await submitViaServer(cidD, 'PLAYER_A', 'stage', 2, { phase: pair.high.phase });
+  report.txids.cardD.submit = sr.txid;
+  ok(sr.score === s0.score + pair.gap, `CARD D: scores differ by the min honest gap (${s0.score} vs ${sr.score}, gap ${pair.gap})`);
+
+  const res = await verdictAndResolve(cidD, 'TREASURY', 'stage', 2, 'CARD D (by-1)');
+  report.txids.cardD.resolve = res.txid;
+  report.txids.cardD.round = res.round;
+  report.txids.cardD.winner = res.winner;
 }
 
 // ============================ CARD B — 5-SEAT (FULL) ==========================
@@ -458,41 +586,15 @@ const cidB = await kit.nextChallengeId();
   const mF = await kit.readMeta(cidB);
   ok(Number(mF.seatsTaken) === 4 && Number(mF.status) === 1, 'CARD B: table CLOSED(full) at 4/4 joiner seats');
 
-  // ---- continue flow for PLAYER_B ----
-  const refId = `E2EV161-${cidB}-B`;
-  const note = new TextEncoder().encode(`QA-CONTINUE|${refId}|${addr('PLAYER_B')}`);
-  const sp = await algod.getTransactionParams().do();
-  const pay = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-    sender: addr('PLAYER_B'), receiver: kit.TREASURY_ADDR, amount: 5_000_000, note,
-    suggestedParams: { ...sp, fee: 1000, flatFee: true },
-  });
-  const cr = await send([pay], W.PLAYER_B);
-  console.log(`  CONTINUE pay 5 ALGO ref=${refId} txid=${cr.txid} round=${cr.round}`);
-  report.txids.cardB.continuePay = cr.txid;
-  const reg = await oraclePost('/v1/continue/receipt', { refId, addr: addr('PLAYER_B'), txid: cr.txid });
-  ok(reg.status === 200 && reg.json.ok === true, `CARD B: continue receipt registered (HTTP ${reg.status})`);
-  await expectRefusal('continue receipt re-register', '/v1/continue/receipt', { refId, addr: addr('PLAYER_B'), txid: cr.txid }, 409, 'receipt already registered');
+  // NOTE: the PAID continue flow (5 ALGO flat) was proven live on v2 (M1 +
+  // M2-4 E2E); it is out of scope for D-E2E and the QA ALGO pool is too thin
+  // to stage it again here. CARD B submits all five seats plainly.
 
-  // submits via the SERVER (PLAYER_B's sig consumes the receipt atomically)
-  const { run: bRun } = tieSafePhase({ stageMode: 'full', seedLabel: `RUN-${cidB}`, phase: 17, bannedTop: s0.score });
-  let topB = Math.max(s0.score, bRun.score);
+  // PLAYER_B submits first (seat 1)
   {
-    const body = {
-      cid: cidB, seat: 1, addr: addr('PLAYER_B'), score: bRun.score, stageMode: 'full', build: BUILD,
-      run: { seedLabel: bRun.seedLabel, frames: bRun.frames, durationSec: Math.ceil(bRun.frames / 60) + 2, inputLogB64: bRun.inputLogB64 },
-      continueRef: refId,
-    };
-    const rr = await oraclePost('/v1/sign-score', body, { retriesOn503: 6 });
-    if (rr.status !== 200) throw new Error(`continue sign-score refused: ${rr.status} ${rr.json.error ?? ''}`);
-    console.log(`    run RUN-${cidB} PLAYER_B: ${bRun.frames} play frames, replay-verified score ${bRun.score} (continue consumed)`);
-    const txns2 = await kit.buildSubmitGroup({ player: addr('PLAYER_B'), cid: cidB, score: bRun.score, sig: b64ToBytes(rr.json.sigB64) });
-    const srB = await send(txns2, W.PLAYER_B);
-    console.log(`  submit cid=${cidB} seat=1 PLAYER_B score=${bRun.score} (continue ${refId}) txid=${srB.txid} round=${srB.round}`);
-    report.txids.cardB.submits = { PLAYER_B: srB.txid };
-    // NEG: the consumed receipt cannot sign again — a VALID replayable log is
-    // re-verified first, then the consume check refuses (rule order: replay
-    // gate runs before any DB write, so the receipt is still intact hereafter)
-    await expectRefusal('continue receipt reuse', '/v1/sign-score', body, 409, 'continue receipt already consumed');
+    const sr = await submitViaServer(cidB, 'PLAYER_B', 'full', null, { phase: 17, bannedTop: s0.score });
+    report.txids.cardB.submits = { PLAYER_B: sr.txid };
+    var topB = Math.max(s0.score, sr.score);
   }
 
   for (const [i, role] of ['ORACLE', 'TREASURY', 'DEPLOYER'].entries()) {
@@ -501,23 +603,24 @@ const cidB = await kit.nextChallengeId();
     report.txids.cardB.submits[role] = sr.txid;
   }
 
-  const res = await verdictAndResolve(cidB, 'DEPLOYER', 'full', null, 'CARD B');
+  const res = await verdictAndResolve(cidB, 'TREASURY', 'full', null, 'CARD B');
   report.txids.cardB.resolve = res.txid;
   report.txids.cardB.round = res.round;
   report.txids.cardB.winner = res.winner;
 }
+
 
 // ============================ INDEXER CROSS-CHECK ==============================
 console.log('\n================ EVENT-LOG cross-check (indexer, kit.fetchArenaCloseEvents) ================');
 let evs = [];
 for (let tries = 0; tries < 6; tries++) {
   try {
-    evs = await kit.fetchArenaCloseEvents(3);
-    if ([cidA, cidB].every((c) => evs.some((e) => e.cid === c && e.kind === 'resolved'))) break;
+    evs = await kit.fetchArenaCloseEvents(4);
+    if ([cidA, cidB, cidC, cidD].every((c) => evs.some((e) => e.cid === c && e.kind === 'resolved'))) break;
   } catch (e) { console.log('  indexer not ready: ' + e.message); }
   await sleep(8000);
 }
-for (const c of [cidA, cidB]) {
+for (const c of [cidA, cidB, cidC, cidD]) {
   const e = evs.find((x) => x.cid === c && x.kind === 'resolved');
   ok(!!e, `event-log: indexer lists ChallengeResolved for cid ${c}${e ? ` (winner=${e.winner ? short(e.winner) : 'tie'} payout=${e.payout} fee=${e.fee} round=${e.round})` : ''}`);
 }

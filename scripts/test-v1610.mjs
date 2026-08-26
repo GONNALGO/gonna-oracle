@@ -122,7 +122,7 @@ function replayCampaign(game, masks, { god = false, killEvery = 0 } = {}) {
   while (i < masks.length) {
     if (++steps > masks.length * 4 + 20000) throw new Error('driver stuck in non-play scene');
     const sc = game.scene;
-    if (sc === 'intro') { game.setScene('play'); continue; }
+    if (sc === 'intro') { game.step(); continue; } // faithful 151-frame title card (D-E2E)
     if (sc === 'clear' || sc === 'victory') { game.input.pressed.start = true; game.step(); continue; }
     if (sc !== 'play') { game.step(); continue; }
     const m = masks[i++];

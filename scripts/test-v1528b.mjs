@@ -74,7 +74,7 @@ const BUNDLE_S = join(ROOT, '.tmp-v1528b-bundle-s.mjs');
 writeFileSync(
   KITSTUB,
   "const H = () => globalThis.__KIT;\n" +
-    'export const ARENA_APP_ID = 769767443;\n' +
+    'export const ARENA_APP_ID = 769907387;\n' +
     'export const GONNA_ASA_TESTNET = 769688287;\n' +
     'export const OPUP_APP_ID = 769688641;\n' +
     "export const TREASURY_ADDR = 'TREASURYSTUB';\n" +

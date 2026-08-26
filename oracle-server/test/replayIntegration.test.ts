@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const BUNDLES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../replay-bundles');
-const VER = 'vb1d23c1a'; // committed fixture bundle (v16.1 engine)
+const VER = 'v002d77d0'; // committed fixture bundle (v16.1 engine)
 
 const BTNS = ['up', 'down', 'left', 'right', 'punch', 'kick', 'jump', 'special'] as const;
 
