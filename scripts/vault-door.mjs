@@ -29,6 +29,7 @@ const STALE_ENTRIES = [
   'index-DEVd81tp.js', // v15.2.3 — retired by v15.2.4 (resolve accounts fix + on-chain history)
   'index-SHKCvXLt.js', // v15.3.2 — retired by v16.0.0 (server oracle M1)
   'index-hkEgIjPI.js', // v16.0.0 — retired by v16.0.1 (official Algorand logo + full NFT picker paging)
+  'index-NKTGotX0.js', // v16.0.0 final (shipped zip VER v9fe01156) — retired by v16.1.0 (QuantumArena v2.1 C-FIX)
 ];
 const KEY = [0x47,0x4f,0x4e,0x4e,0x41,0x56,0x45,0x52,0x53,0x45,0x21,0x42,0x59,0x5a,0x41,0x4e,0x54,0x49,0x4e,0x45]; // GONNAVERSE!BYZANTINE
 
