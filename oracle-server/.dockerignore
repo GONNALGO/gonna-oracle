@@ -3,6 +3,10 @@ dist
 test
 scripts
 data
+*.db
+*.db-wal
+*.db-shm
+.tmp-*
 *.log
 .env
 .env.*
@@ -11,5 +15,7 @@ Dockerfile
 .dockerignore
 README.md
 RUNBOOK.md
+DEPLOY-RENDER.md
+render.yaml
 vitest.config.ts
 tsconfig.typecheck.json

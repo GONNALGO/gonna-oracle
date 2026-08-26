@@ -1,12 +1,11 @@
 // index.ts — boot + routes (SPEC §2, §3). Hono app factory is exported for
 // tests; main() performs the boot asserts and starts the HTTP listener.
-import { readFileSync } from 'node:fs';
 import { serve } from '@hono/node-server';
 import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
 import algosdk from 'algosdk';
 import { HttpChainClient, type ChainClient } from './chain.js';
-import { configLogLine, loadConfig, type OracleConfig } from './config.js';
+import { configLogLine, loadConfig, resolveMnemonic, type OracleConfig } from './config.js';
 import { signerFromMnemonic, type OracleSigner } from './sign.js';
 import { Store } from './store.js';
 import { handleContinueReceipt, handleSignScore, handleVerdict, type Deps, type Reply } from './verify.js';
@@ -153,9 +152,10 @@ export async function bootChecks(cfg: OracleConfig, chain: ChainClient, signer: 
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  // The mnemonic lives ONLY in this file (0600, mounted secret). It is never
-  // logged, never returned by the API, never written to the DB.
-  const mnemonic = readFileSync(cfg.oracleMnemonicFile, 'utf8');
+  // The mnemonic comes from ORACLE_MNEMONIC_FILE (0600, mounted secret —
+  // preferred) or the ORACLE_MNEMONIC env fallback. It is never logged,
+  // never returned by the API, never written to the DB.
+  const mnemonic = resolveMnemonic(cfg);
   const signer = signerFromMnemonic(mnemonic);
   const chain = new HttpChainClient({
     algodUrl: cfg.algodUrl,

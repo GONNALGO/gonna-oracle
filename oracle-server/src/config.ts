@@ -1,6 +1,10 @@
-// config.ts — env-driven configuration (SPEC §2). The mnemonic is ONLY ever
-// read from ORACLE_MNEMONIC_FILE (0600, mounted secret); it is never accepted
-// inline via env and never logged.
+// config.ts — env-driven configuration (SPEC §2). The mnemonic is read from
+// ORACLE_MNEMONIC_FILE (0600, mounted secret) when set — PREFERRED — or from
+// the ORACLE_MNEMONIC env var as a fallback (Render-style secret env, where
+// secret FILES can only be created from the dashboard but env vars can be
+// automated via API). It is never logged and never returned by the API.
+import { readFileSync } from 'node:fs';
+
 export interface ScoreCaps {
   full: number;
   stage: number[]; // indexed by stageIdx 0..6
@@ -13,7 +17,8 @@ export interface OracleConfig {
   treasuryAddr: string;
   algodUrl: string;
   indexerUrl: string;
-  oracleMnemonicFile: string;
+  oracleMnemonicFile?: string; // ORACLE_MNEMONIC_FILE — preferred source
+  oracleMnemonic?: string; // ORACLE_MNEMONIC — fallback source (never logged)
   port: number;
   corsOrigins: string[];
   ratePerMinIp: number;
@@ -94,6 +99,34 @@ export function capFor(caps: ScoreCaps, stageMode: 'full' | 'stage', stageIdx: n
   return caps.stage[i] ?? DEFAULT_SCORE_CAPS.stage[i] ?? 500_000;
 }
 
+/** Pick the mnemonic source: FILE if present (preferred), ENV as fallback. */
+function mnemonicSource(env: NodeJS.ProcessEnv): { oracleMnemonicFile?: string; oracleMnemonic?: string } {
+  const file = (env['ORACLE_MNEMONIC_FILE'] ?? '').trim();
+  const inline = (env['ORACLE_MNEMONIC'] ?? '').trim();
+  if (file) return { oracleMnemonicFile: file };
+  if (inline) return { oracleMnemonic: inline };
+  throw new Error('config: missing required env ORACLE_MNEMONIC_FILE (preferred, 0600 secret file) or ORACLE_MNEMONIC (fallback)');
+}
+
+/**
+ * Resolve the oracle mnemonic at boot. The FILE source always wins when
+ * configured; the env var is only a fallback. The VALUE is never logged —
+ * callers may only log which source was used (see keySource()).
+ */
+export function resolveMnemonic(
+  cfg: Pick<OracleConfig, 'oracleMnemonicFile' | 'oracleMnemonic'>,
+  readFile: (path: string) => string = (p) => readFileSync(p, 'utf8'),
+): string {
+  if (cfg.oracleMnemonicFile) return readFile(cfg.oracleMnemonicFile);
+  if (cfg.oracleMnemonic) return cfg.oracleMnemonic;
+  throw new Error('config: no oracle key source configured');
+}
+
+/** 'file' | 'env' — safe to log (the source, never the value). */
+export function keySource(cfg: Pick<OracleConfig, 'oracleMnemonicFile' | 'oracleMnemonic'>): string {
+  return cfg.oracleMnemonicFile ? 'file' : 'env';
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): OracleConfig {
   const networkRaw = req(env, 'ARENA_NETWORK');
   if (networkRaw !== 'testnet' && networkRaw !== 'mainnet') {
@@ -111,7 +144,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OracleConfig {
     treasuryAddr: req(env, 'TREASURY_ADDR'),
     algodUrl: (env['ALGOD_URL'] ?? DEFAULT_ALGOD[networkRaw] ?? '').trim(),
     indexerUrl: (env['INDEXER_URL'] ?? DEFAULT_INDEXER[networkRaw] ?? '').trim(),
-    oracleMnemonicFile: req(env, 'ORACLE_MNEMONIC_FILE'),
+    ...mnemonicSource(env),
     port: intEnv(env, 'PORT', 8787),
     corsOrigins: cors,
     ratePerMinIp: rate.ip,
@@ -128,6 +161,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OracleConfig {
 /** One-line boot log: public data only, never the mnemonic. */
 export function configLogLine(cfg: OracleConfig): string {
   return `network=${cfg.network} appId=${cfg.appId} algod=${cfg.algodUrl} indexer=${cfg.indexerUrl} ` +
-    `port=${cfg.port} cors=[${cfg.corsOrigins.join(' ')}] rate=${cfg.ratePerMinIp}/ip,${cfg.ratePerMinAddr}/addr db=${cfg.dbPath} ` +
+    `port=${cfg.port} keysrc=${keySource(cfg)} cors=[${cfg.corsOrigins.join(' ')}] rate=${cfg.ratePerMinIp}/ip,${cfg.ratePerMinAddr}/addr db=${cfg.dbPath} ` +
     `replay=${cfg.replayEnforce ? `enforce(legacyGil=${cfg.allowLegacyGil ? 'on' : 'off'},bundles=${cfg.replayBundlesDir})` : 'OFF'}`;
 }

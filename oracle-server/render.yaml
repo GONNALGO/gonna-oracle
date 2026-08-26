@@ -1,0 +1,65 @@
+# Render blueprint — GONNA ARENA oracle (testnet, app 769907387)
+# Docs: oracle-server/DEPLOY-RENDER.md (italiano, passo-passo).
+#
+# Decisions (documented):
+#  - runtime docker, rootDir = oracle-server: the build context is this
+#    directory, so the image carries dist/ + replay-bundles/ (REPLAY_ENFORCE=1
+#    boot-asserts on their presence) and nothing else from the monorepo.
+#  - healthCheckPath /v1/health (also mirrored by the Dockerfile HEALTHCHECK).
+#  - 1 GB disk at /data: SQLite WAL lives there (receipts/sigs/rate buckets).
+#    => plan MUST be a paid one (starter): free instances have no disks, and
+#    without a persistent DB every restart loses the receipt store — a
+#    replayed continue receipt would verify again (receipt-reuse window).
+#  - numInstances 1: single-writer SQLite + in-process rate limiter.
+#  - PORT is injected by Render (default 10000); the server reads it from env
+#    (local default stays 8787). Do NOT set it here.
+#  - key source: ORACLE_MNEMONIC_FILE wins when set (secret file, dashboard
+#    only); ORACLE_MNEMONIC (sync:false => write-only, settable via API) is
+#    the fallback for full API automation. If the FILE var is set but the
+#    secret file does not exist, boot fails fast (exit 1) — either create the
+#    secret file in the dashboard or remove the FILE var.
+services:
+  - type: web
+    name: gonna-arena-oracle-testnet
+    runtime: docker
+    rootDir: oracle-server
+    region: frankfurt
+    plan: starter
+    numInstances: 1
+    autoDeploy: false
+    healthCheckPath: /v1/health
+    envVars:
+      - key: ARENA_NETWORK
+        value: testnet
+      - key: ARENA_APP_ID
+        value: "769907387"
+      - key: GONNA_ASA_ID
+        value: "769688287"
+      - key: TREASURY_ADDR
+        value: 4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM
+      - key: ALGOD_URL
+        value: https://testnet-api.algonode.cloud
+      - key: INDEXER_URL
+        value: https://testnet-idx.algonode.cloud
+      # exact allow-list, comma separated (config key is CORS_ORIGIN)
+      - key: CORS_ORIGIN
+        value: https://gonna.bond
+      - key: REPLAY_ENFORCE
+        value: "1"
+      # testnet only — mainnet must run with ALLOW_LEGACY_GIL=0
+      - key: ALLOW_LEGACY_GIL
+        value: "1"
+      - key: DB_PATH
+        value: /data/oracle.db
+      # REPLAY_BUNDLES_DIR: intentionally unset (default <pkg>/replay-bundles,
+      # baked into the image)
+      - key: ORACLE_MNEMONIC_FILE
+        value: /etc/secrets/oracle_mnemonic
+      # fallback key source (write-only; usable via Render API automation).
+      # Used ONLY if ORACLE_MNEMONIC_FILE is unset.
+      - key: ORACLE_MNEMONIC
+        sync: false
+    disk:
+      name: oracle-data
+      mountPath: /data
+      sizeGB: 1
