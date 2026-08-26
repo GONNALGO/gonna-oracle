@@ -6,6 +6,7 @@ import { DEFAULT_SCORE_CAPS, type OracleConfig } from '../src/config.js';
 import { signerFromMnemonic, type OracleSigner } from '../src/sign.js';
 import { Store } from '../src/store.js';
 import { createApp } from '../src/index.js';
+import { ReplayVerifier } from '../src/replay/replayer.js';
 
 export function throwawayAccount(): { addr: string; pk: Uint8Array; mnemonic: string } {
   const a = algosdk.generateAccount();
@@ -35,6 +36,12 @@ export function testConfig(overrides: Partial<OracleConfig> = {}): OracleConfig 
     ratePerMinAddr: 6,
     scoreCaps: DEFAULT_SCORE_CAPS,
     dbPath: ':memory:',
+    // M2 replay verification: OFF by default so the M1 suites exercise the M1
+    // path verbatim; the dedicated replayVerify suite opts in explicitly.
+    replayEnforce: false,
+    allowLegacyGil: true,
+    replayBundlesDir: new URL('../replay-bundles/', import.meta.url).pathname,
+    replayTimeoutMs: 30_000,
     ...overrides,
   };
 }
@@ -122,7 +129,11 @@ export function mkFixture(chainOpts: StubChainOpts = {}, cfgOverrides: Partial<O
   const chain = new StubChain(chainOpts);
   const store = new Store(':memory:');
   const signer = signerFromMnemonic(ORACLE.mnemonic);
-  const app = createApp({ cfg, chain, store, signer });
+  // mirrors main(): the verifier exists iff enforcement is on
+  const replay = cfg.replayEnforce
+    ? new ReplayVerifier({ bundlesDir: cfg.replayBundlesDir, timeoutMs: cfg.replayTimeoutMs })
+    : undefined;
+  const app = createApp({ cfg, chain, store, signer, replay });
   const post = async (path: string, body: unknown, ip = '203.0.113.7') => {
     const res = await app.fetch(
       new Request('http://test' + path, {

@@ -7,10 +7,10 @@
 // frames, or carry the intro length in the header), not a float issue.
 // Run: node oracle-server/replay/intro-divergence.mjs
 // ============================================================================
-import { loadEngine, bootGame, startDescent, replayMasks } from './replay.mjs';
+import { loadBundle, bootGame, startDescent, replayMasks } from './replay.mjs';
 import { buildTape, tapeToMasks, FRAMES } from './fixtures.mjs';
 
-const eng = await loadEngine();
+const eng = await loadBundle(process.env.REPLAY_VER ?? 'v9fe01156');
 const masks = tapeToMasks(buildTape(FRAMES), FRAMES);
 
 // run A: intro force-skipped (what replayMasks/debugSim do)

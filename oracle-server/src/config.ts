@@ -20,6 +20,11 @@ export interface OracleConfig {
   ratePerMinAddr: number;
   scoreCaps: ScoreCaps;
   dbPath: string;
+  // M2 replay verification (SPEC-m2 §5)
+  replayEnforce: boolean; // REPLAY_ENFORCE (default 1); 0 = recovery mode (M1 structural only)
+  allowLegacyGil: boolean; // ALLOW_LEGACY_GIL (default 1 testnet / 0 mainnet)
+  replayBundlesDir: string; // REPLAY_BUNDLES_DIR (default <pkg>/replay-bundles)
+  replayTimeoutMs: number; // REPLAY_TIMEOUT_MS (default 30000; 0 = abort at first checkpoint)
 }
 
 /** Generous M1 caps (mission brief): refined in M2 by deterministic replay. */
@@ -113,11 +118,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OracleConfig {
     ratePerMinAddr: rate.addr,
     scoreCaps: parseScoreCaps(env['SCORE_CAPS_JSON']),
     dbPath: (env['DB_PATH'] ?? '/data/oracle.db').trim(),
+    replayEnforce: (env['REPLAY_ENFORCE'] ?? '1').trim() !== '0',
+    allowLegacyGil: (env['ALLOW_LEGACY_GIL'] ?? (networkRaw === 'testnet' ? '1' : '0')).trim() !== '0',
+    replayBundlesDir: (env['REPLAY_BUNDLES_DIR'] ?? new URL('../replay-bundles/', import.meta.url).pathname).trim(),
+    replayTimeoutMs: intEnv(env, 'REPLAY_TIMEOUT_MS', 30_000),
   };
 }
 
 /** One-line boot log: public data only, never the mnemonic. */
 export function configLogLine(cfg: OracleConfig): string {
   return `network=${cfg.network} appId=${cfg.appId} algod=${cfg.algodUrl} indexer=${cfg.indexerUrl} ` +
-    `port=${cfg.port} cors=[${cfg.corsOrigins.join(' ')}] rate=${cfg.ratePerMinIp}/ip,${cfg.ratePerMinAddr}/addr db=${cfg.dbPath}`;
+    `port=${cfg.port} cors=[${cfg.corsOrigins.join(' ')}] rate=${cfg.ratePerMinIp}/ip,${cfg.ratePerMinAddr}/addr db=${cfg.dbPath} ` +
+    `replay=${cfg.replayEnforce ? `enforce(legacyGil=${cfg.allowLegacyGil ? 'on' : 'off'},bundles=${cfg.replayBundlesDir})` : 'OFF'}`;
 }

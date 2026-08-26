@@ -9,13 +9,13 @@
 // Run: node oracle-server/replay/provaB-browser.mjs
 // ============================================================================
 import { chromium } from '/home/kimi/.npm-global/lib/node_modules/playwright/index.mjs';
-import { loadEngine, replayGIL, masksToTape, makeGIL } from './replay.mjs';
+import { loadBundle, replayGIL, masksToTape, makeGIL } from './replay.mjs';
 import { buildTape, tapeToMasks, FRAMES, FRAMES_DEEP, CASES } from './fixtures.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, label) => { if (cond) { pass++; console.log('  PASS', label); } else { fail++; console.log('  FAIL', label); } };
 
-const eng = await loadEngine();
+const eng = await loadBundle(process.env.REPLAY_VER ?? 'v9fe01156');
 const browser = await chromium.launch({ args: ['--no-sandbox', '--disable-gpu', '--mute-audio'] });
 console.log('Node ' + process.version + ' (V8 ' + process.versions.v8 + ')  vs  Chromium ' + browser.version());
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });

@@ -58,6 +58,10 @@ Daily (cron + indexer):
 |---|---|---|
 | boot exit 1 "oracle ... mismatch" | wrong/rotated key file vs app id | fix secret or app id; never bypass |
 | boot exit 1 "treasury ... mismatch" | env points at another app instance | fix env |
+| boot exit 1 "no engine bundles" | REPLAY_ENFORCE=1 with empty replay-bundles/ | build+commit the bundle for the live client build (`scripts/build-replay-bundle.mjs <VER>`); emergency only: `REPLAY_ENFORCE=0` (M1 structural checks, NO replay — log the incident, re-enable ASAP) |
+| 400 "BUILD UNKNOWN TO THE ORACLE" | client build newer than the bundle set | build the bundle for that VER and redeploy |
+| 400 "REPLAY MISMATCH" | log/score not reproducible (cheat or client bug) | legit refusal; if legit clients hit it, suspect an engine bundle/client skew — verify bundle VER == live client VER |
+| 500 "REPLAY TIMEOUT - RETRY" | replay exceeded wall-clock budget | client retries; if persistent, raise REPLAY_TIMEOUT_MS and plan the worker_threads pool (M3) |
 | 503 "stage commitment unavailable" | indexer down/lagging at cold start | check indexer; retry (cache 30s) |
 | 409 "not resolvable yet" on verdict | legitimate — card not ready | none |
 | SQLite I/O errors | `/data` not a real fs / full disk | fix volume, WAL needs mmap |

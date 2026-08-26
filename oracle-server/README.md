@@ -1,4 +1,4 @@
-# GONNA ARENA — Server Oracle (M1)
+# GONNA ARENA — Server Oracle (M1 + M2 replay verification)
 
 HTTPS service that custodies the arena oracle key **server-side** and signs
 score / verdict messages **only after verifying against the on-chain state**
@@ -33,14 +33,15 @@ scripts/smoke-testnet.mjs  live testnet smoke (see below)
 - extra: 32×0 (FULL) or 24×0‖u64be(stage_idx) (STAGE_IDX)
 - signature: ed25519 bare detached, seed = first 32 B of the algosdk secret key
 
-## Input log v1 wire format (SPEC §5 — M1 plumbing, M2 enforcement)
+## Input log v1/v2 wire format (SPEC §5 + SPEC-m2 §2)
 
 `inputLogB64` = base64 of (big-endian, no padding — mirrors the client codec
 `src/game/arena/inputLog.ts`):
 
 ```
 'G' 'I' 'L'         magic
-u8                  version (= 1)
+u8                  version (1 = recorded from run start, intro included — legacy;
+                             2 = frame 0 is the first scene==='play' frame)
 u8                  flags (bit0 = truncated)
 u16 buildLen + utf8 build
 u16 seedLen  + utf8 seedLabel
@@ -50,7 +51,44 @@ frames x u8         per-frame button bitmask (bit0 up ... bit7 special)
 
 - exactly 1 bitmask byte per frame, no trailing data
 - header `frames`/`build`/`seedLabel` must equal the sibling request fields
-- M1: structural validation only (no replay). Cap: 300k frames.
+- M1: structural validation only. M2 (REPLAY_ENFORCE=1): v2 logs are
+  **replayed bit-exact** before signing (below); v1 logs follow the legacy
+  gate (`ALLOW_LEGACY_GIL`). Cap: 300k frames (enforced in decode).
+
+## M2 replay verification (SPEC-m2 §5/§6)
+
+With `REPLAY_ENFORCE=1` (default), after the M1 checks and **before** any DB
+write or signature, `/v1/sign-score` replays the submitted v2 log headless:
+
+1. missing log → 400 `RUN LOG REQUIRED`
+2. v1 log → M1 structural path only if `ALLOW_LEGACY_GIL=1` (testnet default
+   on, mainnet default off), else 400 `LEGACY LOG REFUSED`
+3. `truncated` → 400 `RUN LOG TRUNCATED`
+4. no bundle `replay-bundles/engine-<build>.mjs` → 400 `BUILD UNKNOWN TO THE ORACLE`
+5. header `seedLabel` != chain-derived `PIT-<cid>` (stage) / `RUN-<cid>` (full)
+   → 400 `SEED MISMATCH`
+6. headless replay (fresh Game per request, bundle cached per build, intro
+   force-skipped like the QA harness) → **exact integer score equality**,
+   else 400 `REPLAY MISMATCH`
+7. wall-clock guard `REPLAY_TIMEOUT_MS` (default 30000) → 500 `REPLAY TIMEOUT - RETRY`
+
+Bundles are built per released client build and committed:
+
+```bash
+node scripts/build-replay-bundle.mjs <VER>     # or --from-dist after vite build
+```
+
+Boot assert: with enforcement on, at least one bundle must exist or the
+server exits 1. FULL mode campaign boot mirrors SPEC-m2 §4 (single
+`mulberry32(hashSeed('RUN-<cid>'))` stream over the whole arena run);
+DESCENT uses the engine-seeded `PIT-<cid>`. Determinism proof: M2-0
+(`M2-0-REPORT.md`) — bit-exact Node↔Chromium. FULL-mode client parity
+end-to-end is pending the m2-client merge (seeded campaign).
+
+**Hardening M3**: the replay runs in-process (justified: 300k frame cap +
+rate limits + wall-clock guard). For mainnet, isolate it in a
+`worker_threads` pool (one worker per replay, hard kill on timeout, memory
+cap) so a hostile log cannot block the event loop.
 
 ## Endpoints (base `/v1`)
 
@@ -79,10 +117,13 @@ counted at endpoint entry to protect upstream algod/indexer.
    not on-chain yet)
 3. **score cap** (`SCORE_CAPS_JSON`, defaults full 2 000 000 / stage 500 000)
 4. **run sanity**: frames ≥ 600, frames ≤ 300 000, durationSec ≥ frames/60 × 0.5,
-   optional input-log v1 structural validation
-5. **continue**: receipt exists, unconsumed, addr match — consumed ATOMICALLY
+   optional input-log v1/v2 structural validation
+5. **replay verification (M2)**: when `REPLAY_ENFORCE=1` — see the M2 section;
+   placed after the read-only checks and BEFORE any DB write so a refused run
+   never consumes a continue receipt nor leaves a sig row
+6. **continue**: receipt exists, unconsumed, addr match — consumed ATOMICALLY
    with the sig insert (same SQLite tx)
-6. **anti-replay**: one active sig per (cid,seat), new score overwrites
+7. **anti-replay**: one active sig per (cid,seat), new score overwrites
 
 ## Local dev
 

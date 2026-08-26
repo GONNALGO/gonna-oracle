@@ -10,6 +10,7 @@ import { configLogLine, loadConfig, type OracleConfig } from './config.js';
 import { signerFromMnemonic, type OracleSigner } from './sign.js';
 import { Store } from './store.js';
 import { handleContinueReceipt, handleSignScore, handleVerdict, type Deps, type Reply } from './verify.js';
+import { ReplayVerifier, scanReplayBundles } from './replay/replayer.js';
 import { bytesEqual } from './util.js';
 
 export interface AppDeps extends Deps {
@@ -136,6 +137,18 @@ export async function bootChecks(cfg: OracleConfig, chain: ChainClient, signer: 
   if (gs.gonnaAssetId !== cfg.gonnaAsaId) {
     console.error(`[oracle] WARN: GONNA_ASA_ID config (${cfg.gonnaAsaId}) != on-chain gonna_asset_id (${gs.gonnaAssetId})`);
   }
+  // M2 boot assert (SPEC-m2 §6): with replay enforcement ON there must be at
+  // least one pinned engine bundle to verify against — otherwise every
+  // sign-score would 400. Recovery: REPLAY_ENFORCE=0 (see RUNBOOK).
+  if (cfg.replayEnforce) {
+    const n = scanReplayBundles(cfg.replayBundlesDir).size;
+    if (n === 0) {
+      throw new Error(
+        `boot assert FAILED: REPLAY_ENFORCE=1 but no engine bundles in ${cfg.replayBundlesDir} — refusing to start (build one with scripts/build-replay-bundle.mjs <VER> or set REPLAY_ENFORCE=0 for recovery)`,
+      );
+    }
+    console.error(`[oracle] replay bundles available: ${n} (${[...scanReplayBundles(cfg.replayBundlesDir).keys()].join(', ')})`);
+  }
 }
 
 async function main(): Promise<void> {
@@ -152,7 +165,10 @@ async function main(): Promise<void> {
   });
   await bootChecks(cfg, chain, signer); // throws -> exit 1 below
   const store = new Store(cfg.dbPath);
-  const app = createApp({ cfg, chain, store, signer });
+  const replay = cfg.replayEnforce
+    ? new ReplayVerifier({ bundlesDir: cfg.replayBundlesDir, timeoutMs: cfg.replayTimeoutMs })
+    : undefined;
+  const app = createApp({ cfg, chain, store, signer, replay });
   serve({ fetch: app.fetch, port: cfg.port }, (info) => {
     console.log(`[oracle] ready addr=${signer.addr} ${configLogLine(cfg)} listening=${info.port}`);
   });

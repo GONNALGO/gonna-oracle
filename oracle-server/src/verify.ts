@@ -19,12 +19,15 @@ import {
 } from './sign.js';
 import { SigRow, Store } from './store.js';
 import { b64decode, b64encode } from './util.js';
+import { ReplayVerifier } from './replay/replayer.js';
 
 export interface Deps {
   cfg: OracleConfig;
   chain: ChainClient;
   store: Store;
   signer: OracleSigner;
+  /** M2 replay verifier (SPEC-m2 §5). Required when cfg.replayEnforce. */
+  replay?: ReplayVerifier;
 }
 
 export interface Reply {
@@ -37,17 +40,18 @@ const ok = (body: Record<string, unknown>): Reply => ({ status: 200, body });
 const bad = (reason: string, status = 400): Reply => ({ status, body: { error: reason } });
 
 // ---------------------------------------------------------------------------
-// input log v1 (SPEC §5) — wire format owned by the client codec
-// (src/game/arena/inputLog.ts); this is the server-side mirror. Layout
+// input log v1/v2 (SPEC §5 + SPEC-m2 §2) — wire format owned by the client
+// codec (src/game/arena/inputLog.ts); this is the server-side mirror. Layout
 // (big-endian, no padding):
 //   'G' 'I' 'L'        magic
-//   u8                 version (= 1)
+//   u8                 version (1 = records from startArenaRun incl. intro;
+//                              2 = frame 0 is the first scene==='play' frame)
 //   u8                 flags (bit0 = truncated)
 //   u16 buildLen + utf8 build
 //   u16 seedLen  + utf8 seedLabel
 //   u32 frames         (<= 300000)
 //   frames x u8        per-frame button bitmask
-// M1: structural validation ONLY (no replay — that is M2).
+// M1: structural validation ONLY. M2: v2 logs are replay-verified (below).
 // ---------------------------------------------------------------------------
 export const INPUT_LOG_CAP = 300_000;
 
@@ -60,7 +64,7 @@ export interface InputLogHeader {
 }
 
 export function encodeInputLog(
-  header: { build: string; seedLabel: string; frames: number; truncated?: boolean },
+  header: { build: string; seedLabel: string; frames: number; truncated?: boolean; v?: number },
   masks: Uint8Array,
 ): Uint8Array {
   const enc = new TextEncoder();
@@ -69,7 +73,7 @@ export function encodeInputLog(
   const frames = Math.min(header.frames, INPUT_LOG_CAP);
   const out = new Uint8Array(3 + 1 + 1 + 2 + build.length + 2 + seed.length + 4 + frames);
   const dv = new DataView(out.buffer);
-  out.set([0x47, 0x49, 0x4c, 1, header.truncated ? 1 : 0], 0); // 'GIL', v1, flags
+  out.set([0x47, 0x49, 0x4c, header.v ?? 1, header.truncated ? 1 : 0], 0); // 'GIL', v, flags
   dv.setUint16(5, build.length, false);
   out.set(build, 7);
   const p2 = 7 + build.length;
@@ -84,7 +88,7 @@ export function encodeInputLog(
 export function decodeInputLog(raw: Uint8Array): { header: InputLogHeader; bitmask: Uint8Array } | null {
   if (raw.length < 3 + 1 + 1 + 2 + 2 + 4) return null;
   if (raw[0] !== 0x47 || raw[1] !== 0x49 || raw[2] !== 0x4c) return null; // 'GIL'
-  if (raw[3] !== 1) return null; // version
+  if (raw[3] !== 1 && raw[3] !== 2) return null; // version (v1 legacy / v2 play-only)
   const flags = raw[4]!;
   if (flags & ~1) return null; // unknown flag bits
   const dv = new DataView(raw.buffer, raw.byteOffset);
@@ -100,7 +104,7 @@ export function decodeInputLog(raw: Uint8Array): { header: InputLogHeader; bitma
   if (frames > INPUT_LOG_CAP) return null;
   const bitmask = raw.subarray(p3 + 4);
   if (bitmask.length !== frames) return null; // exactly 1 byte per frame, no trailing data
-  return { header: { v: 1, build, seedLabel, frames, truncated: (flags & 1) !== 0 }, bitmask };
+  return { header: { v: raw[3]!, build, seedLabel, frames, truncated: (flags & 1) !== 0 }, bitmask };
 }
 
 // ---------------------------------------------------------------------------
@@ -227,10 +231,41 @@ export async function handleSignScore(deps: Deps, rawBody: unknown, ip: string):
     const raw = b64decode(body.run.inputLogB64);
     if (!raw) return bad('input log: invalid base64');
     const log = decodeInputLog(raw);
-    if (!log) return bad('input log: invalid v1 structure');
+    if (!log) return bad('input log: invalid structure');
     if (log.header.frames !== body.run.frames) return bad('input log: frames mismatch');
     if (log.header.build !== body.build) return bad('input log: build mismatch');
     if (log.header.seedLabel !== body.run.seedLabel) return bad('input log: seedLabel mismatch');
+  }
+
+  // 5. replay verification (SPEC-m2 §5) — AFTER the M1 read-only checks above,
+  //    BEFORE the continue/anti-replay DB writes and BEFORE signing: a refused
+  //    run must never consume a receipt nor leave a sig row. Pipeline order:
+  //    v1 legacy gate -> truncated -> build bundle -> seedLabel -> replay ->
+  //    exact score equality (wall-clock guarded by the verifier).
+  if (cfg.replayEnforce) {
+    if (!deps.replay) return bad('replay verifier not configured', 500);
+    if (body.run.inputLogB64 == null) return bad('RUN LOG REQUIRED'); // no log, no signature under enforcement
+    const raw = b64decode(body.run.inputLogB64); // validated above
+    const log = raw ? decodeInputLog(raw) : null;
+    if (!log) return bad('input log: invalid structure'); // unreachable (rule 4), kept for exhaustiveness
+    if (log.header.v === 1) {
+      // legacy semantics (records the intro): not replayable — M1 path only,
+      // and only where explicitly allowed (testnet default on, mainnet off)
+      if (!cfg.allowLegacyGil) return bad('LEGACY LOG REFUSED');
+    } else {
+      if (log.header.truncated) return bad('RUN LOG TRUNCATED');
+      const expectedSeed = body.stageMode === 'stage' ? `PIT-${body.cid}` : `RUN-${body.cid}`;
+      if (log.header.seedLabel !== expectedSeed) return bad('SEED MISMATCH');
+      const r = await deps.replay.verifyRun({
+        build: log.header.build,
+        stageMode: body.stageMode,
+        stageIdx: body.stageMode === 'stage' ? (body.stageIdx ?? stageCommit?.stage ?? null) : null,
+        seedLabel: log.header.seedLabel,
+        masks: log.bitmask,
+        score: body.score,
+      });
+      if (!r.ok) return bad(r.reason, r.status);
+    }
   }
 
   // sign (byte-exact SPEC §1)

@@ -6,13 +6,13 @@
 //   A4: god-mode deep run (waves/boss/drone paths) is deterministic too
 // Run: node oracle-server/replay/provaA-node.mjs
 // ============================================================================
-import { loadEngine, bootGame, startDescent, replayMasks, replayGIL, masksToTape, makeGIL } from './replay.mjs';
+import { loadBundle, bootGame, startDescent, replayMasks, replayGIL, masksToTape, makeGIL } from './replay.mjs';
 import { buildTape, tapeToMasks, FRAMES, CASES } from './fixtures.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, label) => { if (cond) { pass++; console.log('  PASS', label); } else { fail++; console.log('  FAIL', label); } };
 
-const eng = await loadEngine();
+const eng = await loadBundle(process.env.REPLAY_VER ?? 'v9fe01156');
 console.log('engine bundled + booted headless (Node ' + process.version + ', V8 ' + process.versions.v8 + ')');
 
 for (const c of CASES) {
