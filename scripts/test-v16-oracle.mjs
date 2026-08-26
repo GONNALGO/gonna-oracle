@@ -43,7 +43,7 @@ console.log('\n[0] SOURCE: the 4 call sites moved to the server oracle, dev key 
   ok(ca.includes('const vsig = await oracleVerdictSig(id,'), 'verdict sig via the server oracle (POST /v1/verdict)');
   ok(ca.includes('if (opts?.continueRefId) await registerContinueReceipt(opts.continueRefId, address);'), 'continue gate: receipt REGISTERED before the sig ask');
   ok(!ca.includes('requireOracle'), 'the old hasDevOracle preflight gate is gone (the server answers honestly)');
-  ok(oc.includes("export const ORACLE_BASE_URL_TESTNET = 'http://localhost:8787';"), 'oracleClient: testnet base URL constant');
+  ok(oc.includes("export const ORACLE_BASE_URL_TESTNET = 'https://gonna-arena-oracle-testnet.onrender.com';"), 'oracleClient: testnet base URL constant');
   ok(oc.includes("'gonna.arena.oracleurl'"), 'oracleClient: ?oracle= override persisted (arenaMode pattern)');
   ok(oc.includes("'THE ORACLE SAYS NO - '") && oc.includes("'THE ORACLE IS BUSY - RETRY IN A BREATH'"), 'honest slang error mapping present');
   ok(oc.includes("const TIMEOUT_MS = 8000;") && oc.includes('const MAX_ATTEMPTS = 2;'), '8s timeout + exactly 1 retry');
@@ -145,10 +145,10 @@ const jsonRes = (status, obj, headers) => new Response(JSON.stringify(obj), { st
 // ---- base URL: default, ?oracle= override + persistence --------------------
 {
   store.clear(); setWindow();
-  ok(oc.oracleBaseUrl() === 'http://localhost:8787', 'default base = ORACLE_BASE_URL_TESTNET');
+  ok(oc.oracleBaseUrl() === 'https://gonna-arena-oracle-testnet.onrender.com', 'default base = ORACLE_BASE_URL_TESTNET');
   const calls = stubFetch(() => jsonRes(200, { sigB64: Buffer.alloc(64).toString('base64'), oracleAddr: 'ORA' }));
   await oc.signScore(REQ);
-  ok(calls[0].url === 'http://localhost:8787/v1/sign-score', 'POST hits <base>/v1/sign-score');
+  ok(calls[0].url === 'https://gonna-arena-oracle-testnet.onrender.com/v1/sign-score', 'POST hits <base>/v1/sign-score');
 
   store.clear(); setWindow('?oracle=' + encodeURIComponent('http://qa-oracle:9999'));
   ok(oc.oracleBaseUrl() === 'http://qa-oracle:9999', '?oracle= query wins');

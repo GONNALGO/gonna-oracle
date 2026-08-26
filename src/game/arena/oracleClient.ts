@@ -14,7 +14,7 @@
 // ============================================================================
 import { b64ToBytes } from '../b64';
 
-export const ORACLE_BASE_URL_TESTNET = 'http://localhost:8787';
+export const ORACLE_BASE_URL_TESTNET = 'https://gonna-arena-oracle-testnet.onrender.com'; // public Render oracle (free tier); localhost still available via ?oracle=
 const LS_ORACLE_URL = 'gonna.arena.oracleurl';
 // reserved ?oracle= value: sign locally with the armed QA dev-oracle key
 export const ORACLE_DEV = 'dev';
