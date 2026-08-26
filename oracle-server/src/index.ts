@@ -7,7 +7,7 @@ import algosdk from 'algosdk';
 import { HttpChainClient, type ChainClient } from './chain.js';
 import { configLogLine, loadConfig, resolveMnemonic, type OracleConfig } from './config.js';
 import { signerFromMnemonic, type OracleSigner } from './sign.js';
-import { Store } from './store.js';
+import { openStore } from './store.js';
 import { handleContinueReceipt, handleSignScore, handleVerdict, type Deps, type Reply } from './verify.js';
 import { ReplayVerifier, scanReplayBundles } from './replay/replayer.js';
 import { bytesEqual } from './util.js';
@@ -63,13 +63,13 @@ export function createApp(deps: AppDeps): Hono {
   const rateGate = async (c: Context, addrKey: string | null): Promise<Response | null> => {
     const now = chain.now();
     const ip = clientIp(c);
-    const hitIp = store.rateHit('ip:' + ip, cfg.ratePerMinIp, now);
+    const hitIp = await store.rateHit('ip:' + ip, cfg.ratePerMinIp, now);
     if (!hitIp.allowed) {
       c.header('Retry-After', String(hitIp.retryAfter));
       return c.json({ error: 'rate limited (ip)' }, 429);
     }
     if (addrKey) {
-      const hitAddr = store.rateHit('addr:' + addrKey, cfg.ratePerMinAddr, now);
+      const hitAddr = await store.rateHit('addr:' + addrKey, cfg.ratePerMinAddr, now);
       if (!hitAddr.allowed) {
         c.header('Retry-After', String(hitAddr.retryAfter));
         return c.json({ error: 'rate limited (addr)' }, 429);
@@ -164,7 +164,30 @@ async function main(): Promise<void> {
     treasuryAddr: cfg.treasuryAddr,
   });
   await bootChecks(cfg, chain, signer); // throws -> exit 1 below
-  const store = new Store(cfg.dbPath);
+  const store = await openStore(cfg); // turso when configured, else local SQLite
+  // SEV-2b warnings (M-1): receipts on ephemeral local storage do not survive
+  // a redeploy on the free tier. Mainnet should set TURSO_URL/TURSO_AUTH_TOKEN.
+  if (!cfg.tursoUrl) {
+    console.error('[oracle] WARN: TURSO_URL not set — receipts live on local/ephemeral storage (SEV-2b). A redeploy wipes them; consumed receipts could be re-registered. Set TURSO_URL/TURSO_AUTH_TOKEN (Turso free tier) for durable receipts.');
+  }
+  const receiptsAtBoot = await store.receiptCount();
+  if (cfg.replayEnforce && receiptsAtBoot === 0) {
+    console.error('[oracle] WARN: receipts table is EMPTY at cold boot with REPLAY_ENFORCE=1 — fresh DB (or a wiped one): continue receipts issued before this boot are unknown to this instance.');
+  }
+  // Defensive reconciliation (works even without Turso): compare on-chain
+  // continue payments to the receipts table — a gap means a DB wipe.
+  try {
+    const onChain = await chain.countContinuePayments();
+    if (onChain == null) {
+      console.error('[oracle] WARN: continue reconciliation scan failed (indexer) — cannot compare on-chain vs DB receipts');
+    } else if (onChain > receiptsAtBoot) {
+      console.error(`[oracle] WARN: continue reconciliation MISMATCH — on-chain payments=${onChain} > DB receipts=${receiptsAtBoot}: possible DB wipe (SEV-2b). Investigate before trusting receipt state.`);
+    } else {
+      console.error(`[oracle] continue reconciliation ok: on-chain=${onChain} db=${receiptsAtBoot}`);
+    }
+  } catch (e) {
+    console.error('[oracle] WARN: continue reconciliation error:', e instanceof Error ? e.message : String(e));
+  }
   const replay = cfg.replayEnforce
     ? new ReplayVerifier({ bundlesDir: cfg.replayBundlesDir, timeoutMs: cfg.replayTimeoutMs })
     : undefined;

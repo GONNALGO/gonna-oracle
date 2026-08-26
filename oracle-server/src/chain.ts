@@ -63,6 +63,10 @@ export interface ChainClient {
   /** On-chain proof of the 5-ALGO continue payment (exact amount, treasury
    *  receiver, exact note QA-CONTINUE|<refId>|<addr>, confirmed). */
   verifyContinuePayment(txid: string, refId: string, addr: string): Promise<boolean>;
+  /** SEV-2b boot reconciliation (M-1): count of confirmed continue payments
+   *  (note prefix QA-CONTINUE|) received by the treasury, or null when the
+   *  indexer scan failed — callers must treat null as "unknown", not zero. */
+  countContinuePayments(): Promise<number | null>;
 }
 
 const CREATE_SIG = 'create_challenge(pay,axfer,uint64,uint64,uint64,uint64,byte[],uint64,byte[])uint64';
@@ -285,6 +289,37 @@ export class HttpChainClient implements ChainClient {
     if (noted != null) return { stage: noted, source: 'note' };
     if (cid < scan.total) return { stage: cid % 7, source: 'fallback-cid7' }; // pre-note card, documented fallback
     return null; // cid beyond the cross-checked mapping: unverifiable
+  }
+
+  async countContinuePayments(): Promise<number | null> {
+    let token = '';
+    let count = 0;
+    for (let page = 0; page < 20; page++) {
+      const url =
+        this.indexerUrl + '/v2/transactions?address=' + encodeURIComponent(this.treasuryAddr) +
+        '&address-role=receiver&tx-type=pay&limit=100' +
+        (token ? '&next=' + encodeURIComponent(token) : '');
+      let j: {
+        transactions?: { note?: string }[];
+        'next-token'?: string;
+      };
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('indexer http ' + r.status);
+        j = (await r.json()) as typeof j;
+      } catch {
+        return null; // unknown — never report as zero
+      }
+      for (const t of j.transactions ?? []) {
+        if (!t.note) continue;
+        try {
+          if (Buffer.from(t.note, 'base64').toString('utf8').startsWith('QA-CONTINUE|')) count++;
+        } catch { /* non-utf8 note — skip */ }
+      }
+      token = j['next-token'] ?? '';
+      if (!token) return count;
+    }
+    return count; // page cap reached — best effort
   }
 
   async verifyContinuePayment(txid: string, refId: string, addr: string): Promise<boolean> {

@@ -93,6 +93,9 @@ export class StubChain implements ChainClient {
   async getStageForCid(cid: number): Promise<StageCommitment | null> {
     return this.stages[cid] ?? null;
   }
+  async countContinuePayments(): Promise<number | null> {
+    return null; // tests: reconciliation unknown (warn-only path)
+  }
   async verifyContinuePayment(): Promise<boolean> {
     return this.continueOk;
   }

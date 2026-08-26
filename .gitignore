@@ -3,7 +3,9 @@ dist
 .DS_Store
 dist-t*/
 
-# testnet secrets (never commit)
+# testnet + mainnet secrets (never commit)
 contracts/quantum-arena/deploy/testnet.secrets.json
+contracts/quantum-arena/deploy/mainnet.secrets.json
+contracts/quantum-arena/deploy/*.secrets.json
 contracts/quantum-arena/deploy/.dispenser_token.json
 contracts/quantum-arena/deploy/.device_flow.json

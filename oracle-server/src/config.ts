@@ -30,6 +30,11 @@ export interface OracleConfig {
   allowLegacyGil: boolean; // ALLOW_LEGACY_GIL (default 1 testnet / 0 mainnet)
   replayBundlesDir: string; // REPLAY_BUNDLES_DIR (default <pkg>/replay-bundles)
   replayTimeoutMs: number; // REPLAY_TIMEOUT_MS (default 30000; 0 = abort at first checkpoint)
+  // SEV-2b receipt persistence (M-1): when TURSO_URL is set the store uses
+  // libsql (Turso free tier) so receipts survive an ephemeral-disk redeploy;
+  // absent -> local SQLite (boot warns that receipts are at risk on wipe).
+  tursoUrl?: string; // TURSO_URL (optional, e.g. libsql://<db>-<org>.turso.io)
+  tursoAuthToken?: string; // TURSO_AUTH_TOKEN (optional; never logged)
 }
 
 /** Generous M1 caps (mission brief): refined in M2 by deterministic replay. */
@@ -128,15 +133,31 @@ export function keySource(cfg: Pick<OracleConfig, 'oracleMnemonicFile' | 'oracle
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): OracleConfig {
-  const networkRaw = req(env, 'ARENA_NETWORK');
+  // NETWORK (canonical, M-1) wins over the legacy ARENA_NETWORK name; one of
+  // the two is required.
+  const networkRaw = (env['NETWORK'] ?? '').trim() || req(env, 'ARENA_NETWORK');
   if (networkRaw !== 'testnet' && networkRaw !== 'mainnet') {
-    throw new Error(`config: ARENA_NETWORK must be testnet|mainnet (got ${JSON.stringify(networkRaw)})`);
+    throw new Error(`config: NETWORK|ARENA_NETWORK must be testnet|mainnet (got ${JSON.stringify(networkRaw)})`);
   }
   const rate = parseRate(env['MAX_SIG_PER_MIN']);
-  const cors = (env['CORS_ORIGIN'] ?? 'https://gonna.bond')
+  // CORS: ALLOWED_ORIGINS (canonical, M-1) wins over the legacy CORS_ORIGIN;
+  // defaults are network-scoped — mainnet serves ONLY the production origins
+  // (never localhost), testnet keeps the production origin only by default
+  // (localhost entries are added explicitly via env when dogfooding).
+  const corsRaw = (env['ALLOWED_ORIGINS'] ?? '').trim() || (env['CORS_ORIGIN'] ?? '').trim();
+  const corsDefault = networkRaw === 'mainnet' ? 'https://gonna.bond,https://www.gonna.bond' : 'https://gonna.bond';
+  const cors = (corsRaw || corsDefault)
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  // SEV-1 guard (M-1): the legacy GIL v1 branch bypasses the full replay and
+  // would sign arbitrary scores. On mainnet it is FORBIDDEN — refuse to boot.
+  const allowLegacyGil = (env['ALLOW_LEGACY_GIL'] ?? '0').trim() !== '0';
+  if (networkRaw === 'mainnet' && allowLegacyGil) {
+    throw new Error(
+      'config: ALLOW_LEGACY_GIL must be 0 on mainnet (SEV-1: legacy GIL v1 bypasses the replay and signs arbitrary scores) — refusing to start',
+    );
+  }
   return {
     network: networkRaw,
     appId: reqInt(env, 'ARENA_APP_ID'),
@@ -152,15 +173,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OracleConfig {
     scoreCaps: parseScoreCaps(env['SCORE_CAPS_JSON']),
     dbPath: (env['DB_PATH'] ?? '/data/oracle.db').trim(),
     replayEnforce: (env['REPLAY_ENFORCE'] ?? '1').trim() !== '0',
-    allowLegacyGil: (env['ALLOW_LEGACY_GIL'] ?? (networkRaw === 'testnet' ? '1' : '0')).trim() !== '0',
+    allowLegacyGil,
     replayBundlesDir: (env['REPLAY_BUNDLES_DIR'] ?? new URL('../replay-bundles/', import.meta.url).pathname).trim(),
     replayTimeoutMs: intEnv(env, 'REPLAY_TIMEOUT_MS', 30_000),
+    tursoUrl: (env['TURSO_URL'] ?? '').trim() || undefined,
+    tursoAuthToken: (env['TURSO_AUTH_TOKEN'] ?? '').trim() || undefined,
   };
 }
 
 /** One-line boot log: public data only, never the mnemonic. */
 export function configLogLine(cfg: OracleConfig): string {
   return `network=${cfg.network} appId=${cfg.appId} algod=${cfg.algodUrl} indexer=${cfg.indexerUrl} ` +
-    `port=${cfg.port} keysrc=${keySource(cfg)} cors=[${cfg.corsOrigins.join(' ')}] rate=${cfg.ratePerMinIp}/ip,${cfg.ratePerMinAddr}/addr db=${cfg.dbPath} ` +
+    `port=${cfg.port} keysrc=${keySource(cfg)} cors=[${cfg.corsOrigins.join(' ')}] rate=${cfg.ratePerMinIp}/ip,${cfg.ratePerMinAddr}/addr db=${cfg.dbPath} store=${cfg.tursoUrl ? 'turso(libsql)' : 'sqlite-local'} ` +
     `replay=${cfg.replayEnforce ? `enforce(legacyGil=${cfg.allowLegacyGil ? 'on' : 'off'},bundles=${cfg.replayBundlesDir})` : 'OFF'}`;
 }

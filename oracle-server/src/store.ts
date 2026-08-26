@@ -26,7 +26,27 @@ export interface ReceiptRow {
 
 export type ConsumeResult = 'ok' | 'missing' | 'consumed' | 'addr-mismatch';
 
-export class Store {
+export type MaybePromise<T> = T | Promise<T>;
+
+/**
+ * Store backend contract (SEV-2b, M-1). Implementations: `Store` (local
+ * SQLite via better-sqlite3, synchronous) and `LibsqlStore` (Turso/libsql,
+ * async — see store-libsql.ts). Call sites `await` every method so both
+ * drivers work interchangeably.
+ */
+export interface StoreLike {
+  upsertSig(row: SigRow): MaybePromise<void>;
+  getSig(cid: number, seat: number): MaybePromise<SigRow | null>;
+  insertReceipt(refId: string, addr: string, txid: string, ts: number): MaybePromise<boolean>;
+  getReceipt(refId: string): MaybePromise<ReceiptRow | null>;
+  consumeReceiptAndStoreSig(refId: string, addr: string, sig: SigRow): MaybePromise<ConsumeResult>;
+  rateHit(key: string, limit: number, nowSec: number): MaybePromise<{ allowed: boolean; retryAfter: number }>;
+  knownSigCids(): MaybePromise<number[]>;
+  receiptCount(): MaybePromise<number>;
+  close(): MaybePromise<void>;
+}
+
+export class Store implements StoreLike {
   private db: Database.Database;
 
   constructor(path: string) {
@@ -147,4 +167,25 @@ export class Store {
     const rows = this.db.prepare('SELECT DISTINCT cid FROM sigs ORDER BY cid').all() as { cid: number }[];
     return rows.map((r) => r.cid);
   }
+
+  /** Receipt rows known to this store (boot reconciliation, SEV-2b). */
+  receiptCount(): number {
+    const r = this.db.prepare('SELECT COUNT(*) AS n FROM receipts').get() as { n: number };
+    return r.n;
+  }
+}
+
+/**
+ * Store factory (SEV-2b, M-1): when cfg.tursoUrl is set, open the libsql
+ * (Turso) backend so receipts survive an ephemeral-disk redeploy; otherwise
+ * local SQLite. A configured-but-unreachable Turso is FATAL (refuse to boot)
+ * — silently falling back to ephemeral local storage would recreate SEV-2b.
+ */
+export async function openStore(cfg: { dbPath: string; tursoUrl?: string; tursoAuthToken?: string }): Promise<StoreLike> {
+  if (cfg.tursoUrl) {
+    const { LibsqlStore } = await import('./store-libsql.js');
+    const s = await LibsqlStore.connect(cfg.tursoUrl, cfg.tursoAuthToken);
+    return s;
+  }
+  return new Store(cfg.dbPath);
 }

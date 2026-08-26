@@ -17,14 +17,14 @@ import {
   verdictMsg,
   DigestEntry,
 } from './sign.js';
-import { SigRow, Store } from './store.js';
+import { SigRow, StoreLike } from './store.js';
 import { b64decode, b64encode } from './util.js';
 import { ReplayVerifier } from './replay/replayer.js';
 
 export interface Deps {
   cfg: OracleConfig;
   chain: ChainClient;
-  store: Store;
+  store: StoreLike;
   signer: OracleSigner;
   /** M2 replay verifier (SPEC-m2 §5). Required when cfg.replayEnforce. */
   replay?: ReplayVerifier;
@@ -285,14 +285,14 @@ export async function handleSignScore(deps: Deps, rawBody: unknown, ip: string):
 
   // 5. continue receipt: consumed ATOMICALLY with the sig persist (one SQLite tx)
   if (body.continueRef != null) {
-    const res = store.consumeReceiptAndStoreSig(body.continueRef, body.addr, sigRow);
+    const res = await store.consumeReceiptAndStoreSig(body.continueRef, body.addr, sigRow);
     if (res === 'missing') return bad('continue receipt not found', 404);
     if (res === 'consumed') return bad('continue receipt already consumed', 409);
     if (res === 'addr-mismatch') return bad('continue receipt addr mismatch', 409);
   } else {
     // 6. anti-replay: one active sig per (cid,seat); a different score
     //    overwrites the previous row (legit re-submit)
-    store.upsertSig(sigRow);
+    await store.upsertSig(sigRow);
   }
 
   return ok({ sigB64: sigRow.sigB64, oracleAddr: signer.addr });
@@ -374,7 +374,7 @@ export async function handleContinueReceipt(deps: Deps, rawBody: unknown): Promi
   }
   const verified = await chain.verifyContinuePayment(b['txid'] as string, b['refId'] as string, b['addr'] as string);
   if (!verified) return bad('continue payment not verified on-chain');
-  const inserted = store.insertReceipt(b['refId'] as string, b['addr'] as string, b['txid'] as string, chain.now());
+  const inserted = await store.insertReceipt(b['refId'] as string, b['addr'] as string, b['txid'] as string, chain.now());
   if (!inserted) return bad('receipt already registered', 409);
   return ok({ ok: true });
 }
