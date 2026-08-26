@@ -55660,7 +55660,9 @@ var ArenaUI = class {
         stageMode: this.cfg.stageMode === "full" ? "full" : "stage",
         stageIdx: this.creatorStageIdx(),
         seedTag: this.descentSeedTag(),
-        target: 0
+        target: 0,
+        runSeed: this.runSeedTag()
+        // v16.1: seeded FULL RUN ('RUN-<cid>')
       };
     }
     if (id === "replay") {
@@ -55679,7 +55681,9 @@ var ArenaUI = class {
         stageMode: this.cfg.stageMode === "full" ? "full" : "stage",
         stageIdx: this.creatorStageIdx(),
         seedTag: this.descentSeedTag(),
-        target: 0
+        target: 0,
+        runSeed: this.runSeedTag()
+        // v16.1: seeded FULL RUN ('RUN-<cid>')
       };
     }
     if (id === "continue") {
@@ -55732,8 +55736,10 @@ var ArenaUI = class {
         stageIdx: c3.stageMode === "full" ? 0 : c3.stageIdx ?? 0,
         seedTag: "PIT-" + c3.id,
         // v15: joiner fights the creator's exact waves
-        target: this.descentTarget(c3)
+        target: this.descentTarget(c3),
         // v15: the TARGET bar race
+        runSeed: "RUN-" + c3.id
+        // v16.1: joiner's FULL RUN rides the same card seed
       };
     }
     if (id === "resolve") return this.doResolve();
@@ -55793,8 +55799,9 @@ var ArenaUI = class {
     const stageMode = this.sealRole === "creator" ? this.cfg.stageMode === "full" ? "full" : "stage" : this.current?.stageMode === "full" ? "full" : "stage";
     const stageIdx = this.sealRole === "creator" ? this.creatorStageIdx() : this.current?.stageMode === "full" ? 0 : this.current?.stageIdx ?? 0;
     const seedTag = this.sealRole === "creator" ? this.descentSeedTag() : "PIT-" + (this.current?.id ?? 0);
+    const runSeed = this.sealRole === "creator" ? this.runSeedTag() : "RUN-" + (this.current?.id ?? 0);
     const target = this.sealRole === "creator" || !this.current ? 0 : this.descentTarget(this.current);
-    return { act: "run", stageMode, stageIdx, seedTag, target };
+    return { act: "run", stageMode, stageIdx, seedTag, target, runSeed };
   }
   // v15: a run of THE DESCENT is seeded by the challenge id — same card, same
   // waves for creator & joiner. The creator's pre-create run uses the hinted id
@@ -55802,6 +55809,12 @@ var ArenaUI = class {
   descentSeedTag() {
     if (!this.sealDraftId) this.sealDraftId = "D" + Date.now().toString(36);
     return this.nextIdHint !== null ? "PIT-" + this.nextIdHint : "DRAFT-" + this.sealDraftId;
+  }
+  // v16.1 (SPEC-m2 §4): the FULL RUN campaign is seeded by the same card id —
+  // 'RUN-<cid>' mirrors descentSeedTag (same hint, same DRAFT fallback).
+  runSeedTag() {
+    if (!this.sealDraftId) this.sealDraftId = "D" + Date.now().toString(36);
+    return this.nextIdHint !== null ? "RUN-" + this.nextIdHint : "DRAFT-" + this.sealDraftId;
   }
   // v15.2.8 (owner decree): the creator's DESCENT run plays the level they
   // CHOSE in the wizard (picker or RANDOM shuffle). Only the run SEED rides

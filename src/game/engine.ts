@@ -20,7 +20,7 @@ import { clamp, comboRankName, LANE_BOT, LANE_TOP, VH, VW } from './types';
 import type { Facing } from './types';
 import type { GameCtx } from './ctx';
 // ---- v15: THE DESCENT ----
-import { hashSeed, makeRng, mathRng, randomSeedLabel, setSeededSim } from './rng';
+import { hashSeed, makeRng, makeRngFromLabel, mathRng, randomSeedLabel, setSeededSim } from './rng';
 import type { Rng } from './rng';
 import { aliveCap, bossBonus, buildDescentStage, composeWave, heavySlots, isRangedKind, newDescent, rampHp, rampSpd, rangedCap, rollBonus, saveBestWave, scoreMult, themePool, THREAT, waveClearBonus, wavePoints, ZONE_ADV } from './descent';
 import type { DescentState } from './descent';
@@ -499,15 +499,23 @@ export class Game implements GameCtx {
   private inputLogMasks: Uint8Array | null = null;
   private inputLogFrames = 0;
   private inputLogTruncated = false;
+  // v16.1 (SPEC-m2 §4): a FULL-mode arena run swaps mathRng for ONE seeded
+  // campaign stream ('RUN-<cid>' — same hashSeed+mulberry32 as THE DESCENT)
+  // for the WHOLE run. Non-arena gameplay never touches these (null).
+  private arenaRunRng: Rng | null = null;
+  private arenaRunSeedLabel: string | null = null;
 
   // v15: stage cards run THE DESCENT (seeded by the challenge id — same card,
   // same waves for creator & joiner). seedTag/target come from the ARENA UI.
-  private startArenaRun(stageMode: 'full' | 'stage', stageIdx: number, opts?: { seedTag?: string; target?: number }): void {
+  // v16.1: full-mode cards pass runSeed ('RUN-<cid>') — the seeded campaign.
+  private startArenaRun(stageMode: 'full' | 'stage', stageIdx: number, opts?: { seedTag?: string; target?: number; runSeed?: string }): void {
     this.arenaRun = { stageMode, stageIdx };
+    this.arenaRunSeedLabel = stageMode === 'full' ? (opts?.runSeed ?? null) : null;
+    this.arenaRunRng = stageMode === 'full' && opts?.runSeed ? makeRngFromLabel(opts.runSeed) : null;
     this.inputLogMasks = new Uint8Array(INPUT_LOG_CAP); // v16: fresh input log per run
     this.inputLogFrames = 0;
     this.inputLogTruncated = false;
-    this.startNewGame(); // fresh run: score/lives/stage 0
+    this.startNewGame(); // fresh run: score/lives/stage 0 (loadStage picks up arenaRunRng)
     if (stageMode === 'stage') {
       this.stageIdx = stageIdx;
       this.loadDescent(stageIdx, opts?.seedTag ?? randomSeedLabel(), opts?.target ?? 0);
@@ -517,10 +525,11 @@ export class Game implements GameCtx {
   private finishArenaRun(): void {
     if (!this.arenaRun) return;
     // v16: seal the input log WITH the score — header build/seedLabel/frames,
-    // base64, attached to the oracle sign-score body by the ARENA UI. The
-    // FULL RUN campaign is honestly 'UNSEEDED' (SPEC §6: seeding is an M2
-    // decision, M1 changes nothing).
-    const seedLabel = this.descent ? this.descent.seedLabel : 'UNSEEDED';
+    // base64, attached to the oracle sign-score body by the ARENA UI.
+    // v16.1 (SPEC-m2 §2/§4): GIL v2 — frame 0 is the FIRST play frame, and a
+    // FULL-mode run carries its REAL seeded campaign label ('RUN-<cid>').
+    // 'UNSEEDED' survives only as the no-runSeed fallback (legacy QA path).
+    const seedLabel = this.descent ? this.descent.seedLabel : (this.arenaRunSeedLabel ?? 'UNSEEDED');
     let run: SealedRunInfo | null = null;
     if (this.inputLogMasks && this.inputLogFrames > 0) {
       const build = buildVer();
@@ -531,7 +540,7 @@ export class Game implements GameCtx {
         durationSec: frames / 60,
         build,
         inputLogB64: encodeInputLogB64({
-          v: 1,
+          v: 2,
           build,
           seedLabel,
           frames,
@@ -546,6 +555,8 @@ export class Game implements GameCtx {
       this.descent = null; // the seal screen owns the score now
     }
     this.arenaRun = null;
+    this.arenaRunRng = null; // the seeded campaign stream dies with the run
+    this.arenaRunSeedLabel = null;
     this.arena.onRunFinished(this.score, run);
     this.setScene('arena');
     this.audio.uiSelect();
@@ -588,7 +599,7 @@ export class Game implements GameCtx {
   private handleArenaAction(a: ArenaAction): void {
     if (a.act === 'move') this.audio.uiMove();
     else if (a.act === 'run') {
-      this.startArenaRun(a.stageMode, a.stageIdx, { seedTag: a.seedTag, target: a.target });
+      this.startArenaRun(a.stageMode, a.stageIdx, { seedTag: a.seedTag, target: a.target, runSeed: a.runSeed });
       this.audio.uiSelect();
     } else if (a.act === 'title') {
       this.setScene('title');
@@ -1581,9 +1592,16 @@ export class Game implements GameCtx {
   // CI: free-play descent. seedLabel given => fully deterministic run.
   debugDescent(themeIdx: number, seedLabel?: string, target = 0): void {
     this.arenaRun = null; // practice: no arena seal on death
+    this.arenaRunRng = null; // practice rides mathRng like any campaign
+    this.arenaRunSeedLabel = null;
     this.startNewGame();
     this.stageIdx = themeIdx;
     this.loadDescent(themeIdx, seedLabel ?? randomSeedLabel(), target);
+  }
+  // CI/M2 (SPEC-m2 §4): seeded FULL RUN — the EXACT arena full-mode boot
+  // path (startArenaRun), used by the replay harness + twin-run tests.
+  debugFullRun(seedLabel: string): void {
+    this.startArenaRun('full', 0, { runSeed: seedLabel });
   }
   // CI (v15.2 Prince's order): cross-theme composition audit. Runs composeWave
   // on a PRIVATE seeded stream (never touches the live run's rng) and reports
@@ -1749,11 +1767,14 @@ export class Game implements GameCtx {
     this.descent = null; // v15: classic campaign — THE DESCENT state dies here
     // v15: campaign keeps the EXACT v14.4 Math.random stream (zero extra
     // draws, visual noise included) — FULL RUN stays byte-equivalent.
-    this.rng = mathRng;
+    // v16.1 (SPEC-m2 §4): EXCEPT a full-mode ARENA run — the whole campaign
+    // rides ONE seeded stream ('RUN-<cid>') so the oracle can replay it.
+    // Outside arenaRun arenaRunRng is null: behavior 100% identical.
+    this.rng = this.arenaRunRng ?? mathRng;
     // v15.2: same stale hit-stop/slow-mo leak plugged on the campaign side
     this.freezeT = 0;
     this.slowmoT = 0;
-    setSeededSim(false);
+    setSeededSim(this.arenaRunRng !== null); // seeded run: Math.random fully out of the step
     if (idx === 6) void loadSkinFrames('rainbow'); // v9.5: GONNA 404 wears the REAL rainbow skin
     this.stageLen = this.stage.len;
     this.enemies = [];
@@ -2180,8 +2201,11 @@ export class Game implements GameCtx {
     const inp = this.input;
     // v16 (SPEC-oracle §5): input log — snapshot the 8 button levels, one
     // byte per frame, ONLY while a sealed arena run is live (paused frames
-    // never reach here: the sim is frozen, so nothing is recorded)
-    if (this.arenaRun && this.inputLogMasks) {
+    // never reach here: the sim is frozen, so nothing is recorded).
+    // v16.1 (SPEC-m2 §2): GIL v2 records ONLY scene==='play' frames — the
+    // intro title card never enters the buffer (START is not in the mask,
+    // so its length would be unrecoverable — M2-0 finding §4.1).
+    if (this.arenaRun && this.inputLogMasks && this.scene === 'play') {
       if (this.inputLogFrames < INPUT_LOG_CAP) {
         this.inputLogMasks[this.inputLogFrames++] = maskFromDown(inp.down);
       } else {

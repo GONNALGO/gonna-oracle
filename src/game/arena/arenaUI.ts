@@ -43,7 +43,7 @@ const PQCYAN = '#57c8d8';
 const AMBER = '#ffb02e'; // v15.2.2: the stuck-signing strip (never red, never white)
 const AMBER_DK = '#8a5a10';
 
-export type ArenaAction = { act: 'none' } | { act: 'move' } | { act: 'title' } | { act: 'run'; stageMode: 'full' | 'stage'; stageIdx: number; seedTag?: string; target?: number };
+export type ArenaAction = { act: 'none' } | { act: 'move' } | { act: 'title' } | { act: 'run'; stageMode: 'full' | 'stage'; stageIdx: number; seedTag?: string; target?: number; runSeed?: string };
 
 // v15.2.8: RANDOM deals a UNIFORMLY RANDOM level from the crypto RNG
 // (rejection sampling — 252 = 36 x 7, so every level has exactly 36/256).
@@ -1134,6 +1134,7 @@ export class ArenaUI {
         stageIdx: this.creatorStageIdx(),
         seedTag: this.descentSeedTag(),
         target: 0,
+        runSeed: this.runSeedTag(), // v16.1: seeded FULL RUN ('RUN-<cid>')
       };
     }
     // v14.4: creator REPLAY — FREE. The card does not exist on-chain yet, so
@@ -1157,6 +1158,7 @@ export class ArenaUI {
         stageIdx: this.creatorStageIdx(),
         seedTag: this.descentSeedTag(),
         target: 0,
+        runSeed: this.runSeedTag(), // v16.1: seeded FULL RUN ('RUN-<cid>')
       };
     }
     // v12/v14.4: CONTINUE — JOINER ONLY (post-commitment). Pay 5 ALGO to the
@@ -1214,6 +1216,7 @@ export class ArenaUI {
         stageIdx: c.stageMode === 'full' ? 0 : (c.stageIdx ?? 0),
         seedTag: 'PIT-' + c.id, // v15: joiner fights the creator's exact waves
         target: this.descentTarget(c), // v15: the TARGET bar race
+        runSeed: 'RUN-' + c.id, // v16.1: joiner's FULL RUN rides the same card seed
       };
     }
     if (id === 'resolve') return this.doResolve();
@@ -1294,8 +1297,13 @@ export class ArenaUI {
     const seedTag = this.sealRole === 'creator'
       ? this.descentSeedTag()
       : 'PIT-' + (this.current?.id ?? 0);
+    // v16.1 (SPEC-m2 §4): CONTINUE replays the SAME seeded run — full-mode
+    // cards ride 'RUN-<cid>' (creator hint / joiner card id).
+    const runSeed = this.sealRole === 'creator'
+      ? this.runSeedTag()
+      : 'RUN-' + (this.current?.id ?? 0);
     const target = this.sealRole === 'creator' || !this.current ? 0 : this.descentTarget(this.current);
-    return { act: 'run', stageMode, stageIdx, seedTag, target };
+    return { act: 'run', stageMode, stageIdx, seedTag, target, runSeed };
   }
 
   // v15: a run of THE DESCENT is seeded by the challenge id — same card, same
@@ -1304,6 +1312,13 @@ export class ArenaUI {
   private descentSeedTag(): string {
     if (!this.sealDraftId) this.sealDraftId = 'D' + Date.now().toString(36);
     return this.nextIdHint !== null ? 'PIT-' + this.nextIdHint : 'DRAFT-' + this.sealDraftId;
+  }
+
+  // v16.1 (SPEC-m2 §4): the FULL RUN campaign is seeded by the same card id —
+  // 'RUN-<cid>' mirrors descentSeedTag (same hint, same DRAFT fallback).
+  private runSeedTag(): string {
+    if (!this.sealDraftId) this.sealDraftId = 'D' + Date.now().toString(36);
+    return this.nextIdHint !== null ? 'RUN-' + this.nextIdHint : 'DRAFT-' + this.sealDraftId;
   }
 
   // v15.2.8 (owner decree): the creator's DESCENT run plays the level they

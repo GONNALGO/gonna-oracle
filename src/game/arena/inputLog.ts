@@ -1,17 +1,25 @@
 // ============================================================================
-// v16 — INPUT LOG v1 (SPEC-oracle §5): a per-frame input bitmask recorded
-// ONLY during sealed ARENA runs and shipped inside the server-oracle
+// v16 — INPUT LOG (SPEC-oracle §5 + SPEC-m2 §2): a per-frame input bitmask
+// recorded ONLY during sealed ARENA runs and shipped inside the server-oracle
 // sign-score body. M1: the server validates the STRUCTURE; M2 replays it.
 // Pure codec — no window, no storage, fully testable in node.
 //
+// v1 -> v2 (SPEC-m2 §2, M2-2): the recorder now starts at the FIRST frame of
+// scene==='play' — the intro title card is NEVER in the buffer (M2-0 finding:
+// START is not in the bitmask, so the intro length is unrecoverable from a
+// v1 log). v2 headers also carry the REAL seed label: 'PIT-<cid>' (stage) or
+// 'RUN-<cid>' (seeded FULL RUN campaign). Decode ACCEPTS v1 and v2 (backward
+// compat: a v1 log stays decodable; its intro-inclusive semantics are a
+// server-side legacy matter, SPEC-m2 §5). Encode ALWAYS emits v2.
+//
 // Wire layout (big-endian, no padding):
 //   'G' 'I' 'L'            magic
-//   u8                     version (= 1)
+//   u8                     version (1 legacy | 2 current)
 //   u8                     flags (bit0 = truncated: the run passed the frame
 //                          cap and the tail was honestly CUT, not hidden)
 //   u16 buildLen + utf8    build (__GONNA_VER of the vault-door build)
-//   u16 seedLen  + utf8    seedLabel ('UNSEEDED' for the unseeded FULL RUN —
-//                          SPEC §6: campaign seeding is an M2 decision)
+//   u16 seedLen  + utf8    seedLabel ('PIT-<cid>' / 'RUN-<cid>'; 'UNSEEDED'
+//                          only on legacy v1 full-run logs)
 //   u32 frames             recorded frame count (<= INPUT_LOG_CAP)
 //   frames x u8            per-frame button bitmask
 // Bitmask bits: 0 up · 1 down · 2 left · 3 right · 4 punch · 5 kick · 6 jump ·
@@ -19,12 +27,13 @@
 // ============================================================================
 import { b64ToBytes, bytesToB64 } from '../b64';
 
-export const INPUT_LOG_VERSION = 1;
+export const INPUT_LOG_VERSION = 2;
+export const INPUT_LOG_MIN_VERSION = 1; // decode accepts v1 (legacy) and v2
 export const INPUT_LOG_CAP = 300000; // SPEC §5: ~300KB raw cap
 const MAGIC = [0x47, 0x49, 0x4c]; // 'GIL'
 
 export interface InputLog {
-  v: 1;
+  v: 1 | 2;
   build: string;
   seedLabel: string;
   frames: number;
@@ -69,7 +78,7 @@ export function encodeInputLog(log: InputLog): Uint8Array {
   out[0] = MAGIC[0];
   out[1] = MAGIC[1];
   out[2] = MAGIC[2];
-  out[3] = INPUT_LOG_VERSION;
+  out[3] = INPUT_LOG_VERSION; // encode ALWAYS emits v2 (SPEC-m2 §2)
   out[4] = truncated ? 1 : 0;
   dv.setUint16(5, build.length, false);
   out.set(build, 7);
@@ -85,7 +94,8 @@ export function encodeInputLog(log: InputLog): Uint8Array {
 export function decodeInputLog(bytes: Uint8Array): InputLog {
   if (bytes.length < 13) throw new Error('input log: too short');
   if (bytes[0] !== MAGIC[0] || bytes[1] !== MAGIC[1] || bytes[2] !== MAGIC[2]) throw new Error('input log: bad magic');
-  if (bytes[3] !== INPUT_LOG_VERSION) throw new Error('input log: unsupported version ' + bytes[3]);
+  if (bytes[3] < INPUT_LOG_MIN_VERSION || bytes[3] > INPUT_LOG_VERSION) throw new Error('input log: unsupported version ' + bytes[3]);
+  const v = bytes[3] as 1 | 2;
   const truncated = (bytes[4] & 1) === 1;
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const dec = new TextDecoder();
@@ -102,7 +112,7 @@ export function decodeInputLog(bytes: Uint8Array): InputLog {
   p += 4;
   if (frames > INPUT_LOG_CAP) throw new Error('input log: frames over cap');
   if (bytes.length !== p + frames) throw new Error('input log: frame bytes mismatch');
-  return { v: 1, build, seedLabel, frames, truncated, masks: bytes.slice(p) };
+  return { v, build, seedLabel, frames, truncated, masks: bytes.slice(p) };
 }
 
 export function encodeInputLogB64(log: InputLog): string {

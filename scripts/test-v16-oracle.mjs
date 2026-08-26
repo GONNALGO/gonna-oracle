@@ -50,7 +50,8 @@ console.log('\n[0] SOURCE: the 4 call sites moved to the server oracle, dev key 
   ok(ol.includes("import.meta.env.VITE_QA_ORACLE === '1'"), 'oracleLink: build-time VITE_QA_ORACLE gate');
   ok(ol.includes("ORACLE_LINK_REFUSED_MSG = 'ORACLE KEY LIVES ON THE SERVER NOW'"), 'oracleLink: honest refusal line');
   ok(eng.includes('maskFromDown(inp.down)') && eng.includes('INPUT_LOG_CAP'), 'engine: per-frame input bitmask hook in Game.step');
-  ok(eng.includes("seedLabel = this.descent ? this.descent.seedLabel : 'UNSEEDED'"), 'engine: FULL RUN honestly UNSEEDED (SPEC §6)');
+  // v16.1 (SPEC-m2 §2/§4): FULL RUN is now SEEDED ('RUN-<cid>'), UNSEEDED is the no-seed fallback
+  ok(eng.includes("seedLabel = this.descent ? this.descent.seedLabel : (this.arenaRunSeedLabel ?? 'UNSEEDED')"), 'engine: FULL RUN carries its REAL seed label (UNSEEDED = fallback only)');
   ok(eng.includes('this.arena.onRunFinished(this.score, run);'), 'engine: the input log seals WITH the score');
   ok(ui.includes('onRunFinished(score: number, run?: SealedRunInfo | null): void'), 'arenaUI: seal payload carries the run telemetry');
   ok(ui.includes('if (bestRun) cfg.sealedRun = bestRun;'), 'arenaUI: sealedRun rides the create config');
@@ -78,9 +79,9 @@ console.log('\n[1] INPUT LOG: bitmask map, roundtrip, cap/truncated, malformed')
   const masks = new Uint8Array(5000);
   let x = 0x9e3779b9;
   for (let i = 0; i < masks.length; i++) { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; masks[i] = x & 255; }
-  const log = { v: 1, build: 'v16deadbeef', seedLabel: 'PIT-42', frames: masks.length, truncated: false, masks };
+  const log = { v: 2, build: 'v16deadbeef', seedLabel: 'PIT-42', frames: masks.length, truncated: false, masks };
   const back = il.decodeInputLog(il.encodeInputLog(log));
-  ok(back.v === 1 && back.build === log.build && back.seedLabel === log.seedLabel && back.frames === log.frames && back.truncated === false, 'roundtrip: header identical');
+  ok(back.v === 2 && back.build === log.build && back.seedLabel === log.seedLabel && back.frames === log.frames && back.truncated === false, 'roundtrip: header identical (encode emits v2, SPEC-m2 §2)');
   ok(back.masks.length === masks.length && back.masks.every((v, i) => v === masks[i]), 'roundtrip: all 5000 mask bytes identical');
 
   // base64 roundtrip
@@ -88,15 +89,15 @@ console.log('\n[1] INPUT LOG: bitmask map, roundtrip, cap/truncated, malformed')
   ok(back64.frames === log.frames && back64.masks[1234] === masks[1234] && back64.build === log.build, 'base64 roundtrip identical');
 
   // zero frames
-  const zero = il.decodeInputLog(il.encodeInputLog({ v: 1, build: 'DEV', seedLabel: 'UNSEEDED', frames: 0, truncated: false, masks: new Uint8Array(0) }));
+  const zero = il.decodeInputLog(il.encodeInputLog({ v: 2, build: 'DEV', seedLabel: 'UNSEEDED', frames: 0, truncated: false, masks: new Uint8Array(0) }));
   ok(zero.frames === 0 && zero.masks.length === 0 && zero.seedLabel === 'UNSEEDED', '0-frame log roundtrips (empty masks)');
 
   // cap + honest truncation
   const big = new Uint8Array(il.INPUT_LOG_CAP + 100).fill(0xaa);
-  const enc = il.encodeInputLog({ v: 1, build: 'DEV', seedLabel: 'PIT-1', frames: big.length, truncated: true, masks: big });
+  const enc = il.encodeInputLog({ v: 2, build: 'DEV', seedLabel: 'PIT-1', frames: big.length, truncated: true, masks: big });
   const decBig = il.decodeInputLog(enc);
   ok(decBig.frames === il.INPUT_LOG_CAP && decBig.truncated === true && decBig.masks.length === il.INPUT_LOG_CAP, 'over-cap run: cut at 300k, truncated flag HONEST');
-  const forcedTrunc = il.decodeInputLog(il.encodeInputLog({ v: 1, build: 'DEV', seedLabel: 'PIT-1', frames: il.INPUT_LOG_CAP + 1, truncated: false, masks: big }));
+  const forcedTrunc = il.decodeInputLog(il.encodeInputLog({ v: 2, build: 'DEV', seedLabel: 'PIT-1', frames: il.INPUT_LOG_CAP + 1, truncated: false, masks: big }));
   ok(forcedTrunc.truncated === true, 'frames > cap forces the truncated flag even if the caller lies');
 
   // malformed payloads are rejected, never silently fixed
