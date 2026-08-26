@@ -3,6 +3,9 @@
 // (b) inflated score  -> refused (REPLAY MISMATCH)
 // (c) CORS: https://gonna.bond allowed, https://evil.example not allowed
 // Usage: ORACLE_BASE=https://gonna-arena-oracle-testnet.onrender.com node scripts/smoke-public-oracle.mjs
+import { createRequire } from 'node:module';
+const require = createRequire(new URL('../oracle-server/package.json', import.meta.url));
+const nacl = require('tweetnacl');
 const { default: algosdk } = await import('algosdk');
 
 const ORACLE = (process.env.ORACLE_BASE ?? 'https://gonna-arena-oracle-testnet.onrender.com').replace(/\/$/, '');
@@ -41,6 +44,7 @@ function playHonest(stageIdx, seedLabel, phase) {
   const sealed = game.arena?.sealedRun;
   return {
     score: game.score,
+    frames: game.inputLogFrames,
     inputLogB64: sealed?.inputLogB64 ?? eng.encodeInputLogB64(Uint8Array.from(game.inputLogMasks.subarray(0, game.inputLogFrames))),
     build: BUILD,
   };
@@ -53,32 +57,47 @@ console.log(`oracle: ${ORACLE}`);
 const health = await (await fetch(`${ORACLE}/v1/health`)).json();
 ok(health.ok === true && health.appId === 769907387, `health ok appId=${health.appId} oracle=${health.oracleAddr?.slice(0, 10)}…`);
 
+// sign-score needs a real cid: use the on-chain next_challenge_id (the
+// pre-create sign flow — same as the game's create wizard)
+const algod = new algosdk.Algodv2('', 'https://testnet-api.algonode.cloud', '');
+const app = await algod.getApplicationByID(769907387).do();
+const gs = Object.fromEntries(app.params.globalState.map((e) => [Buffer.from(e.key, 'base64').toString(), e.value.uint]));
+const cid = Number(gs.next_challenge_id);
+console.log(`  next_challenge_id = ${cid}`);
+
 // (a) honest run -> signature
-const run = playHonest(1, 'SMOKE-PUB-1', 5);
-console.log(`  honest run: stage 1 score=${run.score}`);
+const run = playHonest(1, `PIT-${cid}`, 5);
+console.log(`  honest run: stage 1 score=${run.score} frames=${run.frames}`);
 const signer = algosdk.generateAccount();
+const mkBody = (score) => ({
+  cid, seat: 0, addr: signer.addr.toString(), score, stageMode: 'stage', stageIdx: 1, build: run.build,
+  run: { seedLabel: `PIT-${cid}`, frames: run.frames, durationSec: Math.ceil(run.frames / 60) + 2, inputLogB64: run.inputLogB64 },
+});
 const res = await fetch(`${ORACLE}/v1/sign-score`, {
   method: 'POST', headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({
-    cid: 999001, seat: 0, addr: signer.addr.toString(), score: run.score,
-    stageMode: 'stage', stageIdx: 1, inputLogB64: run.inputLogB64, build: run.build, refId: `smoke-${Date.now()}`,
-  }),
+  body: JSON.stringify(mkBody(run.score)),
 });
 ok(res.status === 200, `(a) sign-score honest -> ${res.status}`);
 if (res.status === 200) {
   const j = await res.json();
-  const msg = new Uint8Array(Buffer.from(j.msgB64, 'base64'));
+  // reconstruct the signed message: 'QA-SCORE|' + u64be(app) + u64be(cid) + seat + addr(32) + u64be(score)
+  const u64 = (n) => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(n)); return b; };
+  const msg = new Uint8Array(Buffer.concat([
+    Buffer.from('QA-SCORE|'), u64(769907387), u64(cid), Buffer.from([0]),
+    Buffer.from(algosdk.decodeAddress(signer.addr.toString()).publicKey), u64(run.score),
+  ]));
   const sig = new Uint8Array(Buffer.from(j.sigB64, 'base64'));
-  ok(algosdk.verifyBytes(msg, sig, health.oracleAddr), '(a) signature verifies against oracle pubkey');
+  // raw ed25519 (tweetnacl / contract ed25519verify_bare) — algosdk.verifyBytes
+  // is domain-separated ('MX') and would NOT verify these signatures
+  const pk = algosdk.decodeAddress(health.oracleAddr).publicKey;
+  ok(nacl.sign.detached.verify(msg, sig, pk), '(a) signature verifies against oracle pubkey');
+  ok(j.oracleAddr === health.oracleAddr, '(a) response oracleAddr matches health');
 }
 
 // (b) inflated -> mismatch
 const res2 = await fetch(`${ORACLE}/v1/sign-score`, {
   method: 'POST', headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({
-    cid: 999002, seat: 0, addr: signer.addr.toString(), score: run.score + 5000,
-    stageMode: 'stage', stageIdx: 1, inputLogB64: run.inputLogB64, build: run.build, refId: `smoke2-${Date.now()}`,
-  }),
+  body: JSON.stringify(mkBody(run.score + 5000)),
 });
 const j2 = await res2.json().catch(() => ({}));
 ok(res2.status !== 200 && /MISMATCH/i.test(JSON.stringify(j2)), `(b) inflated -> ${res2.status} ${j2.error ?? ''}`);
