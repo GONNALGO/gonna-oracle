@@ -28,6 +28,7 @@ export interface ArenaNetConfig {
   treasuryAddr: string;
   oracleAddr: string;
   algodUrl: string;
+  indexerUrl: string; // v17.0.2: EVERY read-only indexer path rides this — no network URL may live outside arenaKit
   oracleBaseUrl: string; // same Render service on both rows today; the mainnet flip is env-side at M-2
 }
 
@@ -45,6 +46,7 @@ const TESTNET_CFG: ArenaNetConfig = {
     treasuryAddr: '4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM',
     oracleAddr: 'COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA',
     algodUrl: 'https://testnet-api.algonode.cloud',
+    indexerUrl: 'https://testnet-idx.algonode.cloud',
     oracleBaseUrl: 'https://gonna-arena-oracle-testnet.onrender.com',
 };
 
@@ -64,6 +66,7 @@ const MAINNET_CFG: ArenaNetConfig = {
     treasuryAddr: 'GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU',
     oracleAddr: '3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y',
     algodUrl: 'https://mainnet-api.algonode.cloud',
+    indexerUrl: 'https://mainnet-idx.algonode.cloud',
     oracleBaseUrl: 'https://gonna-arena-oracle-testnet.onrender.com', // same Render service; flipped env-side to mainnet
 };
 

@@ -506,7 +506,7 @@ export async function verifyContinuePayment(txid: string, refId: string, addr: s
     }
   } catch { /* fall back to indexer */ }
   try {
-    const r = await fetch(`https://testnet-idx.algonode.cloud/v2/transactions/${txid}`);
+    const r = await fetch(`${INDEXER_URL}/v2/transactions/${txid}`);
     if (r.ok) {
       const j = (await r.json()) as { transaction?: { 'payment-transaction'?: { amount: number; receiver: string }; note?: string; 'tx-type'?: string } };
       const t = j.transaction;
@@ -1002,7 +1002,11 @@ export function resolveCloseTxid(cid: number, events: ArenaCloseEvent[]): string
 // QuantumArena.json). The LEGACY app (769688298, v1) emits NO events —
 // cross-app history is: v2 events + this browser's card memory below.
 // ============================================================================
-export const INDEXER_TESTNET = 'https://testnet-idx.algonode.cloud';
+// v17.0.2: network-resolved from arenaKit (was hardcoded testnet — mainnet
+// HISTORY read testnet before this fix). Alias kept for existing imports.
+export const INDEXER_URL = NET.indexerUrl;
+/** @deprecated network-resolved alias — prefer INDEXER_URL */
+export const INDEXER_TESTNET = NET.indexerUrl;
 
 // selectors = sha512_256('<Name>(<args>)')[0..4] — pinned from the arc56 spec
 const EV_RESOLVED = 'ae488dc6'; // ChallengeResolved(uint64,address,uint64,uint64)
@@ -1040,7 +1044,7 @@ export async function fetchArenaCloseEvents(maxPages = 5): Promise<ArenaCloseEve
   let next: string | null = null;
   for (let page = 0; page < maxPages; page++) {
     const url =
-      INDEXER_TESTNET + '/v2/transactions?application-id=' + ARENA_APP_ID + '&tx-type=appl&limit=100' + (next ? '&next=' + encodeURIComponent(next) : '');
+      INDEXER_URL + '/v2/transactions?application-id=' + ARENA_APP_ID + '&tx-type=appl&limit=100' + (next ? '&next=' + encodeURIComponent(next) : '');
     const r = await fetch(url);
     if (!r.ok) throw new Error('indexer http ' + r.status);
     const j = (await r.json()) as {
@@ -1173,7 +1177,7 @@ export async function fetchArenaCreateStages(opts: { force?: boolean; maxPages?:
     const maxPages = opts.maxPages ?? 10;
     for (let page = 0; page < maxPages && hits.length < need; page++) {
       const url =
-        INDEXER_TESTNET + '/v2/transactions?application-id=' + ARENA_APP_ID + '&tx-type=appl&limit=100' + (token ? '&next=' + encodeURIComponent(token) : '');
+        INDEXER_URL + '/v2/transactions?application-id=' + ARENA_APP_ID + '&tx-type=appl&limit=100' + (token ? '&next=' + encodeURIComponent(token) : '');
       const r = await fetch(url);
       if (!r.ok) throw new Error('indexer http ' + r.status);
       const j = (await r.json()) as {

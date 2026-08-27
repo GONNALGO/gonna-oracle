@@ -42,6 +42,11 @@ console.log('\n[0] SOURCE: network config + leak guard + fixture gate');
   ok(tk.includes("export const GONNA_ASA = NET.gonnaAsa;") && tk.includes('GONNA_ASA_TESTNET'), 'testnetKit: GONNA_ASA canonical + deprecated alias kept');
   ok(oc.includes('export const ORACLE_BASE_URL_MAINNET'), 'oracleClient: ORACLE_BASE_URL_MAINNET present');
   ok(oc.includes("netLsKey('gonna.arena.oracleurl')"), 'oracleClient: oracle override key network-scoped');
+  // v17.0.2 advisory: EVERY network URL lives in arenaKit — indexer included
+  ok(ak.includes("indexerUrl: 'https://testnet-idx.algonode.cloud'") && ak.includes("indexerUrl: 'https://mainnet-idx.algonode.cloud'"), 'arenaKit: indexerUrl per network');
+  ok(tk.includes('export const INDEXER_URL = NET.indexerUrl;'), 'testnetKit: INDEXER_URL resolved from NET');
+  const tkNoComments = tk.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  ok(!tkNoComments.includes('testnet-idx.algonode.cloud') && !tkNoComments.includes('`https://testnet-api'), 'testnetKit: ZERO hardcoded network URLs (v17.0.2)');
   ok(ca.includes("netLsKey('gonna.arena.adapter')") && ca.includes("netLsKey('gonna.arena.v1')"), 'chainAdapter: adapter flag + mock store network-scoped');
   ok(tk.includes("netLsKey('gonna.arena.txids')") && tk.includes("netLsKey('gonna.arena.resolved')") && tk.includes("netLsKey('gonna.arena.closetx')"), 'testnetKit: txid memories network-scoped');
   ok(tw.includes("netLsKey('gonna.arena.live.addr')"), 'testnetWallet: saved account network-scoped (live-renamed base key, M-4)');
@@ -57,7 +62,7 @@ console.log('\n[0] SOURCE: network config + leak guard + fixture gate');
 // ================= behavioral bundles ======================================
 const ENTRY = join(ROOT, '.tmp-m1-entry.ts');
 writeFileSync(ENTRY, `
-export { ARENA_NETWORK, IS_MAINNET, NET, ARENA_NETS, ARENA_FIXTURES_ENABLED, netLsKey } from './src/game/arena/arenaKit';
+export { ARENA_NETWORK, IS_MAINNET, NET, ARENA_FIXTURES_ENABLED, netLsKey } from './src/game/arena/arenaKit';
 export { oracleBaseUrl, ORACLE_BASE_URL_MAINNET, ORACLE_BASE_URL_TESTNET } from './src/game/arena/oracleClient';
 export { arenaMode, arenaUsesTestnetChain } from './src/game/arena/chainAdapter';
 `);
@@ -87,6 +92,7 @@ const T = await import(B1);
   ok(T.NET.appId === 769907387 && T.NET.legacyAppId === 769688298 && T.NET.gonnaAsa === 769688287 && T.NET.opUpAppId === 769688641, 'testnet ids intact');
   ok(T.NET.treasuryAddr.startsWith('4OQ3') && T.NET.oracleAddr.startsWith('COI3'), 'testnet treasury/oracle addrs intact');
   ok(T.NET.algodUrl === 'https://testnet-api.algonode.cloud', 'testnet algod intact');
+  ok(T.NET.indexerUrl === 'https://testnet-idx.algonode.cloud', 'testnet indexer intact');
   ok(T.ARENA_FIXTURES_ENABLED === true, 'fixtures enabled on testnet');
   ok(T.netLsKey('gonna.arena.adapter') === 'gonna.arena.adapter.testnet', 'netLsKey scopes with .testnet');
   mkWindow({});
@@ -104,11 +110,35 @@ const M = await import(B2);
   ok(M.NET.appId === 3686311434 && M.NET.opUpAppId === 3686469118 && M.NET.treasuryAddr.startsWith('GONHNV') && M.NET.oracleAddr.startsWith('3UVNPC'), 'mainnet ids are the real M-2 deploy + OpUp donor (M-4bis)');
   ok(M.NET.gonnaAsa === 2582294183, 'mainnet GONNA ASA 2582294183');
   ok(M.NET.algodUrl === 'https://mainnet-api.algonode.cloud', 'mainnet algod');
+  ok(M.NET.indexerUrl === 'https://mainnet-idx.algonode.cloud', 'mainnet indexer (HISTORY reads mainnet, v17.0.2 fix)');
   ok(M.ARENA_FIXTURES_ENABLED === false, 'fixtures OFF in a mainnet build (dead path)');
   ok(M.netLsKey('gonna.arena.adapter') === 'gonna.arena.adapter.mainnet', 'netLsKey scopes with .mainnet');
   ok(M.ORACLE_BASE_URL_MAINNET === 'https://gonna-arena-oracle-testnet.onrender.com', 'mainnet oracle URL = same Render service (flip at M-2)');
   mkWindow({});
   ok(M.oracleBaseUrl() === M.ORACLE_BASE_URL_MAINNET, 'oracleBaseUrl default = mainnet row');
+}
+
+// ================= [2b] MAINNET vite-dist scan (v17.0.2 advisory) ==========
+// esbuild does NOT fold optional chains (vite/rollup DOES — verified), so the
+// honest scan is a REAL vite mainnet build: every chunk must be testnet-free.
+console.log('\n[2b] SCAN: a real VITE_ARENA_NETWORK=mainnet dist must contain ZERO testnet URLs');
+{
+  const distDir = '/tmp/m1-dist-mainnet-' + process.pid; // /tmp: FUSE rm -rf of the big frames/ tree is flaky inside the repo
+  rmSync(distDir, { recursive: true, force: true });
+  execFileSync(process.execPath, ['node_modules/vite/bin/vite.js', 'build', '--outDir', distDir, '--emptyOutDir'],
+    { cwd: ROOT, stdio: 'pipe', env: { ...process.env, VITE_ARENA_NETWORK: 'mainnet' } });
+  const { readdirSync } = await import('node:fs');
+  const chunks = readdirSync(join(distDir, 'assets')).filter((f) => f.endsWith('.js'));
+  const all = chunks.map((f) => readFileSync(join(distDir, 'assets', f), 'utf8')).join('\n');
+  ok(chunks.length > 0, 'mainnet dist built (' + chunks.length + ' js chunks)');
+  ok(!all.includes('testnet-idx.algonode.cloud'), 'dist scan: no testnet-idx URL in ANY chunk');
+  ok(!all.includes('testnet-api.algonode.cloud'), 'dist scan: no testnet-api URL in ANY chunk');
+  ok(!all.includes('gonna.arena.testnet'), 'dist scan: no testnet-named LS key in ANY chunk');
+  const entryName = readFileSync(join(distDir, 'index.html'), 'utf8').match(/assets\/(index-[^"]+\.js)/)[1];
+  const entry = readFileSync(join(distDir, 'assets', entryName), 'utf8');
+  ok(entry.includes('3686311434') && entry.includes('mainnet-idx.algonode.cloud'), 'dist scan: entry chunk carries mainnet app + indexer');
+  ok(!entry.includes('769907387'), 'dist scan: entry chunk has no testnet app id');
+  try { rmSync(distDir, { recursive: true, force: true }); } catch { /* FUSE flake — scratch dir */ }
 }
 
 // ================= [3] LEAK scenarios ======================================
