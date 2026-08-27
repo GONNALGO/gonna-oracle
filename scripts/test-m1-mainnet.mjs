@@ -53,6 +53,10 @@ console.log('\n[0] SOURCE: network config + leak guard + fixture gate');
   ok(aw.includes("netLsKey('gonna.arena.anon')"), 'arenaWallet: anon identity network-scoped');
   ok(ui.includes("if (import.meta.env?.VITE_ARENA_NETWORK !== 'mainnet' && ARENA_FIXTURES_ENABLED && arenaMode() === 'live') {"), 'arenaUI: fixtures gated by STATIC env expr + build flag (block + strings DCEd from mainnet bundles, M-4)');
   ok(ui.includes("id: 'golive'") && ui.includes("'PRACTICE'") && ui.includes("'GO LIVE'"), 'arenaUI: mock piazza shows PRACTICE tag + GO LIVE ingress (M-4)');
+  // v17.0.2 SEV follow-up: fee label must ride the CHAIN, not the mode (M-4 rename regression)
+  ok(!ui.includes("feeLine('create', acct, this.adapter().mode === 'live')"), 'arenaUI: feeLine callers use arenaUsesTestnetChain, not mode');
+  const ca2 = readFileSync(join(ROOT, 'src/game/arena/chainAdapter.ts'), 'utf8');
+  ok(ca2.includes("if (testnet) return (kit.TESTNET_FEES[op] / 1e6).toFixed(3) + ' ALGO (TESTNET)';"), 'feeLine: (TESTNET) suffix only on the testnet chain');
   // no unscoped leftovers of the network-bound keys anywhere in src
   const all = [tk, oc, ca, tw, aw];
   const leftovers = all.some((s) => /localStorage\.(getItem|setItem|removeItem)\('gonna\.arena\.(adapter|v1|oracleurl|testnet\.addr|anon|txids|resolved|closetx)'/.test(s));

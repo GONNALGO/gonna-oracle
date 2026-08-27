@@ -1658,9 +1658,12 @@ export class TestnetArenaAdapter implements ArenaAdapter {
 
 // real network fee per op (testnet flat-fee sums; Falcon keeps the 7x
 // multiplier for the mainnet PQ future)
+// v17.0.2+: the flag means "the testnet CHAIN" (arenaUsesTestnetChain), never
+// the mode — the M-4 rename made mode==='live' true on mainnet and the label
+// lied ("0.009 ALGO (TESTNET)" on mainnet). Mainnet shows no network suffix.
 export function feeLine(op: kit.ArenaOp, accountType: AccountType, testnet: boolean): string {
   if (testnet) return (kit.TESTNET_FEES[op] / 1e6).toFixed(3) + ' ALGO (TESTNET)';
-  return fmtFee(accountType);
+  return fmtFee(accountType); // mainnet: plain fee, no suffix
 }
 
 // ---------- selector ----------

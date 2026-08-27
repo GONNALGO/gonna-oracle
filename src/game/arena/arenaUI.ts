@@ -21,7 +21,7 @@ import type { Art } from '../sprites';
 import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait, skinPortraitFailed, SHELF_PAGE, shelfPages, shelfPageClamp, tintedFighterPortrait } from '../skins';
 import type { SkinId } from '../skins';
-import { getArenaAdapter, arenaMode, closeGate, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
+import { getArenaAdapter, arenaMode, arenaUsesTestnetChain, closeGate, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
 import { activeSignOp, explorerTxUrl, getCloseTxid, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
 import { ARENA_FIXTURES_ENABLED, ARENA_NETWORK } from './arenaKit';
 import type { SignOpView } from './testnetKit';
@@ -2131,7 +2131,7 @@ export class ArenaUI {
     }
     // FEE ENGINE: Falcon (PQ) accounts pay the resource-based fee
     const acct = arenaSession().accountType;
-    drawTextSh(c, 'NETWORK FEE: ' + feeLine('create', acct, this.adapter().mode === 'live'), VW / 2, 120, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
+    drawTextSh(c, 'NETWORK FEE: ' + feeLine('create', acct, arenaUsesTestnetChain()), VW / 2, 120, 1, acct === 'falcon' ? PQCYAN : GRAY, 'center');
     if (acct === 'falcon') {
       drawText(c, 'FALCON ACCOUNT - PQ SIGNATURE PRICING', VW / 2, 132, 1, DIM, 'center');
       this.quantumSeal(c, x + 10, 120, frame);
@@ -2175,7 +2175,7 @@ export class ArenaUI {
     const lines: [string, string][] = [
       ['STAKE', fmtStake(stake) + ' $GONNA A SEAT'],
       ['POT', fmtStake(pot) + ' $GONNA'],
-      ['FEE', feeLine(joiner ? 'submit' : 'create', arenaSession().accountType, this.adapter().mode === 'live')],
+      ['FEE', feeLine(joiner ? 'submit' : 'create', arenaSession().accountType, arenaUsesTestnetChain())],
       ['FIGHTER', this.cfg.fighter.name],
     ];
     const ly = joiner ? 104 : 116; // creator: two rule lines eat 12px
@@ -2370,7 +2370,7 @@ export class ArenaUI {
       this.drawVerdict(c, frame, card);
     } else {
       const acct = arenaSession().accountType;
-      const testnet = this.adapter().mode === 'live';
+      const testnet = arenaUsesTestnetChain();
       const myEntry = card.players.find((p) => p.address === me) ?? null;
       const joiners = card.players.slice(1);
       const tableFull = card.players.length >= card.seatsTotal;
