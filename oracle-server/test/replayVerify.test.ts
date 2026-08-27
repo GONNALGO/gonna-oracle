@@ -3,7 +3,7 @@
 // (oracle-server/replay-bundles/engine-<VER>.mjs, built by
 // scripts/build-replay-bundle.mjs): honest runs are actually PLAYED headless
 // by the server-side replayer, then submitted for signature.
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest';
 import { mkFixture, mkMeta, mkPlayer, PLAYER_A, PLAYER_B, testConfig, StubChain, ORACLE } from './helpers.js';
 import { signerFromMnemonic } from '../src/sign.js';
 import { bootChecks } from '../src/index.js';
@@ -302,6 +302,113 @@ describe('M2 replay verification (SPEC-m2 §5)', () => {
     const r = await f.post('/v1/sign-score', body());
     expect(r.status).toBe(500);
     expect(r.json['error']).toBe('REPLAY TIMEOUT - RETRY');
+  }, 60_000);
+});
+
+// SEV follow-up: every M2 refusal must emit ONE structured console.warn line
+// (ops visibility) without breaking the flow and without sensitive data.
+describe('M2 reject telemetry (console.warn)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function lastWarn(spy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
+    expect(spy).toHaveBeenCalledTimes(1);
+    const line = spy.mock.calls[0]![0] as string;
+    return JSON.parse(line) as Record<string, unknown>;
+  }
+
+  it('REPLAY MISMATCH (inflated score): logs claimed vs replayed + seeds', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = mkFixture({}, CFG);
+    f.chain.metas = stageChain().metas;
+    f.chain.players = stageChain().players;
+    f.chain.stages = stageChain().stages;
+    const r = await f.post('/v1/sign-score', body({ score: stage.score + 1 }));
+    expect(r.status).toBe(400);
+    expect(r.json['error']).toBe('REPLAY MISMATCH'); // flow unchanged
+    const w = lastWarn(spy);
+    expect(w['ev']).toBe('sign-score-reject');
+    expect(w['reason']).toBe('REPLAY MISMATCH');
+    expect(w['cid']).toBe(42);
+    expect(w['seat']).toBe(1);
+    expect(w['addr']).toBe(PLAYER_B.addr.slice(0, 8)); // truncated, never full
+    expect(w['build']).toBe(VER);
+    expect(w['seedLabel']).toBe('PIT-42');
+    expect(w['gilSeed']).toBe('PIT-42');
+    expect(w['expectedSeed']).toBe('PIT-42');
+    expect(w['frames']).toBe(stage.masks.length);
+    expect(w['claimedScore']).toBe(stage.score + 1);
+    expect(w['replayedScore']).toBe(stage.score); // recomputed by the oracle
+    expect(typeof w['playFrames']).toBe('number');
+    expect(JSON.stringify(w)).not.toContain(PLAYER_B.addr); // no full address
+  }, 60_000);
+
+  it('LEGACY LOG REFUSED: logs gil version + seed', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const gil = b64encode(encodeInputLog({ build: VER, seedLabel: 'PIT-42', frames: stage.masks.length }, stage.masks));
+    const f = mkFixture({}, { ...CFG, allowLegacyGil: false });
+    f.chain.metas = stageChain().metas;
+    f.chain.players = stageChain().players;
+    f.chain.stages = stageChain().stages;
+    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: stage.masks.length, durationSec: dur(stage.masks.length), inputLogB64: gil } }));
+    expect(r.status).toBe(400);
+    expect(r.json['error']).toBe('LEGACY LOG REFUSED');
+    const w = lastWarn(spy);
+    expect(w['reason']).toBe('LEGACY LOG REFUSED');
+    expect(w['gilVersion']).toBe(1);
+    expect(w['gilSeed']).toBe('PIT-42');
+  });
+
+  it('SEED MISMATCH: logs gil seed vs derived expected seed', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const gil = gilV2(VER, 'PIT-999', stage.masks);
+    const f = mkFixture({}, CFG);
+    f.chain.metas = stageChain().metas;
+    f.chain.players = stageChain().players;
+    f.chain.stages = stageChain().stages;
+    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-999', frames: stage.masks.length, durationSec: dur(stage.masks.length), inputLogB64: gil } }));
+    expect(r.status).toBe(400);
+    expect(r.json['error']).toBe('SEED MISMATCH');
+    const w = lastWarn(spy);
+    expect(w['reason']).toBe('SEED MISMATCH');
+    expect(w['gilSeed']).toBe('PIT-999');
+    expect(w['expectedSeed']).toBe('PIT-42');
+  });
+
+  it('REPLAY TIMEOUT: logs timeout marker, flow unchanged (500)', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = mkFixture({}, { ...CFG, replayTimeoutMs: 0 });
+    f.chain.metas = stageChain().metas;
+    f.chain.players = stageChain().players;
+    f.chain.stages = stageChain().stages;
+    const r = await f.post('/v1/sign-score', body());
+    expect(r.status).toBe(500);
+    expect(r.json['error']).toBe('REPLAY TIMEOUT - RETRY');
+    const w = lastWarn(spy);
+    expect(w['reason']).toBe('REPLAY TIMEOUT - RETRY');
+    expect(String(w['replayedScore'])).toMatch(/^timeout/); // 'timeout@<partial>' when the engine had booted
+  }, 60_000);
+
+  it('RUN LOG REQUIRED: logged as well', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = mkFixture({}, CFG);
+    f.chain.metas = stageChain().metas;
+    f.chain.players = stageChain().players;
+    f.chain.stages = stageChain().stages;
+    const r = await f.post('/v1/sign-score', body({ run: { seedLabel: 'PIT-42', frames: stage.masks.length, durationSec: dur(stage.masks.length) } }));
+    expect(r.status).toBe(400);
+    expect(r.json['error']).toBe('RUN LOG REQUIRED');
+    expect(lastWarn(spy)['reason']).toBe('RUN LOG REQUIRED');
+  });
+
+  it('honest run: NO warn emitted', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = mkFixture({}, CFG);
+    f.chain.metas = stageChain().metas;
+    f.chain.players = stageChain().players;
+    f.chain.stages = stageChain().stages;
+    const r = await f.post('/v1/sign-score', body());
+    expect(r.status).toBe(200);
+    expect(spy).not.toHaveBeenCalled();
   }, 60_000);
 });
 

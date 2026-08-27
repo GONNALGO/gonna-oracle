@@ -180,6 +180,32 @@ export function parseSignScoreBody(raw: unknown): SignScoreBody | null {
   };
 }
 
+/**
+ * M2 reject telemetry (SEV follow-up 2026-08-27): ONE structured line per
+ * refused run so the ops logs carry the debuggable context (a live REPLAY
+ * MISMATCH previously left zero server-side trace). SAFE BY CONSTRUCTION:
+ * addr truncated to 8 chars, the GIL body is never logged, no mnemonics/keys.
+ * 'First divergent frame' is not loggable: the replay contract only has the
+ * input masks + claimed final score — no client-side per-frame trace exists
+ * to diff against; we log the replayed final score / abort state instead.
+ */
+function logSignScoreReject(reason: string, body: SignScoreBody, extra: Record<string, unknown> = {}): void {
+  console.warn(JSON.stringify({
+    ev: 'sign-score-reject',
+    reason,
+    cid: body.cid,
+    seat: body.seat,
+    addr: body.addr.slice(0, 8),
+    build: body.build,
+    stageMode: body.stageMode,
+    stageIdx: body.stageIdx ?? null,
+    seedLabel: body.run.seedLabel,
+    frames: body.run.frames,
+    claimedScore: body.score,
+    ...extra,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // §3.2 POST /v1/sign-score — ALL checks, in SPEC order
 // ---------------------------------------------------------------------------
@@ -244,18 +270,30 @@ export async function handleSignScore(deps: Deps, rawBody: unknown, ip: string):
   //    exact score equality (wall-clock guarded by the verifier).
   if (cfg.replayEnforce) {
     if (!deps.replay) return bad('replay verifier not configured', 500);
-    if (body.run.inputLogB64 == null) return bad('RUN LOG REQUIRED'); // no log, no signature under enforcement
+    if (body.run.inputLogB64 == null) {
+      logSignScoreReject('RUN LOG REQUIRED', body);
+      return bad('RUN LOG REQUIRED'); // no log, no signature under enforcement
+    }
     const raw = b64decode(body.run.inputLogB64); // validated above
     const log = raw ? decodeInputLog(raw) : null;
     if (!log) return bad('input log: invalid structure'); // unreachable (rule 4), kept for exhaustiveness
     if (log.header.v === 1) {
       // legacy semantics (records the intro): not replayable — M1 path only,
       // and only where explicitly allowed (testnet default on, mainnet off)
-      if (!cfg.allowLegacyGil) return bad('LEGACY LOG REFUSED');
+      if (!cfg.allowLegacyGil) {
+        logSignScoreReject('LEGACY LOG REFUSED', body, { gilVersion: 1, gilSeed: log.header.seedLabel, gilFrames: log.header.frames });
+        return bad('LEGACY LOG REFUSED');
+      }
     } else {
-      if (log.header.truncated) return bad('RUN LOG TRUNCATED');
+      if (log.header.truncated) {
+        logSignScoreReject('RUN LOG TRUNCATED', body, { gilSeed: log.header.seedLabel, gilFrames: log.header.frames });
+        return bad('RUN LOG TRUNCATED');
+      }
       const expectedSeed = body.stageMode === 'stage' ? `PIT-${body.cid}` : `RUN-${body.cid}`;
-      if (log.header.seedLabel !== expectedSeed) return bad('SEED MISMATCH');
+      if (log.header.seedLabel !== expectedSeed) {
+        logSignScoreReject('SEED MISMATCH', body, { gilSeed: log.header.seedLabel, expectedSeed });
+        return bad('SEED MISMATCH');
+      }
       const r = await deps.replay.verifyRun({
         build: log.header.build,
         stageMode: body.stageMode,
@@ -264,7 +302,20 @@ export async function handleSignScore(deps: Deps, rawBody: unknown, ip: string):
         masks: log.bitmask,
         score: body.score,
       });
-      if (!r.ok) return bad(r.reason, r.status);
+      if (!r.ok) {
+        logSignScoreReject(r.reason, body, {
+          gilSeed: log.header.seedLabel,
+          expectedSeed,
+          replayedScore: r.diag?.replayedScore
+            ?? (r.reason === 'REPLAY TIMEOUT - RETRY'
+              ? (r.diag?.partialScore !== undefined ? `timeout@<${r.diag.partialScore}>` : 'timeout')
+              : r.diag?.partialScore !== undefined ? `stuck@<${r.diag.partialScore}>` : '-'),
+          playFrames: r.diag?.playFrames ?? null,
+          endScene: r.diag?.endScene ?? null,
+          elapsedMs: r.diag?.elapsedMs ?? null,
+        });
+        return bad(r.reason, r.status);
+      }
     }
   }
 

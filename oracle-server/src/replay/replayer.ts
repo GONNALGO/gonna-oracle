@@ -151,7 +151,17 @@ export function replayCampaign(game: any, masks: Uint8Array, timeoutMs: number):
   };
 }
 
-export type ReplayCheck = { ok: true; result: ReplayResult } | { ok: false; reason: string; status: number };
+/** Diagnostics attached to a refused replay — safe to log (no GIL body). */
+export type ReplayDiag = {
+  replayedScore?: number; // final score recomputed by the oracle (score-equality mismatch)
+  partialScore?: number; // score at the moment a stuck/timeout abort fired
+  playFrames?: number;
+  steps?: number;
+  endScene?: string;
+  elapsedMs?: number;
+};
+
+export type ReplayCheck = { ok: true; result: ReplayResult } | { ok: false; reason: string; status: number; diag?: ReplayDiag };
 
 export class ReplayVerifier {
   readonly bundlesDir: string;
@@ -208,19 +218,28 @@ export class ReplayVerifier {
       return { ok: false, reason: 'replay bundle failed to load', status: 500 };
     }
     let result: ReplayResult;
+    let game: any = null;
     try {
       (globalThis as Record<string, unknown>)['__GONNA_VER'] = opts.build; // per-request pin (multi-bundle processes)
-      const game = bootGame(eng);
+      game = bootGame(eng);
       // EXACT client boot entries (v16.1): same scene/RNG wiring as the live run
       if (opts.stageMode === 'stage') startStageRun(game, opts.stageIdx ?? 0, opts.seedLabel);
       else startFullRunSeeded(eng, game, opts.seedLabel);
       result = replayCampaign(game, opts.masks, this.timeoutMs);
     } catch (e) {
-      if (e instanceof ReplayTimeoutError) return { ok: false, reason: 'REPLAY TIMEOUT - RETRY', status: 500 };
-      if (e instanceof ReplayStuckError) return { ok: false, reason: 'REPLAY MISMATCH', status: 400 }; // log never reaches a play frame for the tail masks
+      // diag: where the engine was when the abort fired (score/scene only —
+      // the replay contract has no per-frame client trace to diff against)
+      const abortDiag: ReplayDiag = game ? { partialScore: game.score, endScene: game.scene } : {};
+      if (e instanceof ReplayTimeoutError) return { ok: false, reason: 'REPLAY TIMEOUT - RETRY', status: 500, diag: abortDiag };
+      if (e instanceof ReplayStuckError) return { ok: false, reason: 'REPLAY MISMATCH', status: 400, diag: abortDiag }; // log never reaches a play frame for the tail masks
       throw e; // engine crash = genuine internal error (500 via onError)
     }
-    if (result.score !== opts.score) return { ok: false, reason: 'REPLAY MISMATCH', status: 400 };
+    if (result.score !== opts.score) {
+      return {
+        ok: false, reason: 'REPLAY MISMATCH', status: 400,
+        diag: { replayedScore: result.score, playFrames: result.playFrames, steps: result.steps, endScene: result.scene, elapsedMs: result.elapsedMs },
+      };
+    }
     return { ok: true, result };
   }
 }
