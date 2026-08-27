@@ -54,13 +54,13 @@ const MAINNET_CFG: ArenaNetConfig = {
     appId: 3686311434,
     legacyAppId: 0, // no legacy on mainnet
     gonnaAsa: 2582294183, // REAL mainnet $GONNA (same id as src/game/wallet.ts)
-    // M-4: NO OpUp donor app on mainnet — contract.py never references it
-    // (it is a CLIENT-side pooled-budget booster, not a contract dependency)
-    // and the mainnet bootstrap did only the GONNA opt-in. opupTxns() omits
-    // the donor calls when this is 0. If a create/join/close group ever hits
-    // the opcode budget on mainnet, deploy the donor (deploy/opup.ts) and
-    // fill this id — documented in the M-4 report.
-    opUpAppId: 0,
+    // M-4b: OpUp donor app mainnet (LEAD GO 2026-08-26) — create/join/close
+    // groups DO hit the opcode budget without donors: create_challenge runs
+    // ed25519verify_bare (~2700 cost) over the 700 single-call budget
+    // (proven live: logic eval error pc=1013 with opUpAppId 0). Same minimal
+    // approve-all shape as the testnet donor 769688641 (bytecode 0b8101,
+    // zero state) — deploy txid KDKCFKPCYZ2V3AMWSNRIPIIOX7MSZKUFKM6JULTFT7WPQAGANVEQ.
+    opUpAppId: 3686469118,
     treasuryAddr: 'GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU',
     oracleAddr: '3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y',
     algodUrl: 'https://mainnet-api.algonode.cloud',
