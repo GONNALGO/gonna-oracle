@@ -35,7 +35,7 @@ console.log('\n[0] SOURCE: network config + leak guard + fixture gate');
   ok(ak.includes('gonnaAsa: 769688287,') && ak.includes('appId: 769907387,'), 'arenaKit: testnet row intact (app 769907387 / ASA 769688287)');
   ok(ak.includes('appId: 3686311434,'), 'arenaKit: mainnet appId 3686311434 (M-2 deploy, M-4 filled)');
   ok(ak.includes("treasuryAddr: 'GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU'") && ak.includes("oracleAddr: '3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y'"), 'arenaKit: mainnet treasury + oracle addrs (M-4)');
-  ok(ak.includes('opUpAppId: 0,'), 'arenaKit: NO OpUp donor on mainnet (contract never references it — M-4 documented)');
+  ok(ak.includes('opUpAppId: 3686469118,'), 'arenaKit: OpUp donor mainnet 3686469118 (M-4bis — budget failure proven live at opUp 0)');
   ok(ak.includes('export const ARENA_FIXTURES_ENABLED'), 'arenaKit: fixtures flag exported');
   ok(ak.includes('export function netLsKey'), 'arenaKit: netLsKey helper exported');
   ok(tk.includes("export { ARENA_NETWORK, IS_MAINNET };") && tk.includes('export const ARENA_APP_ID = NET.appId;'), 'testnetKit: re-exports network-resolved constants (compat)');
@@ -101,7 +101,7 @@ bundle(B2, ['--define:import.meta.env.VITE_ARENA_NETWORK="mainnet"']);
 const M = await import(B2);
 {
   ok(M.ARENA_NETWORK === 'mainnet' && M.IS_MAINNET === true, 'mainnet build: ARENA_NETWORK=mainnet');
-  ok(M.NET.appId === 3686311434 && M.NET.opUpAppId === 0 && M.NET.treasuryAddr.startsWith('GONHNV') && M.NET.oracleAddr.startsWith('3UVNPC'), 'mainnet ids are the real M-2 deploy (opUp 0 = no donor, M-4)');
+  ok(M.NET.appId === 3686311434 && M.NET.opUpAppId === 3686469118 && M.NET.treasuryAddr.startsWith('GONHNV') && M.NET.oracleAddr.startsWith('3UVNPC'), 'mainnet ids are the real M-2 deploy + OpUp donor (M-4bis)');
   ok(M.NET.gonnaAsa === 2582294183, 'mainnet GONNA ASA 2582294183');
   ok(M.NET.algodUrl === 'https://mainnet-api.algonode.cloud', 'mainnet algod');
   ok(M.ARENA_FIXTURES_ENABLED === false, 'fixtures OFF in a mainnet build (dead path)');
