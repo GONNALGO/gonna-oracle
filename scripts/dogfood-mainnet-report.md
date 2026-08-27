@@ -58,3 +58,14 @@ gonna.bond ✓ / evil ✗. Boot log: 6 bundle, store=turso(libsql), legacyGil=of
 Anomalie: nessuna contrattuale. Le uniche re-run sono state per fix dell'
 harness (stageMode full, sealedRun fallback, cid-drift su resume) — nessun
 doppio invio alla cieca (resume via readPlayers, mai re-join).
+
+## Golden rule v17.0.2 (finale pre-lancio, 2026-08-27)
+
+- Bundle `engine-vce3cddcd.mjs` → gonna-oracle `7de4eeb` (secret scan: token
+  patterns + 3-word mnemonic windows, 0 hit). Zip md5 verificato
+  `1982c0aa1e30802d5fb9610a9e9a4ee3`.
+- Deploy manuale `dep-da7qn3ru01pc7395ujj0` → live. Boot log: 7 bundle
+  (incl. vce3cddcd), store=turso(libsql), legacyGil=off.
+- Smoke mainnet **8/8** contro lo zip v17.0.2 (VER vce3cddcd da __GONNA_VER).
+- HISTORY fix spot check: indexer mainnet per app 3686311434 ritorna le
+  chiusure dei cid 0,1,2,3 con le leg GONNA — la HISTORY client troverà i dati.
