@@ -57,6 +57,10 @@ console.log('\n[0] SOURCE: network config + leak guard + fixture gate');
   ok(!ui.includes("feeLine('create', acct, this.adapter().mode === 'live')"), 'arenaUI: feeLine callers use arenaUsesTestnetChain, not mode');
   const ca2 = readFileSync(join(ROOT, 'src/game/arena/chainAdapter.ts'), 'utf8');
   ok(ca2.includes("if (testnet) return (kit.TESTNET_FEES[op] / 1e6).toFixed(3) + ' ALGO (TESTNET)';"), 'feeLine: (TESTNET) suffix only on the testnet chain');
+  // v17.0.4 gap-heal: legacy caches that advanced the watermark past an
+  // unmapped cid (the Prince's cid-8 UNVERIFIED) self-heal with ONE full rescan
+  ok(tk.includes('scannedThrough') && tk.includes('GAP-HEAL'), 'testnetKit: gap-heal present (scannedThrough provenance marker)');
+  ok(tk.includes("forcing ONE full rescan"), 'testnetKit: gap-heal logs a console.debug when it fires');
   // no unscoped leftovers of the network-bound keys anywhere in src
   const all = [tk, oc, ca, tw, aw];
   const leftovers = all.some((s) => /localStorage\.(getItem|setItem|removeItem)\('gonna\.arena\.(adapter|v1|oracleurl|testnet\.addr|anon|txids|resolved|closetx)'/.test(s));
@@ -69,9 +73,11 @@ writeFileSync(ENTRY, `
 export { ARENA_NETWORK, IS_MAINNET, NET, ARENA_FIXTURES_ENABLED, netLsKey } from './src/game/arena/arenaKit';
 export { oracleBaseUrl, ORACLE_BASE_URL_MAINNET, ORACLE_BASE_URL_TESTNET } from './src/game/arena/oracleClient';
 export { arenaMode, arenaUsesTestnetChain } from './src/game/arena/chainAdapter';
+export { fetchArenaCreateStages, readStageCache } from './src/game/arena/testnetKit';
 `);
 function bundle(out, defines = []) {
   execFileSync('npx', ['esbuild', ENTRY, '--bundle', '--format=esm', '--platform=node',
+    '--banner:js=import { createRequire } from "module"; const require = createRequire(import.meta.url);',
     '--define:import.meta.env.DEV=false', '--define:import.meta.env.PROD=true', ...defines,
     `--outfile=${out}`], { cwd: ROOT, stdio: 'pipe' });
 }
@@ -204,6 +210,58 @@ console.log('\n[4] M-4: mode renamed testnet->live, legacy migration, chain help
   ok(M.arenaMode() === 'live', 'mainnet build default = LIVE piazza (v17.0.4 Prince decree)');
   mkWindow({ 'gonna.arena.adapter.mainnet': 'mock' });
   ok(M.arenaMode() === 'mock', 'v17.0.4: a stored explicit mock choice still wins (persisted practice)');
+}
+
+// ================= [5] v17.0.4: stage-cache GAP-HEAL ========================
+console.log('\n[5] GAP-HEAL: a legacy cache with a hole below the watermark self-heals (ONE full rescan)');
+{
+  const sdk = await import('algosdk');
+  const selOf = (sig) => {
+    const parts = sig.split(')');
+    const argTypes = parts[0].slice(parts[0].indexOf('(') + 1).split(',').filter(Boolean);
+    return new sdk.ABIMethod({ name: sig.slice(0, sig.indexOf('(')), args: argTypes.map((t, i) => ({ type: t, name: 'a' + i })), returns: { type: parts[1] || 'void' } }).getSelector();
+  };
+  const selCreate = Buffer.from(selOf('create_challenge(pay,axfer,uint64,uint64,uint64,uint64,byte[],uint64,byte[])uint64')).toString('base64');
+  const b64 = (x) => Buffer.from(x, 'utf8').toString('base64');
+  const tx = (round, note) => ({
+    id: 'T' + round,
+    'confirmed-round': round,
+    'intra-round-offset': 0,
+    note: note === null ? undefined : b64(note),
+    'application-transaction': { 'application-args': [selCreate] },
+  });
+  // chain, OLDEST FIRST (algonode order): cid0 stage3 | cid1 stage5 | cid2 stage6 | cid3 stage1
+  const page = { transactions: [tx(100, 'gonna:v2:stage:3'), tx(101, 'gonna:v2:stage:5'), tx(102, 'gonna:v2:stage:6'), tx(103, 'gonna:v2:stage:1')] };
+  let fetches = 0;
+  globalThis.fetch = async () => { fetches++; return { ok: true, json: async () => page }; };
+  const dbg = [];
+  const origDebug = console.debug;
+  console.debug = (...a) => dbg.push(a.join(' '));
+  try {
+    // a complete legacy cache (no hole below the watermark) must NOT heal.
+    // Fresh module instance (fragment import) => the 30s memo is empty.
+    const T3 = await import(B1 + '#heal-complete');
+    mkWindow({ 'gonna.arena.stages': JSON.stringify({ fromCid: 2, stages: { '0': 3, '1': 5 } }) });
+    const ok2 = await T3.fetchArenaCreateStages({ total: 2 }); // counter == watermark
+    ok(ok2['0'] === 3 && dbg.length === 0 && fetches === 0, 'complete legacy cache: no hole -> no heal, zero fetch cost');
+    dbg.length = 0;
+    // LEGACY cache (the Prince's cid-8 shape): watermark 3, cid 2 NEVER mapped
+    const T2 = await import(B1 + '#heal-hole'); // fresh memo
+    mkWindow({ 'gonna.arena.stages': JSON.stringify({ fromCid: 3, stages: { '0': 3, '1': 5 } }) });
+    const stages = await T2.fetchArenaCreateStages({ total: 4 }); // no force: the board path
+    ok(dbg.some((d) => d.includes('gap below watermark') && d.includes('cid 2')), 'gap-heal fired with a console.debug naming the hole (cid 2 < watermark 3)');
+    ok(stages['2'] === 6, 'healed: cid 2 mapped by the full rescan (stage 6)');
+    ok(stages['0'] === 3 && stages['1'] === 5 && stages['3'] === 1, 'healed: every noted cid mapped');
+    const c = T2.readStageCache();
+    ok(c.fromCid === 4 && c.scannedThrough === 4, 'healed cache: watermark 4 + proven prefix 4 (sealed)');
+    // at-most-once: a forced re-entry with the healed cache must NOT heal again
+    const dbgCount = dbg.length, fetchCount = fetches;
+    const again = await T2.fetchArenaCreateStages({ force: true, total: 4 }); // force: skips memo AND heal; counter unchanged
+    ok(again['2'] === 6 && fetches === fetchCount && dbg.length === dbgCount, 'heal is AT MOST ONCE per cache (sealed: no rescan, no debug on re-entry)');
+  } finally {
+    console.debug = origDebug;
+    globalThis.fetch = undefined;
+  }
 }
 
 rmSync(ENTRY, { force: true });

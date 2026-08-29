@@ -1107,6 +1107,11 @@ export async function fetchArenaCloseEvents(maxPages = 5): Promise<ArenaCloseEve
 export interface StageScanCache {
   fromCid: number; // watermark: cids [0, fromCid) already mapped
   stages: Record<string, number>; // cid -> stage idx (only cids WITH a note)
+  // v17.0.4 gap-heal: the cid prefix actually COVERED by a complete scan.
+  // Legacy caches (pre-sanity-check builds) advanced the watermark WITHOUT
+  // mapping every cid — holes below fromCid would otherwise stay UNVERIFIED
+  // forever. scannedThrough < fromCid marks such a cache as suspect.
+  scannedThrough?: number;
 }
 const STAGE_KEY = 'gonna.arena.stages';
 const STAGE_MEM_MAX = 500;
@@ -1114,9 +1119,13 @@ const STAGE_MEM_MAX = 500;
 export function readStageCache(): StageScanCache {
   try {
     const j = JSON.parse(window.localStorage.getItem(STAGE_KEY) ?? '{}') as Partial<StageScanCache>;
-    return { fromCid: typeof j.fromCid === 'number' ? j.fromCid : 0, stages: j.stages && typeof j.stages === 'object' ? j.stages : {} };
+    return {
+      fromCid: typeof j.fromCid === 'number' ? j.fromCid : 0,
+      stages: j.stages && typeof j.stages === 'object' ? j.stages : {},
+      scannedThrough: typeof j.scannedThrough === 'number' ? j.scannedThrough : 0,
+    };
   } catch {
-    return { fromCid: 0, stages: {} };
+    return { fromCid: 0, stages: {}, scannedThrough: 0 };
   }
 }
 function writeStageCache(c: StageScanCache): void {
@@ -1148,7 +1157,9 @@ export function applyStageScan(cache: StageScanCache, hits: CreateCallHit[]): St
     if (h.stage !== null) stages[String(cid)] = h.stage;
     cid++;
   }
-  return { fromCid: cid, stages };
+  // the proven prefix extends exactly when the scan started from a proven base
+  const scannedThrough = (cache.scannedThrough ?? 0) >= cache.fromCid ? cid : (cache.scannedThrough ?? 0);
+  return { fromCid: cid, stages, scannedThrough };
 }
 
 const CREATE_SIG = 'create_challenge(pay,axfer,uint64,uint64,uint64,uint64,byte[],uint64,byte[])uint64';
@@ -1162,7 +1173,26 @@ let stageMemo: { at: number; stages: Record<string, number> } | null = null;
 // watermark math is exact only when total == the on-chain counter.
 export async function fetchArenaCreateStages(opts: { force?: boolean; maxPages?: number; total?: number } = {}): Promise<Record<string, number>> {
   if (!opts.force && stageMemo && Date.now() - stageMemo.at < 30_000) return stageMemo.stages;
-  const cache = readStageCache();
+  let cache = readStageCache();
+  // v17.0.4 GAP-HEAL: a cid below the watermark missing from the map means an
+  // old build advanced fromCid without mapping it (pre-sanity-check retaggio)
+  // — those cards would render (UNVERIFIED) forever. If the prefix was never
+  // PROVEN by a complete scan (scannedThrough < fromCid), distrust the
+  // watermark and force ONE full rescan from cid 0. Full-mode creates carry
+  // no stage note, so holes legitimately remain after the rescan — the
+  // scannedThrough marker guarantees this heal fires AT MOST once per cache.
+  if (!opts.force && cache.fromCid > 0 && (cache.scannedThrough ?? 0) < cache.fromCid) {
+    let hole = -1;
+    for (let c = 0; c < cache.fromCid; c++) {
+      if (!(String(c) in cache.stages)) { hole = c; break; }
+    }
+    if (hole >= 0) {
+      console.debug('[arena] stage cache gap below watermark (cid ' + hole + ' < ' + cache.fromCid + ') — forcing ONE full rescan');
+      cache = { fromCid: 0, stages: {}, scannedThrough: 0 };
+      writeStageCache(cache);
+      return fetchArenaCreateStages({ ...opts, force: true });
+    }
+  }
   const total = opts.total ?? (await nextChallengeId());
   let out = cache;
   const need = Math.max(0, total - cache.fromCid);
