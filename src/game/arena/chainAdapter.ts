@@ -948,7 +948,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
 
   private async id(): Promise<TestnetIdentity> {
     const me = providerRef() ? await providerRef()!() : null;
-    if (!me) throw new Error('CONNECT WALLET FIRST (TESTNET)');
+    if (!me) throw new Error(arenaUsesTestnetChain() ? 'CONNECT WALLET FIRST (TESTNET)' : 'CONNECT WALLET FIRST'); // v17.0.4: chain-aware
     return me;
   }
 
@@ -1033,7 +1033,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
   async createChallenge(cfg: ChallengeConfig, _creator: ChallengePlayer): Promise<Challenge> {
     const me = await this.id();
     const a = await kit.sdk();
-    if (cfg.stageMode === 'random') throw new Error('RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY');
+    if (cfg.stageMode === 'random') throw new Error('RANDOM RUNS RESOLVE BEFORE CREATE'); // v17.0.4: network-neutral (guard should never fire — doSign resolves)
     const stakeBase = Math.round(cfg.stake * 1e6);
     // v15.2.1 PREFLIGHT: algod's 400 'overspend' must never be the first word
     // a degen hears about a missing ASA opt-in or a light balance — fail with
@@ -1046,7 +1046,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         assets?: { assetId: number | bigint; amount: number | bigint }[];
       };
       const gonna = (acct.assets ?? []).find((x) => Number(x.assetId) === kit.GONNA_ASA_TESTNET);
-      if (!gonna) throw new Error('OPT INTO $GONNA FIRST - ASA ' + kit.GONNA_ASA_TESTNET + ' (TESTNET)');
+      if (!gonna) throw new Error('OPT INTO $GONNA FIRST - ASA ' + kit.GONNA_ASA_TESTNET + (arenaUsesTestnetChain() ? ' (TESTNET)' : '')); // v17.0.4: no TESTNET word on mainnet
       if (Number(gonna.amount) < stakeBase) {
         throw new Error('NOT ENOUGH GONNA - NEED ' + fmtGonna(stakeBase / 1e6) + ', WALLET HAS ' + fmtGonna(Number(gonna.amount) / 1e6));
       }
@@ -1667,8 +1667,10 @@ export function feeLine(op: kit.ArenaOp, accountType: AccountType, testnet: bool
 }
 
 // ---------- selector ----------
-// MOCK is the PUBLIC default (the Prince flips the preview explicitly).
-// ?arena=live enables the live chain adapter and PERSISTS the choice.
+// v17.0.4 (Prince decree): LIVE is the PUBLIC default — a fresh device lands
+// straight on the on-chain piazza, zero clicks. The mock PRACTICE piazza is
+// reachable ONLY via the explicit ?arena=mock param (persisted, so a returning
+// practice session stays in practice until ?arena=live flips it back).
 // M-1: the persisted choice is NETWORK-SCOPED — a stored flag from a testnet
 // build must not light the live adapter inside a mainnet build.
 // M-4 (Prince-approved): the mode was RENAMED 'testnet' -> 'live' — the
@@ -1704,9 +1706,9 @@ export function arenaMode(): ArenaMode {
       window.localStorage.setItem(LS_ADAPTER, stored); // rewrite migrated value
       return stored;
     }
-    return 'mock';
+    return 'live'; // v17.0.4: on-chain by default
   } catch {
-    return 'mock';
+    return 'live';
   }
 }
 // M-4: is the WALLET supposed to talk testnet? Only a testnet BUILD in live

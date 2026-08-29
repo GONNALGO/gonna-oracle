@@ -946,8 +946,8 @@ export class ArenaUI {
       if (ch) this.prefetchCloseTx(ch.id, true);
       return { act: 'move' };
     }
-    // M-4: mock piazza is the public default — the LIVE ingress must be one
-    // thumb-tap away. ?arena=live persists the choice and reloads the build.
+    // v17.0.4: LIVE is the default; mock is the opt-in practice piazza.
+    // ?arena=live persists the choice and reloads the build.
     if (id === 'golive') {
       try {
         const u = new URL(window.location.href);
@@ -1494,7 +1494,7 @@ export class ArenaUI {
     const c = this.current;
     if (!c) return { act: 'none' };
     const me = arenaAddress();
-    if (!this.adapter().claimForfeit) return this.fail('FORFEIT IS A TESTNET CONTRACT PATH');
+    if (!this.adapter().claimForfeit) return this.fail('FORFEIT IS A LIVE-CHAIN CONTRACT PATH'); // v17.0.4: network-neutral
     console.debug('[arena] CLAIM FORFEIT — start (card #' + c.id + ')');
     void this.run(
       () => this.adapter().claimForfeit!(c.id, me),
@@ -1770,8 +1770,8 @@ export class ArenaUI {
         drawText(c, addr.slice(0, 6) + '..' + addr.slice(-4), VW - 10, 4, 1, GOLD, 'right');
       }
     } else {
-      // M-4: mock piazza is the public default — the LIVE ingress (real ALGO,
-      // same build network) stays one thumb-tap away, mirroring CONNECT's spot
+      // v17.0.4: mock piazza is the opt-in PRACTICE mode (?arena=mock) — the
+      // LIVE ingress (real ALGO, same build network) is one thumb-tap away
       drawTextSh(c, 'PRACTICE', 10, 4, 1, DIM, 'left', '#0a3d00');
       this.btn(c, frame, { id: 'golive', x: VW - 96, y: 2, w: 88, h: 12 }, 'GO LIVE', { green: true });
     }

@@ -101,7 +101,9 @@ const T = await import(B1);
   ok(T.netLsKey('gonna.arena.adapter') === 'gonna.arena.adapter.testnet', 'netLsKey scopes with .testnet');
   mkWindow({});
   ok(T.oracleBaseUrl() === T.ORACLE_BASE_URL_TESTNET, 'oracleBaseUrl default = testnet Render service');
-  ok(T.arenaMode() === 'mock', 'arenaMode default = mock (public default unchanged)');
+  ok(T.arenaMode() === 'live', 'arenaMode default = live (v17.0.4: on-chain piazza, zero clicks)');
+  { const w = mkWindow({}); w.loc.search = '?arena=mock'; }
+  ok(T.arenaMode() === 'mock', 'v17.0.4: practice piazza reachable ONLY via explicit ?arena=mock');
 }
 
 // ================= [2] MAINNET build =======================================
@@ -150,11 +152,11 @@ console.log('\n[3] LEAK: testnet-era localStorage must not pollute mainnet (and 
 {
   // legacy UNSCOPED keys from a pre-M-1 testnet session
   mkWindow({ 'gonna.arena.adapter': 'testnet', 'gonna.arena.oracleurl': 'dev' });
-  ok(M.arenaMode() === 'mock', 'mainnet session: legacy unscoped adapter=testnet IGNORED (stays mock)');
+  ok(M.arenaMode() === 'live', 'mainnet session: legacy unscoped adapter=testnet IGNORED (v17.0.4: falls back to the live default)');
   ok(M.oracleBaseUrl() === M.ORACLE_BASE_URL_MAINNET, "mainnet session: legacy unscoped oracleurl='dev' IGNORED (no dev-oracle leak!)");
   // testnet-scoped keys must not leak into mainnet either
   mkWindow({ 'gonna.arena.adapter.testnet': 'testnet', 'gonna.arena.oracleurl.testnet': 'http://evil-oracle.example' });
-  ok(M.arenaMode() === 'mock', 'mainnet session: testnet-scoped adapter flag IGNORED');
+  ok(M.arenaMode() === 'live', 'mainnet session: testnet-scoped adapter flag IGNORED (live default)');
   ok(M.oracleBaseUrl() === M.ORACLE_BASE_URL_MAINNET, 'mainnet session: testnet-scoped oracle override IGNORED');
   // mainnet-scoped keys ARE honored on mainnet
   const { store } = mkWindow({ 'gonna.arena.oracleurl.mainnet': 'http://qa-oracle:9999' });
@@ -165,7 +167,7 @@ console.log('\n[3] LEAK: testnet-era localStorage must not pollute mainnet (and 
   ok(!store.has('gonna.arena.adapter'), 'no unscoped writes');
   // symmetric check on the testnet build
   mkWindow({ 'gonna.arena.adapter.mainnet': 'testnet', 'gonna.arena.oracleurl.mainnet': 'http://evil.example' });
-  ok(T.arenaMode() === 'mock', 'testnet session: mainnet-scoped adapter flag IGNORED');
+  ok(T.arenaMode() === 'live', 'testnet session: mainnet-scoped adapter flag IGNORED (live default)');
   ok(T.oracleBaseUrl() === T.ORACLE_BASE_URL_TESTNET, 'testnet session: mainnet-scoped oracle override IGNORED');
   // M-4: legacy stored 'testnet' MIGRATES to 'live' (and is rewritten)
   const s2 = mkWindow({ 'gonna.arena.adapter.testnet': 'testnet' });
@@ -199,7 +201,9 @@ console.log('\n[4] M-4: mode renamed testnet->live, legacy migration, chain help
   mkWindow({ 'gonna.arena.adapter.mainnet': 'live' });
   ok(M.arenaUsesTestnetChain() === false, 'mainnet build + live -> MAINNET chain (416001) — never testnet');
   mkWindow({});
-  ok(M.arenaMode() === 'mock', 'mainnet build default = mock piazza (M-4 public default)');
+  ok(M.arenaMode() === 'live', 'mainnet build default = LIVE piazza (v17.0.4 Prince decree)');
+  mkWindow({ 'gonna.arena.adapter.mainnet': 'mock' });
+  ok(M.arenaMode() === 'mock', 'v17.0.4: a stored explicit mock choice still wins (persisted practice)');
 }
 
 rmSync(ENTRY, { force: true });
