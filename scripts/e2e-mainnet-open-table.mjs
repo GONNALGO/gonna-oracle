@@ -1,4 +1,4 @@
-// E2E MAINNET OPEN TABLE (post-fix dogfood) — PREPARED, not yet executed.
+// E2E MAINNET OPEN TABLE (post-fix dogfood) — EXECUTED v17.0.4 mainnet (cid 7, VERDE).
 //
 // Flow: DEPLOYER creates a FULL-mode open table (stake GONNA/seat), QA joiner
 // seats, plays a real seeded full run, signs, submits; verdict → resolve →
@@ -98,7 +98,7 @@ const indexer = new algosdk.Indexer('', 'https://mainnet-idx.algonode.cloud', ''
 async function legsOf(txid) {
   const t = await indexer.lookupTransactionByID(txid).do();
   const round = Number(t.transaction.confirmedRound);
-  const r = await indexer.searchForTransactions().applicationID(kit.NET.appId).minRound(round).maxRound(round).do();
+  const r = await indexer.searchForTransactions().applicationID(kit.ARENA_APP_ID) // kit re-exports the id, not NET (v17.0.4 e2e fix).minRound(round).maxRound(round).do();
   const legs = [];
   for (const tx of r.transactions ?? []) {
     for (const i of tx.innerTxns ?? []) {
