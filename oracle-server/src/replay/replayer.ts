@@ -120,16 +120,14 @@ export function replayCampaign(game: any, masks: Uint8Array, timeoutMs: number):
     if (++steps > masks.length * 4 + 20000) throw new ReplayStuckError();
     if ((steps & 0x3ff) === 0 && Date.now() - t0 >= timeoutMs) throw new ReplayTimeoutError();
     const sc = game.scene;
-    if (sc === 'intro') {
-      game.step(); // faithful: the real client stepped these 151 frames (D-E2E)
-      continue;
-    }
-    if (sc === 'clear' || sc === 'victory') {
-      game.input.pressed.start = true;
-      game.step();
-      continue;
-    }
     if (sc !== 'play') {
+      // v17.0.7 (Friedbean REPLAY MISMATCH): the fixed client mutes gameplay
+      // buttons outside play and force-releases levels at every scene cut, so
+      // each play segment starts from an all-up baseline. The driver mirrors
+      // it: no gameplay level may leak across a non-play scene, or the first
+      // mask of the next segment would regenerate a phantom rising edge.
+      for (const b of BTNS) { down[b] = false; pressed[b] = false; }
+      if (sc === 'clear' || sc === 'victory') game.input.pressed.start = true;
       game.step();
       continue;
     }

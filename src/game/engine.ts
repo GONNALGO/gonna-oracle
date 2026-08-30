@@ -2180,12 +2180,25 @@ export class Game implements GameCtx {
     this.sceneT = 0;
     // no held control may leak across a scene cut (joystick ghost / stuck button)
     this.touch.releaseAll();
+    // v17.0.7 (Friedbean live bug, REPLAY MISMATCH): the GIL recorder stores
+    // LEVELS only and the oracle replay regenerates pressed-edges from level
+    // transitions. A key HELD across the intro->play cut (a human keeps
+    // walking/punching through the title card) entered play with down=true
+    // but no edge; the replay started from all-up and invented a phantom
+    // edge -> divergent sim -> honest scores refused. Clearing the keyboard
+    // levels too makes every play segment start from the SAME all-up
+    // baseline the replay driver sees; a still-held key re-registers on the
+    // next auto-repeat keydown, in client and replay alike.
+    this.input.releaseAll();
     // v9.1: the SEAL message overlay only exists on the SAVE RECORD screen
     if (s !== 'save' && this.msgInput) this.msgInput.style.display = 'none';
   }
 
   // ---------- main loop ----------
   step(): void {
+    // v17.0.7: gameplay buttons are muted outside play (and while paused)
+    // during a sealed arena run — see input.suppressGameplay.
+    this.input.suppressGameplay = this.arenaRun != null && (this.scene !== 'play' || this.paused);
     if (this.paused) {
       // v7: P/ESC resumes from desktop too (touch resumes via the II button)
       if (this.input.pressed.pause) {

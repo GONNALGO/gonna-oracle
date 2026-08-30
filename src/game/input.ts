@@ -30,6 +30,13 @@ export class Input {
   private downCodes = new Set<string>();
   /** v6: true while touch controls are active (relaxed object-lift tolerance) */
   touchMode = false;
+  /** v17.0.7 (Friedbean REPLAY MISMATCH): while an arena run sits in a
+   * non-play scene (intro / clear / victory), the 8 gameplay buttons must
+   * NOT register levels — the GIL log is levels-only and the replay driver
+   * re-arms from an all-up baseline at each play segment, so a key that
+   * re-arms mid-cut via OS key-repeat would desync the replay. start/pause
+   * and menu keys are unaffected. */
+  suppressGameplay = false;
   private onKeyDown: (e: KeyboardEvent) => void;
   private onKeyUp: (e: KeyboardEvent) => void;
   /** fired on any keydown (for AudioContext unlock) */
@@ -47,6 +54,8 @@ export class Input {
       const b = KEYS[e.code];
       if (!b) return;
       e.preventDefault();
+      // v17.0.7: during arena non-play scenes the gameplay buttons are muted
+      if (this.suppressGameplay && b !== 'start' && b !== 'pause' && b !== 'mute' && b !== 'fighter') return;
       if (!this.down[b]) this.pressed[b] = true;
       this.down[b] = true;
     };
@@ -67,6 +76,17 @@ export class Input {
   postUpdate(): void {
     for (const k of Object.keys(this.pressed) as Btn[]) this.pressed[k] = false;
     this.pressedCodes.clear();
+  }
+
+  // v17.0.7: hard release of every keyboard level+edge — used at scene cuts
+  // so a key HELD across the cut cannot enter the next scene as a ghost
+  // level (replay parity: the GIL log is levels-only, so both sides must
+  // start each play segment from the same all-up baseline). downCodes is
+  // kept: the physical key is still down, so no phantom keyup edge; the
+  // level re-arms on the next auto-repeat keydown.
+  releaseAll(): void {
+    for (const k of Object.keys(this.down) as Btn[]) this.down[k] = false;
+    for (const k of Object.keys(this.pressed) as Btn[]) this.pressed[k] = false;
   }
 
   destroy(): void {
