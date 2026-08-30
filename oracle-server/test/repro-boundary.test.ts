@@ -6,7 +6,16 @@ import { ReplayVerifier, bootGame, startStageRun, type ReplayEngine } from '../s
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const BUNDLES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../replay-bundles');
-const VER = 'v7c27780e';
+import fs from 'node:fs';
+// v17.0.7 regression: run against REPRO_VER if set, else the NEWEST replay bundle on disk.
+function newestVer(dir: string): string {
+  const files = fs.readdirSync(dir).filter((f) => /^engine-v[0-9a-f]+\.mjs$/.test(f));
+  files.sort((a, b) => fs.statSync(dir + '/' + b).mtimeMs - fs.statSync(dir + '/' + a).mtimeMs);
+  if (!files.length) throw new Error('no replay bundles found');
+  return files[0]!.replace(/^engine-/, '').replace(/\.mjs$/, '');
+}
+const VER = process.env.REPRO_VER ?? newestVer(BUNDLES_DIR);
+
 const BTNS = ['up','down','left','right','punch','kick','jump','special'] as const;
 const BTN_BIT: Record<string, number> = { up:1, down:2, left:4, right:8, punch:16, kick:32, jump:64, special:128 };
 function recordRunFixed(eng: ReplayEngine, stream: Uint8Array) {
