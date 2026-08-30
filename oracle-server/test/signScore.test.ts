@@ -195,9 +195,11 @@ describe('rule 3 — score cap', () => {
   it('accepts score at the cap and rejects above it', async () => {
     const { cid, chainOpts } = openDuel();
     const f = mkFixture(chainOpts);
-    const atCap = await f.post('/v1/sign-score', signScoreBody({ cid, score: 2_000_000 }));
+    // v17.0.5: full cap raised 2M -> 5M (a legit 507,950 LV1 run was refused
+    // by the old 500k stage cap on launch day — replay is the real gate)
+    const atCap = await f.post('/v1/sign-score', signScoreBody({ cid, score: 5_000_000 }));
     expect(atCap.status).toBe(200);
-    const over = await f.post('/v1/sign-score', signScoreBody({ cid, score: 2_000_001 }), '203.0.113.10');
+    const over = await f.post('/v1/sign-score', signScoreBody({ cid, score: 5_000_001 }), '203.0.113.10');
     expect(over.status).toBe(400);
     expect(String(over.json['error'])).toMatch(/cap/);
   });
