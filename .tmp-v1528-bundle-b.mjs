@@ -57,6 +57,7 @@ var init_arenaKit = __esm({
       treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
       oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
       algodUrl: "https://testnet-api.algonode.cloud",
+      indexerUrl: "https://testnet-idx.algonode.cloud",
       oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
     };
     MAINNET_CFG = {
@@ -67,16 +68,17 @@ var init_arenaKit = __esm({
       // no legacy on mainnet
       gonnaAsa: 2582294183,
       // REAL mainnet $GONNA (same id as src/game/wallet.ts)
-      // M-4: NO OpUp donor app on mainnet — contract.py never references it
-      // (it is a CLIENT-side pooled-budget booster, not a contract dependency)
-      // and the mainnet bootstrap did only the GONNA opt-in. opupTxns() omits
-      // the donor calls when this is 0. If a create/join/close group ever hits
-      // the opcode budget on mainnet, deploy the donor (deploy/opup.ts) and
-      // fill this id — documented in the M-4 report.
-      opUpAppId: 0,
+      // M-4b: OpUp donor app mainnet (LEAD GO 2026-08-26) — create/join/close
+      // groups DO hit the opcode budget without donors: create_challenge runs
+      // ed25519verify_bare (~2700 cost) over the 700 single-call budget
+      // (proven live: logic eval error pc=1013 with opUpAppId 0). Same minimal
+      // approve-all shape as the testnet donor 769688641 (bytecode 0b8101,
+      // zero state) — deploy txid KDKCFKPCYZ2V3AMWSNRIPIIOX7MSZKUFKM6JULTFT7WPQAGANVEQ.
+      opUpAppId: 3686469118,
       treasuryAddr: "GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU",
       oracleAddr: "3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y",
       algodUrl: "https://mainnet-api.algonode.cloud",
+      indexerUrl: "https://mainnet-idx.algonode.cloud",
       oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
       // same Render service; flipped env-side to mainnet
     };
@@ -98,6 +100,7 @@ __export(testnetKit_exports, {
   GONNA_ASA_TESTNET: () => GONNA_ASA_TESTNET,
   GONNA_DECIMALS: () => GONNA_DECIMALS,
   INDEXER_TESTNET: () => INDEXER_TESTNET,
+  INDEXER_URL: () => INDEXER_URL,
   IS_MAINNET: () => IS_MAINNET,
   LEGACY_ARENA_APP_ID: () => LEGACY_ARENA_APP_ID,
   OPUP_APP_ID: () => OPUP_APP_ID,
@@ -489,7 +492,7 @@ async function verifyContinuePayment(txid, refId, addr) {
   } catch {
   }
   try {
-    const r4 = await fetch(`https://testnet-idx.algonode.cloud/v2/transactions/${txid}`);
+    const r4 = await fetch(`${INDEXER_URL}/v2/transactions/${txid}`);
     if (r4.ok) {
       const j4 = await r4.json();
       const t3 = j4.transaction;
@@ -848,7 +851,7 @@ async function fetchArenaCloseEvents(maxPages = 5) {
   const out = [];
   let next = null;
   for (let page = 0; page < maxPages; page++) {
-    const url = INDEXER_TESTNET + "/v2/transactions?application-id=" + ARENA_APP_ID + "&tx-type=appl&limit=100" + (next ? "&next=" + encodeURIComponent(next) : "");
+    const url = INDEXER_URL + "/v2/transactions?application-id=" + ARENA_APP_ID + "&tx-type=appl&limit=100" + (next ? "&next=" + encodeURIComponent(next) : "");
     const r4 = await fetch(url);
     if (!r4.ok) throw new Error("indexer http " + r4.status);
     const j4 = await r4.json();
@@ -886,9 +889,13 @@ async function fetchArenaCloseEvents(maxPages = 5) {
 function readStageCache() {
   try {
     const j4 = JSON.parse(window.localStorage.getItem(STAGE_KEY) ?? "{}");
-    return { fromCid: typeof j4.fromCid === "number" ? j4.fromCid : 0, stages: j4.stages && typeof j4.stages === "object" ? j4.stages : {} };
+    return {
+      fromCid: typeof j4.fromCid === "number" ? j4.fromCid : 0,
+      stages: j4.stages && typeof j4.stages === "object" ? j4.stages : {},
+      scannedThrough: typeof j4.scannedThrough === "number" ? j4.scannedThrough : 0
+    };
   } catch {
-    return { fromCid: 0, stages: {} };
+    return { fromCid: 0, stages: {}, scannedThrough: 0 };
   }
 }
 function writeStageCache(c3) {
@@ -910,11 +917,27 @@ function applyStageScan(cache, hits) {
     if (h5.stage !== null) stages[String(cid)] = h5.stage;
     cid++;
   }
-  return { fromCid: cid, stages };
+  const scannedThrough = (cache.scannedThrough ?? 0) >= cache.fromCid ? cid : cache.scannedThrough ?? 0;
+  return { fromCid: cid, stages, scannedThrough };
 }
 async function fetchArenaCreateStages(opts = {}) {
   if (!opts.force && stageMemo && Date.now() - stageMemo.at < 3e4) return stageMemo.stages;
-  const cache = readStageCache();
+  let cache = readStageCache();
+  if (!opts.force && cache.fromCid > 0 && (cache.scannedThrough ?? 0) < cache.fromCid) {
+    let hole = -1;
+    for (let c3 = 0; c3 < cache.fromCid; c3++) {
+      if (!(String(c3) in cache.stages)) {
+        hole = c3;
+        break;
+      }
+    }
+    if (hole >= 0) {
+      console.debug("[arena] stage cache gap below watermark (cid " + hole + " < " + cache.fromCid + ") \u2014 forcing ONE full rescan");
+      cache = { fromCid: 0, stages: {}, scannedThrough: 0 };
+      writeStageCache(cache);
+      return fetchArenaCreateStages({ ...opts, force: true });
+    }
+  }
   const total = opts.total ?? await nextChallengeId();
   let out = cache;
   const need = Math.max(0, total - cache.fromCid);
@@ -928,7 +951,7 @@ async function fetchArenaCreateStages(opts = {}) {
     let token = null;
     const maxPages = opts.maxPages ?? 10;
     for (let page = 0; page < maxPages && hits.length < need; page++) {
-      const url = INDEXER_TESTNET + "/v2/transactions?application-id=" + ARENA_APP_ID + "&tx-type=appl&limit=100" + (token ? "&next=" + encodeURIComponent(token) : "");
+      const url = INDEXER_URL + "/v2/transactions?application-id=" + ARENA_APP_ID + "&tx-type=appl&limit=100" + (token ? "&next=" + encodeURIComponent(token) : "");
       const r4 = await fetch(url);
       if (!r4.ok) throw new Error("indexer http " + r4.status);
       const j4 = await r4.json();
@@ -992,7 +1015,7 @@ function rememberedCard(cid) {
 function rememberedCards() {
   return Object.values(readCardMem());
 }
-var ARENA_APP_ID, LEGACY_ARENA_APP_ID, GONNA_ASA, GONNA_ASA_TESTNET, OPUP_APP_ID, TREASURY_ADDR, ORACLE_ADDR, ALGOD_URL, ALGOD_TESTNET, SEAT_TTL_SECS, ARENA_VERSION, MBR_CREATE, EARLY_CLOSE_FEE_PAY, GONNA_DECIMALS, STAGE_NOTE_PREFIX, SCORE_DOMAIN, VERDICT_DOMAIN, TESTNET_FEES, sdkP, CONTINUE_FEE_MICRO, SIGN_TIMEOUT_MS, SIGN_TIMEOUT_MSG, SIGN_NUDGE_MS, SIGN_CANCEL_MSG, SignCancelled, recoverHook, activeOp, StaleAttempt, TX_KEY, RES_KEY, CLOSE_TX_KEY, INDEXER_TESTNET, EV_RESOLVED, EV_FORFEITED, EV_REFUNDED, STAGE_KEY, STAGE_MEM_MAX, CREATE_SIG, SPAWN_SIG, stageMemo, CARD_KEY, CARD_MEM_MAX;
+var ARENA_APP_ID, LEGACY_ARENA_APP_ID, GONNA_ASA, GONNA_ASA_TESTNET, OPUP_APP_ID, TREASURY_ADDR, ORACLE_ADDR, ALGOD_URL, ALGOD_TESTNET, SEAT_TTL_SECS, ARENA_VERSION, MBR_CREATE, EARLY_CLOSE_FEE_PAY, GONNA_DECIMALS, STAGE_NOTE_PREFIX, SCORE_DOMAIN, VERDICT_DOMAIN, TESTNET_FEES, sdkP, CONTINUE_FEE_MICRO, SIGN_TIMEOUT_MS, SIGN_TIMEOUT_MSG, SIGN_NUDGE_MS, SIGN_CANCEL_MSG, SignCancelled, recoverHook, activeOp, StaleAttempt, TX_KEY, RES_KEY, CLOSE_TX_KEY, INDEXER_URL, INDEXER_TESTNET, EV_RESOLVED, EV_FORFEITED, EV_REFUNDED, STAGE_KEY, STAGE_MEM_MAX, CREATE_SIG, SPAWN_SIG, stageMemo, CARD_KEY, CARD_MEM_MAX;
 var init_testnetKit = __esm({
   "src/game/arena/testnetKit.ts"() {
     init_arenaKit();
@@ -1048,7 +1071,8 @@ var init_testnetKit = __esm({
     TX_KEY = netLsKey("gonna.arena.txids");
     RES_KEY = netLsKey("gonna.arena.resolved");
     CLOSE_TX_KEY = netLsKey("gonna.arena.closetx");
-    INDEXER_TESTNET = "https://testnet-idx.algonode.cloud";
+    INDEXER_URL = NET.indexerUrl;
+    INDEXER_TESTNET = NET.indexerUrl;
     EV_RESOLVED = "ae488dc6";
     EV_FORFEITED = "24d3dd8b";
     EV_REFUNDED = "0bfda53a";
@@ -53354,7 +53378,7 @@ var TestnetArenaAdapter = class {
   mode = "live";
   async id() {
     const me2 = providerRef() ? await providerRef()() : null;
-    if (!me2) throw new Error("CONNECT WALLET FIRST (TESTNET)");
+    if (!me2) throw new Error(arenaUsesTestnetChain() ? "CONNECT WALLET FIRST (TESTNET)" : "CONNECT WALLET FIRST");
     return me2;
   }
   async toChallenge(cid, meta, players) {
@@ -53433,13 +53457,13 @@ var TestnetArenaAdapter = class {
   async createChallenge(cfg, _creator) {
     const me2 = await this.id();
     const a3 = await sdk();
-    if (cfg.stageMode === "random") throw new Error("RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY");
+    if (cfg.stageMode === "random") throw new Error("RANDOM RUNS RESOLVE BEFORE CREATE");
     const stakeBase = Math.round(cfg.stake * 1e6);
     {
       const algod = await algodClient();
       const acct = await algod.accountInformation(me2.address).do();
       const gonna = (acct.assets ?? []).find((x4) => Number(x4.assetId) === GONNA_ASA_TESTNET);
-      if (!gonna) throw new Error("OPT INTO $GONNA FIRST - ASA " + GONNA_ASA_TESTNET + " (TESTNET)");
+      if (!gonna) throw new Error("OPT INTO $GONNA FIRST - ASA " + GONNA_ASA_TESTNET + (arenaUsesTestnetChain() ? " (TESTNET)" : ""));
       if (Number(gonna.amount) < stakeBase) {
         throw new Error("NOT ENOUGH GONNA - NEED " + fmtGonna(stakeBase / 1e6) + ", WALLET HAS " + fmtGonna(Number(gonna.amount) / 1e6));
       }
@@ -53974,9 +53998,9 @@ function arenaMode() {
       window.localStorage.setItem(LS_ADAPTER, stored);
       return stored;
     }
-    return "mock";
+    return "live";
   } catch {
-    return "mock";
+    return "live";
   }
 }
 function arenaUsesTestnetChain() {
@@ -56027,7 +56051,7 @@ var ArenaUI = class {
     const c3 = this.current;
     if (!c3) return { act: "none" };
     const me2 = arenaAddress();
-    if (!this.adapter().claimForfeit) return this.fail("FORFEIT IS A TESTNET CONTRACT PATH");
+    if (!this.adapter().claimForfeit) return this.fail("FORFEIT IS A LIVE-CHAIN CONTRACT PATH");
     console.debug("[arena] CLAIM FORFEIT \u2014 start (card #" + c3.id + ")");
     void this.run(
       () => this.adapter().claimForfeit(c3.id, me2),
@@ -56590,7 +56614,7 @@ var ArenaUI = class {
       drawText2(c3, lines[i3][1], x4 + w5 - 10, 50 + i3 * 13, 1, i3 === 3 ? GOLD2 : "#c8ccd4", "right");
     }
     const acct = arenaSession().accountType;
-    drawTextSh2(c3, "NETWORK FEE: " + feeLine("create", acct, this.adapter().mode === "live"), VW / 2, 120, 1, acct === "falcon" ? PQCYAN2 : GRAY2, "center");
+    drawTextSh2(c3, "NETWORK FEE: " + feeLine("create", acct, arenaUsesTestnetChain()), VW / 2, 120, 1, acct === "falcon" ? PQCYAN2 : GRAY2, "center");
     if (acct === "falcon") {
       drawText2(c3, "FALCON ACCOUNT - PQ SIGNATURE PRICING", VW / 2, 132, 1, DIM2, "center");
       this.quantumSeal(c3, x4 + 10, 120, frame);
@@ -56626,7 +56650,7 @@ var ArenaUI = class {
     const lines = [
       ["STAKE", fmtStake(stake) + " $GONNA A SEAT"],
       ["POT", fmtStake(pot) + " $GONNA"],
-      ["FEE", feeLine(joiner ? "submit" : "create", arenaSession().accountType, this.adapter().mode === "live")],
+      ["FEE", feeLine(joiner ? "submit" : "create", arenaSession().accountType, arenaUsesTestnetChain())],
       ["FIGHTER", this.cfg.fighter.name]
     ];
     const ly = joiner ? 104 : 116;
@@ -56783,7 +56807,7 @@ var ArenaUI = class {
       this.drawVerdict(c3, frame, card);
     } else {
       const acct = arenaSession().accountType;
-      const testnet = this.adapter().mode === "live";
+      const testnet = arenaUsesTestnetChain();
       const myEntry = card.players.find((p4) => p4.address === me2) ?? null;
       const joiners = card.players.slice(1);
       const tableFull = card.players.length >= card.seatsTotal;

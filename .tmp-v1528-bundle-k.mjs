@@ -11,6 +11,7 @@ var TESTNET_CFG = {
   treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
   oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
   algodUrl: "https://testnet-api.algonode.cloud",
+  indexerUrl: "https://testnet-idx.algonode.cloud",
   oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
 };
 var MAINNET_CFG = {
@@ -21,16 +22,17 @@ var MAINNET_CFG = {
   // no legacy on mainnet
   gonnaAsa: 2582294183,
   // REAL mainnet $GONNA (same id as src/game/wallet.ts)
-  // M-4: NO OpUp donor app on mainnet — contract.py never references it
-  // (it is a CLIENT-side pooled-budget booster, not a contract dependency)
-  // and the mainnet bootstrap did only the GONNA opt-in. opupTxns() omits
-  // the donor calls when this is 0. If a create/join/close group ever hits
-  // the opcode budget on mainnet, deploy the donor (deploy/opup.ts) and
-  // fill this id — documented in the M-4 report.
-  opUpAppId: 0,
+  // M-4b: OpUp donor app mainnet (LEAD GO 2026-08-26) — create/join/close
+  // groups DO hit the opcode budget without donors: create_challenge runs
+  // ed25519verify_bare (~2700 cost) over the 700 single-call budget
+  // (proven live: logic eval error pc=1013 with opUpAppId 0). Same minimal
+  // approve-all shape as the testnet donor 769688641 (bytecode 0b8101,
+  // zero state) — deploy txid KDKCFKPCYZ2V3AMWSNRIPIIOX7MSZKUFKM6JULTFT7WPQAGANVEQ.
+  opUpAppId: 3686469118,
   treasuryAddr: "GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU",
   oracleAddr: "3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y",
   algodUrl: "https://mainnet-api.algonode.cloud",
+  indexerUrl: "https://mainnet-idx.algonode.cloud",
   oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
   // same Render service; flipped env-side to mainnet
 };
@@ -107,7 +109,8 @@ async function methodSelector(a, sig) {
 var TX_KEY = netLsKey("gonna.arena.txids");
 var RES_KEY = netLsKey("gonna.arena.resolved");
 var CLOSE_TX_KEY = netLsKey("gonna.arena.closetx");
-var INDEXER_TESTNET = "https://testnet-idx.algonode.cloud";
+var INDEXER_URL = NET.indexerUrl;
+var INDEXER_TESTNET = NET.indexerUrl;
 function b64ToBytes(s) {
   return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
 }
@@ -116,9 +119,13 @@ var STAGE_MEM_MAX = 500;
 function readStageCache() {
   try {
     const j = JSON.parse(window.localStorage.getItem(STAGE_KEY) ?? "{}");
-    return { fromCid: typeof j.fromCid === "number" ? j.fromCid : 0, stages: j.stages && typeof j.stages === "object" ? j.stages : {} };
+    return {
+      fromCid: typeof j.fromCid === "number" ? j.fromCid : 0,
+      stages: j.stages && typeof j.stages === "object" ? j.stages : {},
+      scannedThrough: typeof j.scannedThrough === "number" ? j.scannedThrough : 0
+    };
   } catch {
-    return { fromCid: 0, stages: {} };
+    return { fromCid: 0, stages: {}, scannedThrough: 0 };
   }
 }
 function writeStageCache(c) {
@@ -140,14 +147,30 @@ function applyStageScan(cache, hits) {
     if (h.stage !== null) stages[String(cid)] = h.stage;
     cid++;
   }
-  return { fromCid: cid, stages };
+  const scannedThrough = (cache.scannedThrough ?? 0) >= cache.fromCid ? cid : cache.scannedThrough ?? 0;
+  return { fromCid: cid, stages, scannedThrough };
 }
 var CREATE_SIG = "create_challenge(pay,axfer,uint64,uint64,uint64,uint64,byte[],uint64,byte[])uint64";
 var SPAWN_SIG = "spawn_rumble(pay,axfer,pay,uint64,uint64,uint64,byte[])uint64";
 var stageMemo = null;
 async function fetchArenaCreateStages(opts = {}) {
   if (!opts.force && stageMemo && Date.now() - stageMemo.at < 3e4) return stageMemo.stages;
-  const cache = readStageCache();
+  let cache = readStageCache();
+  if (!opts.force && cache.fromCid > 0 && (cache.scannedThrough ?? 0) < cache.fromCid) {
+    let hole = -1;
+    for (let c = 0; c < cache.fromCid; c++) {
+      if (!(String(c) in cache.stages)) {
+        hole = c;
+        break;
+      }
+    }
+    if (hole >= 0) {
+      console.debug("[arena] stage cache gap below watermark (cid " + hole + " < " + cache.fromCid + ") \u2014 forcing ONE full rescan");
+      cache = { fromCid: 0, stages: {}, scannedThrough: 0 };
+      writeStageCache(cache);
+      return fetchArenaCreateStages({ ...opts, force: true });
+    }
+  }
   const total = opts.total ?? await nextChallengeId();
   let out = cache;
   const need = Math.max(0, total - cache.fromCid);
@@ -161,7 +184,7 @@ async function fetchArenaCreateStages(opts = {}) {
     let token = null;
     const maxPages = opts.maxPages ?? 10;
     for (let page = 0; page < maxPages && hits.length < need; page++) {
-      const url = INDEXER_TESTNET + "/v2/transactions?application-id=" + ARENA_APP_ID + "&tx-type=appl&limit=100" + (token ? "&next=" + encodeURIComponent(token) : "");
+      const url = INDEXER_URL + "/v2/transactions?application-id=" + ARENA_APP_ID + "&tx-type=appl&limit=100" + (token ? "&next=" + encodeURIComponent(token) : "");
       const r = await fetch(url);
       if (!r.ok) throw new Error("indexer http " + r.status);
       const j = await r.json();

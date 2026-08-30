@@ -247,7 +247,12 @@ export async function handleSignScore(deps: Deps, rawBody: unknown, ip: string):
 
   // 3. score cap
   const cap = capFor(cfg.scoreCaps, body.stageMode, body.stageIdx ?? (body.stageMode === 'stage' ? stageCommit?.stage ?? null : null));
-  if (body.score > cap) return bad('score above cap');
+  // v17.0.5: log cap rejections too — the 500k stage cap silently refused a
+  // REAL 507,950 run on day 1 (Friedbean report); invisible in ops logs.
+  if (body.score > cap) {
+    logSignScoreReject('SCORE ABOVE CAP', body, { cap });
+    return bad('score above cap');
+  }
 
   // 4. run sanity (SPEC §3.2 rule 4)
   if (body.run.frames < 60 * 10) return bad('run sanity: frames below 600');

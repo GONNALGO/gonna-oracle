@@ -41,6 +41,7 @@ var registerContinueReceipt = async () => void 0;
 
 // src/game/arena/arenaKit.ts
 var ARENA_NETWORK = import.meta.env?.VITE_ARENA_NETWORK === "mainnet" ? "mainnet" : "testnet";
+var IS_MAINNET = ARENA_NETWORK === "mainnet";
 function netLsKey(base) {
   return base + "." + ARENA_NETWORK;
 }
@@ -572,7 +573,7 @@ var TestnetArenaAdapter = class {
   mode = "live";
   async id() {
     const me = providerRef() ? await providerRef()() : null;
-    if (!me) throw new Error("CONNECT WALLET FIRST (TESTNET)");
+    if (!me) throw new Error(arenaUsesTestnetChain() ? "CONNECT WALLET FIRST (TESTNET)" : "CONNECT WALLET FIRST");
     return me;
   }
   async toChallenge(cid, meta, players) {
@@ -651,13 +652,13 @@ var TestnetArenaAdapter = class {
   async createChallenge(cfg, _creator) {
     const me = await this.id();
     const a = await sdk();
-    if (cfg.stageMode === "random") throw new Error("RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY");
+    if (cfg.stageMode === "random") throw new Error("RANDOM RUNS RESOLVE BEFORE CREATE");
     const stakeBase = Math.round(cfg.stake * 1e6);
     {
       const algod = await algodClient();
       const acct = await algod.accountInformation(me.address).do();
       const gonna = (acct.assets ?? []).find((x) => Number(x.assetId) === GONNA_ASA_TESTNET);
-      if (!gonna) throw new Error("OPT INTO $GONNA FIRST - ASA " + GONNA_ASA_TESTNET + " (TESTNET)");
+      if (!gonna) throw new Error("OPT INTO $GONNA FIRST - ASA " + GONNA_ASA_TESTNET + (arenaUsesTestnetChain() ? " (TESTNET)" : ""));
       if (Number(gonna.amount) < stakeBase) {
         throw new Error("NOT ENOUGH GONNA - NEED " + fmtGonna(stakeBase / 1e6) + ", WALLET HAS " + fmtGonna(Number(gonna.amount) / 1e6));
       }
@@ -1167,6 +1168,34 @@ var TestnetArenaAdapter = class {
   }
 };
 var LS_ADAPTER = netLsKey("gonna.arena.adapter");
+function normMode(v) {
+  if (v === "live" || v === "mock") return v;
+  if (v === "testnet") return "live";
+  return null;
+}
+function arenaMode() {
+  try {
+    const q = normMode(new URLSearchParams(window.location.search).get("arena"));
+    if (q) {
+      window.localStorage.setItem(LS_ADAPTER, q);
+      return q;
+    }
+    if (window.location.hostname.includes("gonna.bond") && window.location.pathname.includes("arena-testnet")) {
+      return "live";
+    }
+    const stored = normMode(window.localStorage.getItem(LS_ADAPTER));
+    if (stored) {
+      window.localStorage.setItem(LS_ADAPTER, stored);
+      return stored;
+    }
+    return "live";
+  } catch {
+    return "live";
+  }
+}
+function arenaUsesTestnetChain() {
+  return !IS_MAINNET && arenaMode() === "live";
+}
 export {
   MockArenaAdapter,
   TestnetArenaAdapter,

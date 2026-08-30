@@ -37,10 +37,16 @@ export interface OracleConfig {
   tursoAuthToken?: string; // TURSO_AUTH_TOKEN (optional; never logged)
 }
 
-/** Generous M1 caps (mission brief): refined in M2 by deterministic replay. */
+/**
+ * v17.0.5: caps raised after live evidence — a legit LV1 run sealed 507,950
+ * and the 500k pre-filter refused a REAL score. The cap is ONLY a cheap
+ * pre-filter that saves replay CPU on absurd claims; the deterministic
+ * replay + exact-score equality behind it is the actual anti-cheat, so a
+ * generous cap is safe (frames stay bounded at 300k by the sanity gate).
+ */
 export const DEFAULT_SCORE_CAPS: ScoreCaps = {
-  full: 2_000_000,
-  stage: [500_000, 500_000, 500_000, 500_000, 500_000, 500_000, 500_000],
+  full: 5_000_000,
+  stage: [2_000_000, 2_000_000, 2_000_000, 2_000_000, 2_000_000, 2_000_000, 2_000_000],
 };
 
 const DEFAULT_ALGOD: Record<string, string> = {

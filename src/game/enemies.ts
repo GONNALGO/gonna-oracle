@@ -77,6 +77,8 @@ export class Enemy {
   escapeT = 0; // frames before the carrier bolts for the edge
   escaped = false; // slipped away: no drop, no score
   bonusDrop: BonusKind | null = null; // seeded drop rolled at wave composition
+  jukeT = 0; // v17.0.5: frames left in the cornered-juke burst
+  jukeDir: Facing = 1; // v17.0.5: juke burst direction
   // dive attack (drone)
   diveTX = 0;
   diveTY = 0;
@@ -328,13 +330,37 @@ export class Enemy {
         const dx0 = p.x - this.x;
         // ---- v15: GOLDEN CARRIER — true flee, never throws a punch ----
         if (this.kind === 'carrier') {
-          this.face = dx0 >= 0 ? -1 : 1; // back turned: it RUNS
+          const leftEdge = g.camX + 16;
+          const rightEdge = g.camX + VW - 16;
           const adx = Math.abs(dx0);
-          if (adx < 130) this.x -= Math.sign(dx0) * spd * 1.35; // sprint away
-          else this.x -= Math.sign(dx0) * spd * 0.4; // drift to comfort range
-          const dy = this.y - p.y;
-          if (Math.abs(dy) < 12) this.y = clamp(this.y + (g.rng.chance(0.5) ? 1 : -1) * spd, LANE_TOP, LANE_BOT);
-          this.x = clamp(this.x, g.camX + 16, g.camX + VW - 16);
+          if (this.jukeT > 0) {
+            // v17.0.5: cornered JUKE — burst PAST the hunter toward the far
+            // side instead of standing pinned at the edge with its back
+            // turned (Prince's live report: "sembra buggato, non attacca").
+            // Faces the run direction, still fully hittable on the way.
+            this.jukeT--;
+            this.face = this.jukeDir;
+            this.x += this.jukeDir * spd * 2.6;
+            this.y = clamp(this.y + this.vy * spd * 1.4, LANE_TOP, LANE_BOT);
+          } else {
+            this.face = dx0 >= 0 ? -1 : 1; // back turned: it RUNS
+            if (adx < 130) this.x -= Math.sign(dx0) * spd * 1.35; // sprint away
+            else this.x -= Math.sign(dx0) * spd * 0.4; // drift to comfort range
+            const dy = this.y - p.y;
+            if (Math.abs(dy) < 12) this.y = clamp(this.y + (g.rng.chance(0.5) ? 1 : -1) * spd, LANE_TOP, LANE_BOT);
+            // v17.0.5: cornered detector — pinned at the screen edge, hunter
+            // closing in, flee direction pointing OFF-screen: juke across.
+            const pinnedLeft = this.x <= leftEdge + 1 && dx0 > 0;
+            const pinnedRight = this.x >= rightEdge - 1 && dx0 < 0;
+            if ((pinnedLeft || pinnedRight) && adx < 150) {
+              this.jukeT = 42;
+              this.jukeDir = (pinnedLeft ? 1 : -1) as Facing;
+              this.vy = g.rng.chance(0.5) ? 1 : -1; // seeded lane dodge
+              g.fx.popup(this.x, this.y - 72, 'JUKED!', '#f5c542');
+              g.audio.swing();
+            }
+          }
+          this.x = clamp(this.x, leftEdge, rightEdge);
           break;
         }
         // ---- v5: MOLTOTOV SNEK — kite the player, lob fire from afar ----

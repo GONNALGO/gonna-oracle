@@ -96,6 +96,7 @@ var TESTNET_CFG = {
   treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
   oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
   algodUrl: "https://testnet-api.algonode.cloud",
+  indexerUrl: "https://testnet-idx.algonode.cloud",
   oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
 };
 var MAINNET_CFG = {
@@ -106,16 +107,17 @@ var MAINNET_CFG = {
   // no legacy on mainnet
   gonnaAsa: 2582294183,
   // REAL mainnet $GONNA (same id as src/game/wallet.ts)
-  // M-4: NO OpUp donor app on mainnet — contract.py never references it
-  // (it is a CLIENT-side pooled-budget booster, not a contract dependency)
-  // and the mainnet bootstrap did only the GONNA opt-in. opupTxns() omits
-  // the donor calls when this is 0. If a create/join/close group ever hits
-  // the opcode budget on mainnet, deploy the donor (deploy/opup.ts) and
-  // fill this id — documented in the M-4 report.
-  opUpAppId: 0,
+  // M-4b: OpUp donor app mainnet (LEAD GO 2026-08-26) — create/join/close
+  // groups DO hit the opcode budget without donors: create_challenge runs
+  // ed25519verify_bare (~2700 cost) over the 700 single-call budget
+  // (proven live: logic eval error pc=1013 with opUpAppId 0). Same minimal
+  // approve-all shape as the testnet donor 769688641 (bytecode 0b8101,
+  // zero state) — deploy txid KDKCFKPCYZ2V3AMWSNRIPIIOX7MSZKUFKM6JULTFT7WPQAGANVEQ.
+  opUpAppId: 3686469118,
   treasuryAddr: "GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU",
   oracleAddr: "3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y",
   algodUrl: "https://mainnet-api.algonode.cloud",
+  indexerUrl: "https://mainnet-idx.algonode.cloud",
   oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
   // same Render service; flipped env-side to mainnet
 };
@@ -429,7 +431,7 @@ var TestnetArenaAdapter = class {
   mode = "live";
   async id() {
     const me = providerRef() ? await providerRef()() : null;
-    if (!me) throw new Error("CONNECT WALLET FIRST (TESTNET)");
+    if (!me) throw new Error(arenaUsesTestnetChain() ? "CONNECT WALLET FIRST (TESTNET)" : "CONNECT WALLET FIRST");
     return me;
   }
   async toChallenge(cid, meta, players) {
@@ -508,13 +510,13 @@ var TestnetArenaAdapter = class {
   async createChallenge(cfg, _creator) {
     const me = await this.id();
     const a = await sdk();
-    if (cfg.stageMode === "random") throw new Error("RANDOM RUNS ON MAINNET - TESTNET IS FULL/SINGLE ONLY");
+    if (cfg.stageMode === "random") throw new Error("RANDOM RUNS RESOLVE BEFORE CREATE");
     const stakeBase = Math.round(cfg.stake * 1e6);
     {
       const algod = await algodClient();
       const acct = await algod.accountInformation(me.address).do();
       const gonna = (acct.assets ?? []).find((x) => Number(x.assetId) === GONNA_ASA_TESTNET);
-      if (!gonna) throw new Error("OPT INTO $GONNA FIRST - ASA " + GONNA_ASA_TESTNET + " (TESTNET)");
+      if (!gonna) throw new Error("OPT INTO $GONNA FIRST - ASA " + GONNA_ASA_TESTNET + (arenaUsesTestnetChain() ? " (TESTNET)" : ""));
       if (Number(gonna.amount) < stakeBase) {
         throw new Error("NOT ENOUGH GONNA - NEED " + fmtGonna(stakeBase / 1e6) + ", WALLET HAS " + fmtGonna(Number(gonna.amount) / 1e6));
       }
@@ -1024,6 +1026,34 @@ var TestnetArenaAdapter = class {
   }
 };
 var LS_ADAPTER = netLsKey("gonna.arena.adapter");
+function normMode(v) {
+  if (v === "live" || v === "mock") return v;
+  if (v === "testnet") return "live";
+  return null;
+}
+function arenaMode() {
+  try {
+    const q = normMode(new URLSearchParams(window.location.search).get("arena"));
+    if (q) {
+      window.localStorage.setItem(LS_ADAPTER, q);
+      return q;
+    }
+    if (window.location.hostname.includes("gonna.bond") && window.location.pathname.includes("arena-testnet")) {
+      return "live";
+    }
+    const stored = normMode(window.localStorage.getItem(LS_ADAPTER));
+    if (stored) {
+      window.localStorage.setItem(LS_ADAPTER, stored);
+      return stored;
+    }
+    return "live";
+  } catch {
+    return "live";
+  }
+}
+function arenaUsesTestnetChain() {
+  return !IS_MAINNET && arenaMode() === "live";
+}
 
 // src/game/arena/shareCard.ts
 var STAGE_NAMES = ["GHETTO GONNA", "PUMP HARBOR", "WALL STREET", "CONSENSUS", "THE HOUSE", "LAUNCHPAD", "THRONE ROOM"];

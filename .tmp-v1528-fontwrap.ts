@@ -1,5 +1,5 @@
-export * from '/mnt/agents/output/gonnafight-arena-export/src/game/font';
-import { drawText as od, drawTextSh as ods } from '/mnt/agents/output/gonnafight-arena-export/src/game/font';
+export * from '/mnt/agents/output/monorepo-clone/src/game/font';
+import { drawText as od, drawTextSh as ods } from '/mnt/agents/output/monorepo-clone/src/game/font';
 export const TEXTLOG = [];
 export function drawText(ctx, str, x, y, scale, color, align) {
   TEXTLOG.push({ str, x, y, scale, color, align: align ?? 'left' });
