@@ -47,9 +47,16 @@ export function oracleIsDev(): boolean {
 }
 
 // honest one-liner for the wizard status row (arenaUI create screen)
+// v17.0.6 (Prince decree): NEVER show the raw hostname — the Render service
+// slug still says "testnet" from its test-era birth and a paying mainnet
+// player must NEVER read that word. Mainnet shows the network, period.
+// A custom ?oracle= URL (QA only) still shows its host so QA sees the truth.
 export function oracleLine(): string {
   if (oracleIsDev()) return 'QA DEV ORACLE - LOCAL KEY (NEVER SHIPPED)';
-  return 'SERVER ORACLE - ' + oracleBaseUrl().replace(/^https?:\/\//, '');
+  const base = oracleBaseUrl();
+  const isDefault = base === ORACLE_BASE_URL_DEFAULT;
+  if (isDefault) return ARENA_NETWORK === 'mainnet' ? 'SERVER ORACLE - MAINNET' : 'SERVER ORACLE - TESTNET';
+  return 'CUSTOM ORACLE - ' + base.replace(/^https?:\/\//, '');
 }
 
 // ---------- errors: SPEC §3.5 ({error: reason}; 429 + Retry-After) ----------
