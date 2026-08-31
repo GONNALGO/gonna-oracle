@@ -497,6 +497,7 @@ export class Game implements GameCtx {
   // recorded ONLY while a sealed arena run is live. Capped at INPUT_LOG_CAP
   // frames; an overrun is honestly flagged `truncated`, never silently cut.
   private inputLogMasks: Uint8Array | null = null;
+  private inputLogEdges: Uint8Array | null = null; // v17.0.10: GIL v3 edge stream
   private inputLogFrames = 0;
   private inputLogTruncated = false;
   // v16.1 (SPEC-m2 §4): a FULL-mode arena run swaps mathRng for ONE seeded
@@ -513,6 +514,7 @@ export class Game implements GameCtx {
     this.arenaRunSeedLabel = stageMode === 'full' ? (opts?.runSeed ?? null) : null;
     this.arenaRunRng = stageMode === 'full' && opts?.runSeed ? makeRngFromLabel(opts.runSeed) : null;
     this.inputLogMasks = new Uint8Array(INPUT_LOG_CAP); // v16: fresh input log per run
+    this.inputLogEdges = new Uint8Array(INPUT_LOG_CAP); // v17.0.10: GIL v3 edges
     this.inputLogFrames = 0;
     this.inputLogTruncated = false;
     this.startNewGame(); // fresh run: score/lives/stage 0 (loadStage picks up arenaRunRng)
@@ -540,16 +542,18 @@ export class Game implements GameCtx {
         durationSec: frames / 60,
         build,
         inputLogB64: encodeInputLogB64({
-          v: 2,
+          v: 3,
           build,
           seedLabel,
           frames,
           truncated: this.inputLogTruncated,
           masks: this.inputLogMasks.subarray(0, frames),
+          edges: this.inputLogEdges ? this.inputLogEdges.subarray(0, frames) : null,
         }),
       };
     }
     this.inputLogMasks = null;
+    this.inputLogEdges = null;
     if (this.descent) {
       saveBestWave(this.descent.wave, this.descent.seedLabel); // v15
       this.descent = null; // the seal screen owns the score now
@@ -2220,7 +2224,13 @@ export class Game implements GameCtx {
     // so its length would be unrecoverable — M2-0 finding §4.1).
     if (this.arenaRun && this.inputLogMasks && this.scene === 'play') {
       if (this.inputLogFrames < INPUT_LOG_CAP) {
-        this.inputLogMasks[this.inputLogFrames++] = maskFromDown(inp.down);
+        // v17.0.10 (Prince REPLAY MISMATCH, GIL v3): record the PENDING EDGE
+        // mask next to the levels. A fast mobile tap can go down+up between
+        // two steps — the sim consumes the edge this step while the sampled
+        // level is 0, so a levels-only tape loses the press forever.
+        this.inputLogMasks[this.inputLogFrames] = maskFromDown(inp.down);
+        if (this.inputLogEdges) this.inputLogEdges[this.inputLogFrames] = maskFromDown(inp.pressed as never);
+        this.inputLogFrames++;
       } else {
         this.inputLogTruncated = true; // honest cut at the 300k cap
       }

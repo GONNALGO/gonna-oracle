@@ -110,7 +110,7 @@ export interface ReplayResult {
  * first checkpoint — deterministic in tests). In-process by design for M2
  * (frame cap 300k + rate limits); worker_threads isolation = M3 hardening.
  */
-export function replayCampaign(game: any, masks: Uint8Array, timeoutMs: number): ReplayResult {
+export function replayCampaign(game: any, masks: Uint8Array, timeoutMs: number, edges?: Uint8Array): ReplayResult {
   const down = game.input.down;
   const pressed = game.input.pressed;
   const t0 = Date.now();
@@ -131,12 +131,25 @@ export function replayCampaign(game: any, masks: Uint8Array, timeoutMs: number):
       game.step();
       continue;
     }
-    const m = masks[i++]!;
-    for (let b = 0; b < 8; b++) {
-      const v = ((m >> b) & 1) === 1;
-      if (v && !down[BTNS[b]!]) pressed[BTNS[b]!] = true;
-      down[BTNS[b]!] = v;
+    const m = masks[i]!;
+    if (edges) {
+      // GIL v3 (v17.0.10): apply the RECORDED edges verbatim — a fast mobile
+      // tap that went down+up inside one frame left no level trace but its
+      // edge DID land in the tape, so the replay stays pixel-perfect.
+      const e = edges[i]!;
+      for (let b = 0; b < 8; b++) {
+        down[BTNS[b]!] = ((m >> b) & 1) === 1;
+        pressed[BTNS[b]!] = ((e >> b) & 1) === 1;
+      }
+    } else {
+      // GIL v1/v2 legacy: regenerate rising edges from level transitions.
+      for (let b = 0; b < 8; b++) {
+        const v = ((m >> b) & 1) === 1;
+        if (v && !down[BTNS[b]!]) pressed[BTNS[b]!] = true;
+        down[BTNS[b]!] = v;
+      }
     }
+    i++;
     game.step();
   }
   return {
@@ -205,6 +218,7 @@ export class ReplayVerifier {
     stageIdx: number | null;
     seedLabel: string;
     masks: Uint8Array;
+    edges?: Uint8Array; // GIL v3 recorded edge stream (verbatim, not regenerated)
     score: number;
   }): Promise<ReplayCheck> {
     const engP = this.loadBundle(opts.build);
@@ -223,7 +237,7 @@ export class ReplayVerifier {
       // EXACT client boot entries (v16.1): same scene/RNG wiring as the live run
       if (opts.stageMode === 'stage') startStageRun(game, opts.stageIdx ?? 0, opts.seedLabel);
       else startFullRunSeeded(eng, game, opts.seedLabel);
-      result = replayCampaign(game, opts.masks, this.timeoutMs);
+      result = replayCampaign(game, opts.masks, this.timeoutMs, opts.edges);
     } catch (e) {
       // diag: where the engine was when the abort fired (score/scene only —
       // the replay contract has no per-frame client trace to diff against)

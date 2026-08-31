@@ -50,8 +50,11 @@ const bad = (reason: string, status = 400): Reply => ({ status, body: { error: r
 //   u16 buildLen + utf8 build
 //   u16 seedLen  + utf8 seedLabel
 //   u32 frames         (<= 300000)
-//   frames x u8        per-frame button bitmask
-// M1: structural validation ONLY. M2: v2 logs are replay-verified (below).
+//   v1/v2: frames x u8     per-frame button LEVEL bitmask
+//   v3:    frames x u8 pairs  per-frame [levelMask, edgeMask]
+// M1: structural validation ONLY. M2: v2/v3 logs are replay-verified (below).
+// v3 (v17.0.10): the edge stream makes fast sub-frame mobile taps replayable
+// (levels-only v2 tapes silently lost down+up-inside-one-frame presses).
 // ---------------------------------------------------------------------------
 export const INPUT_LOG_CAP = 300_000;
 
@@ -85,10 +88,10 @@ export function encodeInputLog(
   return out;
 }
 
-export function decodeInputLog(raw: Uint8Array): { header: InputLogHeader; bitmask: Uint8Array } | null {
+export function decodeInputLog(raw: Uint8Array): { header: InputLogHeader; bitmask: Uint8Array; edges: Uint8Array | null } | null {
   if (raw.length < 3 + 1 + 1 + 2 + 2 + 4) return null;
   if (raw[0] !== 0x47 || raw[1] !== 0x49 || raw[2] !== 0x4c) return null; // 'GIL'
-  if (raw[3] !== 1 && raw[3] !== 2) return null; // version (v1 legacy / v2 play-only)
+  if (raw[3] !== 1 && raw[3] !== 2 && raw[3] !== 3) return null; // v1 legacy / v2 levels / v3 levels+edges
   const flags = raw[4]!;
   if (flags & ~1) return null; // unknown flag bits
   const dv = new DataView(raw.buffer, raw.byteOffset);
@@ -102,9 +105,19 @@ export function decodeInputLog(raw: Uint8Array): { header: InputLogHeader; bitma
   const seedLabel = new TextDecoder().decode(raw.subarray(p2 + 2, p3));
   const frames = dv.getUint32(p3, false);
   if (frames > INPUT_LOG_CAP) return null;
+  if (raw[3] === 3) {
+    if (raw.length !== p3 + 4 + frames * 2) return null; // exactly 2 bytes per frame
+    const bitmask = new Uint8Array(frames);
+    const edges = new Uint8Array(frames);
+    for (let i = 0; i < frames; i++) {
+      bitmask[i] = raw[p3 + 4 + i * 2]!;
+      edges[i] = raw[p3 + 4 + i * 2 + 1]!;
+    }
+    return { header: { v: 3, build, seedLabel, frames, truncated: (flags & 1) !== 0 }, bitmask, edges };
+  }
   const bitmask = raw.subarray(p3 + 4);
   if (bitmask.length !== frames) return null; // exactly 1 byte per frame, no trailing data
-  return { header: { v: raw[3]!, build, seedLabel, frames, truncated: (flags & 1) !== 0 }, bitmask };
+  return { header: { v: raw[3]!, build, seedLabel, frames, truncated: (flags & 1) !== 0 }, bitmask, edges: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +173,8 @@ export function parseSignScoreBody(raw: unknown): SignScoreBody | null {
   if (!isStr(r['seedLabel'], 64)) return null;
   if (!Number.isInteger(r['frames']) || (r['frames'] as number) < 0) return null;
   if (typeof r['durationSec'] !== 'number' || !Number.isFinite(r['durationSec']) || (r['durationSec'] as number) < 0) return null;
-  if (r['inputLogB64'] != null && !isStr(r['inputLogB64'], 600_000)) return null;
+  // v17.0.10: GIL v3 doubles the frame bytes (levels+edges) -> b64 ceiling 1.2MB
+  if (r['inputLogB64'] != null && !isStr(r['inputLogB64'], 1_200_000)) return null;
   if (b['continueRef'] != null && !isStr(b['continueRef'], 64)) return null;
   return {
     cid: b['cid'] as number,
@@ -305,6 +319,7 @@ export async function handleSignScore(deps: Deps, rawBody: unknown, ip: string):
         stageIdx: body.stageMode === 'stage' ? (body.stageIdx ?? stageCommit?.stage ?? null) : null,
         seedLabel: log.header.seedLabel,
         masks: log.bitmask,
+        edges: log.edges ?? undefined,
         score: body.score,
       });
       if (!r.ok) {

@@ -28,13 +28,14 @@ function ok(cond, label) {
 }
 
 // ================= [0] SOURCE ==============================================
-console.log('\n[0] SOURCE: recorder da play, GIL v=2, seeded campaign wiring');
+console.log('\n[0] SOURCE: recorder da play, GIL v=3 (levels+edges), seeded campaign wiring');
 {
   const eng = readFileSync(join(ROOT, 'src/game/engine.ts'), 'utf8');
   const ui = readFileSync(join(ROOT, 'src/game/arena/arenaUI.ts'), 'utf8');
   const il = readFileSync(join(ROOT, 'src/game/arena/inputLog.ts'), 'utf8');
   ok(eng.includes("if (this.arenaRun && this.inputLogMasks && this.scene === 'play') {"), 'recorder gated on scene===play (intro NEVER in the buffer)');
-  ok(eng.includes('v: 2,'), 'engine emits the log header with v=2');
+  ok(eng.includes('v: 3,'), 'engine emits the log header with v=3 (v17.0.10: levels+edges)');
+  ok(eng.includes('this.inputLogEdges[this.inputLogFrames] = maskFromDown(inp.pressed as never);'), 'recorder stores the PENDING EDGE mask each play frame (sub-frame tap fix)');
   ok(eng.includes("seedLabel = this.descent ? this.descent.seedLabel : (this.arenaRunSeedLabel ?? 'UNSEEDED')"), 'sealed seedLabel = REAL run seed (UNSEEDED only as fallback)');
   ok(eng.includes("this.arenaRunRng = stageMode === 'full' && opts?.runSeed ? makeRngFromLabel(opts.runSeed) : null;"), 'full-mode arena run seeds ONE campaign stream');
   ok(eng.includes('this.rng = this.arenaRunRng ?? mathRng;'), 'loadStage: seeded stream ONLY inside arenaRun');
@@ -42,7 +43,7 @@ console.log('\n[0] SOURCE: recorder da play, GIL v=2, seeded campaign wiring');
   ok(eng.includes('debugFullRun(seedLabel: string): void'), 'CI/replay entry: debugFullRun (exact arena full-mode boot)');
   ok(ui.includes("return this.nextIdHint !== null ? 'RUN-' + this.nextIdHint : 'DRAFT-' + this.sealDraftId;"), 'arenaUI runSeedTag: RUN-<cid> (creator, DRAFT fallback)');
   ok(ui.includes("runSeed: 'RUN-' + c.id,"), 'arenaUI joiner runSeed: RUN-<card id>');
-  ok(il.includes('export const INPUT_LOG_VERSION = 2;'), 'codec: INPUT_LOG_VERSION = 2');
+  ok(il.includes('export const INPUT_LOG_VERSION = 3;'), 'codec: INPUT_LOG_VERSION = 3');
   ok(il.includes('export const INPUT_LOG_MIN_VERSION = 1;'), 'codec: decode floor v1 (backward compat)');
 }
 
@@ -52,15 +53,18 @@ const BUNDLE_IL = join(ROOT, '.tmp-v1610-inputlog.mjs');
 execFileSync('npx', ['esbuild', 'src/game/arena/inputLog.ts', '--bundle', '--format=esm', '--platform=node', `--outfile=${BUNDLE_IL}`], { cwd: ROOT, stdio: 'pipe' });
 const il = await import(BUNDLE_IL);
 {
-  ok(il.INPUT_LOG_VERSION === 2 && il.INPUT_LOG_CAP === 300000, 'VERSION=2, CAP=300000');
+  ok(il.INPUT_LOG_VERSION === 3 && il.INPUT_LOG_CAP === 300000, 'VERSION=3, CAP=300000');
   const masks = new Uint8Array(5000);
   let x = 0x9e3779b9;
   for (let i = 0; i < masks.length; i++) { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; masks[i] = x & 255; }
-  const log = { v: 2, build: 'v1610test', seedLabel: 'RUN-4242', frames: masks.length, truncated: false, masks };
+  const log = { v: 2, build: 'v1610test', seedLabel: 'RUN-4242', frames: masks.length, truncated: false, masks, edges: null };
   const enc = il.encodeInputLog(log);
   ok(enc[3] === 2, 'encode ALWAYS emits version byte 2');
   const back = il.decodeInputLog(enc);
   ok(back.v === 2 && back.build === log.build && back.seedLabel === 'RUN-4242' && back.frames === 5000 && !back.truncated, 'v2 roundtrip: header identical');
+  const edges = new Uint8Array(5000); for (let i = 0; i < 5000; i++) edges[i] = (i * 7) & 0xff;
+  const back3 = il.decodeInputLog(il.encodeInputLog({ v: 3, build: 'v1610test', seedLabel: 'RUN-4242', frames: 5000, truncated: false, masks, edges }));
+  ok(back3.v === 3 && back3.edges !== null && back3.edges.length === 5000 && back3.edges[4999] === edges[4999] && back3.masks[123] === masks[123], 'v3 roundtrip: levels+edges byte-exact');
   ok(back.masks.length === 5000 && back.masks.every((v, i) => v === masks[i]), 'v2 roundtrip: mask bytes identical');
   // v1 legacy: same layout, version byte 1 -> decodes (server treats as legacy)
   const legacy = enc.slice();
@@ -78,7 +82,7 @@ const il = await import(BUNDLE_IL);
   ok(throws(over), 'decode rejects frames > 300000 (cap enforced in decode)');
   // encode cap + honest truncation still intact
   const big = new Uint8Array(il.INPUT_LOG_CAP + 100).fill(0xaa);
-  const decBig = il.decodeInputLog(il.encodeInputLog({ v: 2, build: 'DEV', seedLabel: 'PIT-1', frames: big.length, truncated: false, masks: big }));
+  const decBig = il.decodeInputLog(il.encodeInputLog({ v: 2, build: 'DEV', seedLabel: 'PIT-1', frames: big.length, truncated: false, masks: big, edges: null }));
   ok(decBig.frames === il.INPUT_LOG_CAP && decBig.truncated === true, 'over-cap encode: honest cut + truncated flag');
 }
 
@@ -170,7 +174,7 @@ console.log('\n[2] RECORDER: intro never recorded, sealed v2 log replays to the 
   const sealedF = f.arena.sealedRun;
   ok(!!sealedF && sealedF.seedLabel === 'RUN-4242', 'sealed FULL RUN carries the REAL seedLabel RUN-4242');
   const decF = il.decodeInputLogB64(sealedF.inputLogB64);
-  ok(decF.v === 2 && decF.frames === 600 && decF.build === sealedF.build, 'sealed full-run log: v=2, 600 play frames, build pinned');
+  ok(decF.v === 3 && decF.frames === 600 && decF.build === sealedF.build && decF.edges && decF.edges.length === 600, 'sealed full-run log: v=3 + edges, 600 play frames, build pinned');
 
   // death path (stage run): idle in THE DESCENT -> mobbed -> sealed v2 + PIT-<cid>
   const d = replay.bootGame(eng);
@@ -180,7 +184,7 @@ console.log('\n[2] RECORDER: intro never recorded, sealed v2 log replays to the 
   const sealed = d.arena.sealedRun;
   ok(!!sealed && sealed.seedLabel === 'PIT-9001', 'sealed stage run carries the REAL seedLabel PIT-9001');
   const dec = il.decodeInputLogB64(sealed.inputLogB64);
-  ok(dec.v === 2 && dec.frames === sealed.frames && dec.frames > 0, 'sealed log header: v=2, frames=' + dec.frames);
+  ok(dec.v === 3 && dec.frames === sealed.frames && dec.frames > 0 && dec.edges && dec.edges.length === dec.frames, 'sealed log header: v=3 + edges, frames=' + dec.frames);
   const d2 = replay.bootGame(eng);
   d2.startArenaRun('stage', 2, { seedTag: 'PIT-9001' });
   replay.replayMasks(d2, dec.masks);

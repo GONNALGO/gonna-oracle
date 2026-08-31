@@ -79,6 +79,23 @@ console.log('\n[0] SOURCE: the gate is chain-derived, the units are explicit');
   const aw = readFileSync(join(ROOT, 'src/game/arena/arenaWallet.ts'), 'utf8');
   ok(aw.includes('if (!isPeraSessionFatal(e)) throw e;'), 'v17.0.9: arena->gate sign fallback rethrows non-fatal errors (one group, one request)');
   ok(!aw.includes('signer threw, trying gate fallback'), 'v17.0.9: the catch-all fallback that fired duplicate requests is gone');
+  // v17.0.10 (Prince REPLAY MISMATCH, mobile taps): GIL v3 = levels + edges per frame.
+  // Root cause PROVEN by repro-subframe: input.ts fires pressed on the DOM event and
+  // clears levels on keyup — a tap shorter than one frame lands in the sim but never
+  // in a levels-only tape, so the regenerated replay lost the press and died early
+  // (live "stuck@<39300>" vs recorded 41100). The replay driver applies v3 edges VERBATIM.
+  const ilSrc = readFileSync(join(ROOT, 'src/game/arena/inputLog.ts'), 'utf8');
+  const engSrc = readFileSync(join(ROOT, 'src/game/engine.ts'), 'utf8');
+  const repSrc = readFileSync(join(ROOT, 'oracle-server/src/replay/replayer.ts'), 'utf8');
+  const verSrc = readFileSync(join(ROOT, 'oracle-server/src/verify.ts'), 'utf8');
+  ok(ilSrc.includes('export const INPUT_LOG_VERSION = 3;'), 'v17.0.10: codec VERSION=3');
+  ok(ilSrc.includes('edges: Uint8Array | null;'), 'v17.0.10: InputLog carries the edge stream');
+  ok(engSrc.includes('this.inputLogEdges[this.inputLogFrames] = maskFromDown(inp.pressed as never);'), 'v17.0.10: recorder stores pending edges each play frame');
+  ok(engSrc.includes('this.inputLogEdges = new Uint8Array(INPUT_LOG_CAP);'), 'v17.0.10: fresh edge buffer per arena run');
+  ok(repSrc.includes('edges?: Uint8Array; // GIL v3 recorded edge stream'), 'v17.0.10: verifyRun threads the edge stream');
+  ok(repSrc.includes('pressed[BTNS[b]!] = ((e >> b) & 1) === 1;'), 'v17.0.10: replay driver applies recorded edges verbatim');
+  ok(verSrc.includes("raw[3] !== 1 && raw[3] !== 2 && raw[3] !== 3"), 'v17.0.10: server codec accepts v3');
+  ok(verSrc.includes('1_200_000'), 'v17.0.10: sign-score body ceiling raised for the double-size v3 tape');
   ok(ui.includes("h.winnerName + ' WON ' + fmtAmount(takes) + ' $GONNA'"), 'HISTORY head: WON x $GONNA (unit explicit)');
   ok(ui.includes("'TIE - REFUND ' + (Number.isFinite(h.stake) ? fmtAmount(h.stake) : '—') + ' $GONNA EACH'"), 'HISTORY head: tie/refund row says REFUND x $GONNA EACH');
   ok(ui.includes("h.winner ? h.winnerName + ' WON THE POT' : 'TIE - ALL REFUNDED'"), 'battle detail: WON THE POT / TIE - ALL REFUNDED');

@@ -96,7 +96,7 @@ export function startStageRun(game, stageIdx, seedLabel) {
 //   - play: consume one mask (levels + rising-edge pressed), step.
 // Works for both DESCENT stage runs and the seeded FULL campaign.
 // ---------------------------------------------------------------------------
-export function replayCampaign(game, masks, { timeoutMs = 30_000 } = {}) {
+export function replayCampaign(game, masks, { timeoutMs = 30_000, edges = null } = {}) {
   const down = game.input.down;
   const pressed = game.input.pressed;
   const hashes = [];
@@ -113,12 +113,22 @@ export function replayCampaign(game, masks, { timeoutMs = 30_000 } = {}) {
     if (sc === 'intro') { game.step(); continue; } // faithful: the client stepped these 151 frames
     if (sc === 'clear' || sc === 'victory') { game.input.pressed.start = true; game.step(); continue; }
     if (sc !== 'play') { game.step(); continue; }
-    const m = masks[i++];
-    for (let b = 0; b < 8; b++) {
-      const v = ((m >> b) & 1) === 1;
-      if (v && !down[BTNS[b]]) pressed[BTNS[b]] = true;
-      down[BTNS[b]] = v;
+    const m = masks[i];
+    if (edges) {
+      // GIL v3 (v17.0.10): RECORDED edges, verbatim — sub-frame mobile taps
+      const e = edges[i];
+      for (let b = 0; b < 8; b++) {
+        down[BTNS[b]] = ((m >> b) & 1) === 1;
+        pressed[BTNS[b]] = ((e >> b) & 1) === 1;
+      }
+    } else {
+      for (let b = 0; b < 8; b++) {
+        const v = ((m >> b) & 1) === 1;
+        if (v && !down[BTNS[b]]) pressed[BTNS[b]] = true;
+        down[BTNS[b]] = v;
+      }
     }
+    i++;
     game.step();
     if (i % 60 === 0) hashes.push(game.simHash());
   }
