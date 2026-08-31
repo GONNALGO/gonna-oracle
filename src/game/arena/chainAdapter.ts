@@ -148,6 +148,10 @@ export interface ArenaAdapter {
   // v2: duel seat clock — claim the stake of an UNSIGNED opponent whose
   // seated_at + SEAT_TTL has expired (testnet contract only; mock optional)
   claimForfeit?(id: number, address: string): Promise<ClaimResult>;
+  // v17.0.8: +7d permissionless sweep — full refund of every payer, zero fee
+  // (catastrophe_refund). The only exit for an expired card whose joiners
+  // never signed (contract blocks claim/resolve/forfeit there).
+  claimCatastrophe?(id: number, address: string): Promise<ClaimResult>;
   earlyClose(id: number, address: string): Promise<Challenge>;
   listOpenChallenges(): Promise<Challenge[]>;
   myChallenges(address: string): Promise<Challenge[]>;
@@ -449,10 +453,20 @@ export type CloseGate =
   | { kind: 'claim' } // zero joiners, expired: claim() full refund, zero fee
   | { kind: 'resolve' } // resolvable NOW (full + all signed, or expired with a signed joiner)
   | { kind: 'forfeit' } // duel: the silent unsigned seat's clock lapsed -> claim_forfeit
+  | { kind: 'catastrophe' } // expired + unresolvable, deadline+7d passed: permissionless full sweep
   | { kind: 'locked' }; // joiners seated, nothing settles it yet — scores or the timer
 
+// contract.py: CATASTROPHE_WINDOW = 7 * 24 * 3600
+export const CATASTROPHE_MS = 7 * 24 * 3600 * 1000;
+
 export function closeGate(card: Challenge, me: string | null, nowMs = Date.now()): CloseGate | null {
-  if (me === null || card.creator !== me) return null; // not the creator's call
+  if (me === null) return null;
+  // v17.0.8: the +7d sweep is PERMISSIONLESS (any payer may call it) — the
+  // gate opens to every seated address, not just the creator. Every other
+  // kind stays the creator's call.
+  const isCreator = card.creator === me;
+  const isPayer = isCreator || card.players.some((p) => p.address === me);
+  if (!isPayer) return null;
   const live = card.status === 'open' || card.status === 'full';
   if (!live && card.status !== 'expired') return null; // terminal card: nothing to gate
   const joiners = card.players.slice(1); // seat 0 is the creator — joiners are seats_taken
@@ -463,7 +477,13 @@ export function closeGate(card: Challenge, me: string | null, nowMs = Date.now()
   if ((live && tableFull && allSigned) || (card.status === 'expired' && joinerSigned)) return { kind: 'resolve' };
   // duel seat clock (live, and post-deadline too — claim_forfeit has no deadline check)
   if (duelForfeitInfo(card, me, nowMs, { includeExpired: true })?.kind === 'claimable') return { kind: 'forfeit' };
-  if (joiners.length === 0) return live ? { kind: 'cancel' } : { kind: 'claim' };
+  if (joiners.length === 0) {
+    if (!isCreator) return null; // claim/cancel are creator-only on-chain
+    return live ? { kind: 'cancel' } : { kind: 'claim' };
+  }
+  // v17.0.8: expired, joiners seated, nobody can resolve — the +7d sweep is
+  // the LAST door. Before the window: honestly locked (UI shows the date).
+  if (card.status === 'expired' && nowMs >= card.deadline + CATASTROPHE_MS) return { kind: 'catastrophe' };
   return { kind: 'locked' };
 }
 
@@ -1315,6 +1335,27 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       this.rememberClosed(before, 'forfeited', me.address, (before.stake * 1e6 - feeMicro) / 1e6, feeMicro / 1e6);
     }
     return { payout: 0, txid }; // exact payout lives in the inner txns
+  }
+
+  // v17.0.8: CATASTROPHE SWEEP — permissionless, after deadline + 7d. Every
+  // payer refunded in full, zero fee, boxes deleted. Client pre-checks mirror
+  // the contract asserts so the button never offers a tx the chain rejects.
+  async claimCatastrophe(id: number, _address: string): Promise<ClaimResult> {
+    const me = await this.id();
+    const before = await this.getChallenge(id);
+    if (!before) throw new Error('challenge not found');
+    if (before.status !== 'expired') throw new Error('SWEEP NEEDS AN EXPIRED CARD');
+    if (Date.now() < before.deadline + CATASTROPHE_MS) {
+      throw new Error('SWEEP OPENS ' + new Date(before.deadline + CATASTROPHE_MS).toISOString().slice(0, 16).replace('T', ' ') + ' UTC');
+    }
+    const players = await kit.readPlayers(id);
+    const txns = await kit.buildCatastropheGroup({ caller: me.address, cid: id, payers: Math.max(1, players.length) });
+    const txid = await kit.signSend(me.sign, txns, { label: 'CATASTROPHE SWEEP' });
+    kit.recordTxid(id, txid);
+    kit.recordCloseTxid(id, txid); // the sweep tx moved every refund leg
+    kit.recordResolveAt(id, Date.now()); // terminal: honest "x AGO" everywhere
+    if (before) this.rememberClosed(before, 'refunded', null, 0, 0);
+    return { payout: 0, txid }; // exact legs live in the inner txns
   }
 
   async earlyClose(id: number, _address: string): Promise<Challenge> {

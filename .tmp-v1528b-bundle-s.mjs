@@ -414,6 +414,7 @@ function accumulateLegacy(hist, address) {
   return { wins, losses, won, lost, net, bestWin };
 }
 var SEAT_TTL_MS = 3600 * 1e3;
+var CATASTROPHE_MS = 7 * 24 * 3600 * 1e3;
 var LS_KEY = netLsKey("gonna.arena.v1");
 function providerRef() {
   return window.__arenaIdProvider ?? null;
@@ -735,6 +736,26 @@ var TestnetArenaAdapter = class {
       const feeMicro = Math.floor(Number(before.stake * 1e6) * 0.05);
       this.rememberClosed(before, "forfeited", me.address, (before.stake * 1e6 - feeMicro) / 1e6, feeMicro / 1e6);
     }
+    return { payout: 0, txid };
+  }
+  // v17.0.8: CATASTROPHE SWEEP — permissionless, after deadline + 7d. Every
+  // payer refunded in full, zero fee, boxes deleted. Client pre-checks mirror
+  // the contract asserts so the button never offers a tx the chain rejects.
+  async claimCatastrophe(id, _address) {
+    const me = await this.id();
+    const before = await this.getChallenge(id);
+    if (!before) throw new Error("challenge not found");
+    if (before.status !== "expired") throw new Error("SWEEP NEEDS AN EXPIRED CARD");
+    if (Date.now() < before.deadline + CATASTROPHE_MS) {
+      throw new Error("SWEEP OPENS " + new Date(before.deadline + CATASTROPHE_MS).toISOString().slice(0, 16).replace("T", " ") + " UTC");
+    }
+    const players = await readPlayers(id);
+    const txns = await (void 0)({ caller: me.address, cid: id, payers: Math.max(1, players.length) });
+    const txid = await signSend(me.sign, txns, { label: "CATASTROPHE SWEEP" });
+    recordTxid(id, txid);
+    recordCloseTxid(id, txid);
+    recordResolveAt(id, Date.now());
+    if (before) this.rememberClosed(before, "refunded", null, 0, 0);
     return { payout: 0, txid };
   }
   async earlyClose(id, _address) {

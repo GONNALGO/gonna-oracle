@@ -28,6 +28,9 @@ export const ALGOD_TESTNET = NET.algodUrl;
 // v2 seat clock: a duel seat that stays UNSIGNED for SEAT_TTL seconds can be
 // forfeited by the signed opponent via claim_forfeit(cid, seat).
 export const SEAT_TTL_SECS = 3600;
+// contract.py: CATASTROPHE_WINDOW = 7 * 24 * 3600 — the permissionless full
+// refund opens deadline + 7d (FUNDS CAN NEVER BE LOCKED FOREVER)
+export const CATASTROPHE_WINDOW_SECS = 7 * 24 * 3600;
 export const ARENA_VERSION = 2; // VERSION global on the v2 app
 
 const MBR_CREATE = 358_200; // v2 box MBR payment (create): 65_300 + 292_900
@@ -535,6 +538,25 @@ export async function buildClaimGroup(o: { caller: string; cid: number }): Promi
     // stake axfer back + exact MBR payback) => 1000 x (1 outer + 2 inner).
     // The old 2000 was rejected by the chain ("group fee too small").
     suggestedParams: await baseParams(TESTNET_FEES.claim),
+  });
+  return [call];
+}
+
+// v17.0.8: CATASTROPHE SWEEP — permissionless TOTAL refund after
+// deadline + 7d (zero fee, forfeits refunded too). The ONLY exit for an
+// expired multiplayer card whose joiners never signed (live case: cid 5,
+// 200 $GONNA locked behind an unsigned seat). Anyone may call it; the
+// contract pays every payer back in full and deletes both boxes.
+// Inner txns: one axfer per payer + the exact MBR payback.
+export async function buildCatastropheGroup(o: { caller: string; cid: number; payers: number }): Promise<Txn[]> {
+  const a = await sdk();
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.caller, appIndex: ARENA_APP_ID,
+    appArgs: [await methodSelector(a, 'catastrophe_refund(uint64)void'), await appArg(a, 'uint64', o.cid)],
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)],
+    // fee: 1000 x (1 outer + payers axfers + 1 MBR pay), 2000 margin floor
+    suggestedParams: await baseParams(Math.max(2000, 1000 * (1 + o.payers + 1))),
   });
   return [call];
 }

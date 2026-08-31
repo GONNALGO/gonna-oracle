@@ -48,7 +48,7 @@ console.log('\n[0] SOURCE: close-tx memory, per-network explorer, sync tap path'
   ok(!tk.includes('perawallet.app'), 'testnetKit: the old hardcoded perawallet URL is gone');
   // the close ops record the close txid — exactly the four fund-moving paths
   const recCount = (ca.match(/kit\.recordCloseTxid\(/g) || []).length;
-  ok(recCount === 4, 'chainAdapter: recordCloseTxid at RESOLVE/CLAIM/FORFEIT/EARLY CLOSE (got ' + recCount + ')');
+  ok(recCount === 5, 'chainAdapter: recordCloseTxid at RESOLVE/CLAIM/FORFEIT/EARLY CLOSE/SWEEP (got ' + recCount + ')');
   ok(!/label: '(CREATE|ACCEPT & STAKE|SIGN SCORE)'[^\n]*\n[^\n]*recordCloseTxid/.test(ca), 'create/join/submit NEVER record a close txid (no pot moved there)');
   ok(ca.includes('closeTxid(id: number, opts?: { force?: boolean }): Promise<string | null>;'), 'ArenaAdapter interface: closeTxid contract');
   ok(ca.includes('async closeTxid(): Promise<string | null> {\n    return null;'), 'mock adapter: honestly NO chain tx');

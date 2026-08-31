@@ -1,4 +1,4 @@
-import { createRequire } from "module"; const require = createRequire(import.meta.url);
+import { createRequire } from 'module'; const require = createRequire(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -38,58 +38,18 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// src/game/arena/arenaKit.ts
-function netLsKey(base) {
-  return base + "." + ARENA_NETWORK;
-}
-var ARENA_NETWORK, IS_MAINNET, TESTNET_CFG, MAINNET_CFG, NET, ARENA_FIXTURES_ENABLED;
-var init_arenaKit = __esm({
-  "src/game/arena/arenaKit.ts"() {
-    ARENA_NETWORK = true ? "mainnet" : "testnet";
-    IS_MAINNET = ARENA_NETWORK === "mainnet";
-    TESTNET_CFG = {
-      appId: 769907387,
-      // ARENA APP v2.1
-      legacyAppId: 769688298,
-      // QuantumArena v1 (superseded)
-      gonnaAsa: 769688287,
-      opUpAppId: 769688641,
-      treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
-      oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
-      algodUrl: "https://testnet-api.algonode.cloud",
-      indexerUrl: "https://testnet-idx.algonode.cloud",
-      oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
-    };
-    MAINNET_CFG = {
-      // M-2 mainnet deploy (scripts/mainnet-deploy-report.md): app 3686311434,
-      // escrow 3XEQEDORZHI…47UM (app address, derived — never hardcoded below).
-      appId: 3686311434,
-      legacyAppId: 0,
-      // no legacy on mainnet
-      gonnaAsa: 2582294183,
-      // REAL mainnet $GONNA (same id as src/game/wallet.ts)
-      // M-4b: OpUp donor app mainnet (LEAD GO 2026-08-26) — create/join/close
-      // groups DO hit the opcode budget without donors: create_challenge runs
-      // ed25519verify_bare (~2700 cost) over the 700 single-call budget
-      // (proven live: logic eval error pc=1013 with opUpAppId 0). Same minimal
-      // approve-all shape as the testnet donor 769688641 (bytecode 0b8101,
-      // zero state) — deploy txid KDKCFKPCYZ2V3AMWSNRIPIIOX7MSZKUFKM6JULTFT7WPQAGANVEQ.
-      opUpAppId: 3686469118,
-      treasuryAddr: "GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU",
-      oracleAddr: "3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y",
-      algodUrl: "https://mainnet-api.algonode.cloud",
-      indexerUrl: "https://mainnet-idx.algonode.cloud",
-      oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
-      // same Render service; flipped env-side to mainnet
-    };
-    NET = IS_MAINNET ? MAINNET_CFG : TESTNET_CFG;
-    ARENA_FIXTURES_ENABLED = ARENA_NETWORK === "testnet";
+// <define:import.meta.env>
+var define_import_meta_env_default;
+var init_define_import_meta_env = __esm({
+  "<define:import.meta.env>"() {
+    define_import_meta_env_default = { DEV: false, PROD: true, VITE_ARENA_NETWORK: "mainnet", VITE_QA_ORACLE: "" };
   }
 });
 
 // node_modules/tweetnacl/nacl-fast.js
 var require_nacl_fast = __commonJS({
   "node_modules/tweetnacl/nacl-fast.js"(exports, module) {
+    init_define_import_meta_env();
     (function(nacl2) {
       "use strict";
       var gf = function(init) {
@@ -2314,6 +2274,7 @@ var require_nacl_fast = __commonJS({
 // node_modules/js-sha512/src/sha512.js
 var require_sha512 = __commonJS({
   "node_modules/js-sha512/src/sha512.js"(exports, module) {
+    init_define_import_meta_env();
     (function() {
       "use strict";
       var INPUT_ERROR = "input is invalid type";
@@ -3214,6 +3175,7 @@ var require_sha512 = __commonJS({
 // node_modules/bignumber.js/bignumber.js
 var require_bignumber = __commonJS({
   "node_modules/bignumber.js/bignumber.js"(exports, module) {
+    init_define_import_meta_env();
     (function(globalObject) {
       "use strict";
       var BigNumber, isNumeric = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i, mathceil = Math.ceil, mathfloor = Math.floor, bignumberError = "[BigNumber Error] ", tooManyDigits = bignumberError + "Number primitive has more than 15 significant digits: ", BASE = 1e14, LOG_BASE = 14, MAX_SAFE_INTEGER = 9007199254740991, POWS_TEN = [1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13], SQRT_BASE = 1e7, MAX = 1e9;
@@ -4565,6 +4527,7 @@ var require_bignumber = __commonJS({
 // node_modules/json-bigint/lib/stringify.js
 var require_stringify = __commonJS({
   "node_modules/json-bigint/lib/stringify.js"(exports, module) {
+    init_define_import_meta_env();
     var BigNumber = require_bignumber();
     var JSON2 = module.exports;
     (function() {
@@ -4677,6 +4640,7 @@ var require_stringify = __commonJS({
 // node_modules/json-bigint/lib/parse.js
 var require_parse = __commonJS({
   "node_modules/json-bigint/lib/parse.js"(exports, module) {
+    init_define_import_meta_env();
     var BigNumber = null;
     var suspectProtoRx = /(?:_|\\u005[Ff])(?:_|\\u005[Ff])(?:p|\\u0070)(?:r|\\u0072)(?:o|\\u006[Ff])(?:t|\\u0074)(?:o|\\u006[Ff])(?:_|\\u005[Ff])(?:_|\\u005[Ff])/;
     var suspectConstructorRx = /(?:c|\\u0063)(?:o|\\u006[Ff])(?:n|\\u006[Ee])(?:s|\\u0073)(?:t|\\u0074)(?:r|\\u0072)(?:u|\\u0075)(?:c|\\u0063)(?:t|\\u0074)(?:o|\\u006[Ff])(?:r|\\u0072)/;
@@ -4958,6 +4922,7 @@ var require_parse = __commonJS({
 // node_modules/json-bigint/index.js
 var require_json_bigint = __commonJS({
   "node_modules/json-bigint/index.js"(exports, module) {
+    init_define_import_meta_env();
     var json_stringify = require_stringify().stringify;
     var json_parse = require_parse();
     module.exports = function(options) {
@@ -4975,6 +4940,7 @@ var require_json_bigint = __commonJS({
 var IntDecoding, intDecoding_default;
 var init_intDecoding = __esm({
   "node_modules/algosdk/dist/esm/types/intDecoding.js"() {
+    init_define_import_meta_env();
     (function(IntDecoding2) {
       IntDecoding2["UNSAFE"] = "unsafe";
       IntDecoding2["SAFE"] = "safe";
@@ -5095,6 +5061,7 @@ function ensureUint64(value) {
 var import_json_bigint, JSONbig;
 var init_utils = __esm({
   "node_modules/algosdk/dist/esm/utils/utils.js"() {
+    init_define_import_meta_env();
     import_json_bigint = __toESM(require_json_bigint(), 1);
     init_intDecoding();
     JSONbig = (0, import_json_bigint.default)({
@@ -5139,6 +5106,7 @@ function verify(message, signature, verifyKey) {
 var import_tweetnacl, import_js_sha512, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, HASH_BYTES_LENGTH, SEED_BTYES_LENGTH;
 var init_naclWrappers = __esm({
   "node_modules/algosdk/dist/esm/nacl/naclWrappers.js"() {
+    init_define_import_meta_env();
     import_tweetnacl = __toESM(require_nacl_fast(), 1);
     import_js_sha512 = __toESM(require_sha512(), 1);
     init_utils();
@@ -5152,6 +5120,7 @@ var init_naclWrappers = __esm({
 // node_modules/hi-base32/src/base32.js
 var require_base32 = __commonJS({
   "node_modules/hi-base32/src/base32.js"(exports, module) {
+    init_define_import_meta_env();
     (function() {
       "use strict";
       var root = typeof window === "object" ? window : {};
@@ -5554,6 +5523,7 @@ function decodeUint64(data, decodingMode = "safe") {
 }
 var init_uint64 = __esm({
   "node_modules/algosdk/dist/esm/encoding/uint64.js"() {
+    init_define_import_meta_env();
     init_utils();
   }
 });
@@ -5604,6 +5574,7 @@ function hexToBytes(hexString) {
 }
 var init_binarydata = __esm({
   "node_modules/algosdk/dist/esm/encoding/binarydata.js"() {
+    init_define_import_meta_env();
     init_utils();
   }
 });
@@ -5634,6 +5605,7 @@ function getApplicationAddress(appID) {
 var import_hi_base32, ALGORAND_ADDRESS_BYTE_LENGTH, ALGORAND_CHECKSUM_BYTE_LENGTH, ALGORAND_ADDRESS_LENGTH, ALGORAND_ZERO_ADDRESS_STRING, MALFORMED_ADDRESS_ERROR_MSG, CHECKSUM_ADDRESS_ERROR_MSG, Address, APP_ID_PREFIX;
 var init_address = __esm({
   "node_modules/algosdk/dist/esm/encoding/address.js"() {
+    init_define_import_meta_env();
     import_hi_base32 = __toESM(require_base32(), 1);
     init_naclWrappers();
     init_utils();
@@ -5722,6 +5694,7 @@ function algosToMicroalgos(algos) {
 var MICROALGOS_TO_ALGOS_RATIO, INVALID_MICROALGOS_ERROR_MSG;
 var init_convert = __esm({
   "node_modules/algosdk/dist/esm/convert.js"() {
+    init_define_import_meta_env();
     MICROALGOS_TO_ALGOS_RATIO = 1e6;
     INVALID_MICROALGOS_ERROR_MSG = "Microalgos should be positive and less than 2^53 - 1.";
   }
@@ -5731,6 +5704,7 @@ var init_convert = __esm({
 var URLTokenBaseHTTPError, URLTokenBaseHTTPClient;
 var init_urlTokenBaseHTTPClient = __esm({
   "node_modules/algosdk/dist/esm/client/urlTokenBaseHTTPClient.js"() {
+    init_define_import_meta_env();
     URLTokenBaseHTTPError = class extends Error {
       constructor(message, response) {
         super(message);
@@ -5889,6 +5863,7 @@ function getAcceptFormat(query) {
 var HTTPClientResponse, HTTPClient;
 var init_client = __esm({
   "node_modules/algosdk/dist/esm/client/client.js"() {
+    init_define_import_meta_env();
     init_utils();
     init_urlTokenBaseHTTPClient();
     HTTPClientResponse = class {
@@ -6079,6 +6054,7 @@ function isBaseHTTPClient(tbc) {
 var ServiceClient;
 var init_serviceClient = __esm({
   "node_modules/algosdk/dist/esm/client/v2/serviceClient.js"() {
+    init_define_import_meta_env();
     init_client();
     ServiceClient = class {
       constructor(tokenHeaderIdentifier, tokenHeaderOrStrOrBaseClient, baseServer, port, defaultHeaders = {}) {
@@ -6102,6 +6078,7 @@ var init_serviceClient = __esm({
 var require_utf8 = __commonJS({
   "node_modules/algorand-msgpack/dist/utils/utf8.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.utf8Decode = exports.utf8DecodeTD = exports.utf8DecodeJs = exports.utf8Encode = exports.utf8EncodeTE = exports.utf8EncodeJs = exports.utf8Count = void 0;
     function utf8Count(str) {
@@ -6247,6 +6224,7 @@ var require_utf8 = __commonJS({
 var require_ExtData = __commonJS({
   "node_modules/algorand-msgpack/dist/ExtData.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ExtData = void 0;
     var ExtData = class {
@@ -6263,6 +6241,7 @@ var require_ExtData = __commonJS({
 var require_DecodeError = __commonJS({
   "node_modules/algorand-msgpack/dist/DecodeError.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DecodeError = void 0;
     var DecodeError = class _DecodeError extends Error {
@@ -6285,6 +6264,7 @@ var require_DecodeError = __commonJS({
 var require_int = __commonJS({
   "node_modules/algorand-msgpack/dist/utils/int.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.convertSafeIntegerToMode = exports.getUint64 = exports.getInt64 = exports.setInt64 = exports.setUint64 = exports.UINT32_MAX = exports.IntMode = void 0;
     var IntMode2;
@@ -6358,6 +6338,7 @@ var require_int = __commonJS({
 var require_timestamp = __commonJS({
   "node_modules/algorand-msgpack/dist/timestamp.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.timestampExtension = exports.decodeTimestampExtension = exports.decodeTimestampToTimeSpec = exports.encodeTimestampExtension = exports.encodeDateToTimeSpec = exports.encodeTimeSpecToTimestamp = exports.EXT_TIMESTAMP = void 0;
     var DecodeError_1 = require_DecodeError();
@@ -6452,6 +6433,7 @@ var require_timestamp = __commonJS({
 var require_ExtensionCodec = __commonJS({
   "node_modules/algorand-msgpack/dist/ExtensionCodec.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ExtensionCodec = void 0;
     var ExtData_1 = require_ExtData();
@@ -6518,6 +6500,7 @@ var require_ExtensionCodec = __commonJS({
 var require_typedArrays = __commonJS({
   "node_modules/algorand-msgpack/dist/utils/typedArrays.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RawBinaryString = exports.compareUint8Arrays = exports.createDataView = exports.ensureUint8Array = void 0;
     function ensureUint8Array2(buffer) {
@@ -6570,6 +6553,7 @@ var require_typedArrays = __commonJS({
 var require_Encoder = __commonJS({
   "node_modules/algorand-msgpack/dist/Encoder.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.Encoder = exports.DEFAULT_INITIAL_BUFFER_SIZE = exports.DEFAULT_MAX_DEPTH = void 0;
     var utf8_1 = require_utf8();
@@ -6997,6 +6981,7 @@ var require_Encoder = __commonJS({
 var require_encode = __commonJS({
   "node_modules/algorand-msgpack/dist/encode.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.encode = exports.defaultEncodeOptions = void 0;
     var Encoder_1 = require_Encoder();
@@ -7013,6 +6998,7 @@ var require_encode = __commonJS({
 var require_prettyByte = __commonJS({
   "node_modules/algorand-msgpack/dist/utils/prettyByte.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.prettyByte = void 0;
     function prettyByte(byte) {
@@ -7026,6 +7012,7 @@ var require_prettyByte = __commonJS({
 var require_CachedKeyDecoder = __commonJS({
   "node_modules/algorand-msgpack/dist/CachedKeyDecoder.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.CachedKeyDecoder = void 0;
     var utf8_1 = require_utf8();
@@ -7088,6 +7075,7 @@ var require_CachedKeyDecoder = __commonJS({
 var require_Decoder = __commonJS({
   "node_modules/algorand-msgpack/dist/Decoder.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.Decoder = exports.DataViewIndexOutOfBoundsError = void 0;
     var prettyByte_1 = require_prettyByte();
@@ -7668,6 +7656,7 @@ var require_Decoder = __commonJS({
 var require_decode = __commonJS({
   "node_modules/algorand-msgpack/dist/decode.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.decodeMulti = exports.decode = exports.defaultDecodeOptions = void 0;
     var Decoder_1 = require_Decoder();
@@ -7689,6 +7678,7 @@ var require_decode = __commonJS({
 var require_stream = __commonJS({
   "node_modules/algorand-msgpack/dist/utils/stream.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ensureAsyncIterable = exports.asyncIterableFromStream = exports.isAsyncIterable = void 0;
     function isAsyncIterable(object) {
@@ -7731,6 +7721,7 @@ var require_stream = __commonJS({
 var require_decodeAsync = __commonJS({
   "node_modules/algorand-msgpack/dist/decodeAsync.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.decodeStream = exports.decodeMultiStream = exports.decodeArrayStream = exports.decodeAsync = void 0;
     var Decoder_1 = require_Decoder();
@@ -7761,6 +7752,7 @@ var require_decodeAsync = __commonJS({
 var require_dist = __commonJS({
   "node_modules/algorand-msgpack/dist/index.js"(exports) {
     "use strict";
+    init_define_import_meta_env();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.decodeTimestampExtension = exports.encodeTimestampExtension = exports.decodeTimestampToTimeSpec = exports.encodeTimeSpecToTimestamp = exports.encodeDateToTimeSpec = exports.EXT_TIMESTAMP = exports.ExtData = exports.ExtensionCodec = exports.RawBinaryString = exports.Encoder = exports.DecodeError = exports.DataViewIndexOutOfBoundsError = exports.Decoder = exports.decodeStream = exports.decodeMultiStream = exports.decodeArrayStream = exports.decodeAsync = exports.IntMode = exports.decodeMulti = exports.decode = exports.encode = void 0;
     var encode_1 = require_encode();
@@ -7968,6 +7960,7 @@ function encodeJSON(e, options) {
 var import_algorand_msgpack, ERROR_CONTAINS_EMPTY_STRING, MsgpackObjectPathSegmentKind, MsgpackRawStringProvider, Schema;
 var init_encoding = __esm({
   "node_modules/algosdk/dist/esm/encoding/encoding.js"() {
+    init_define_import_meta_env();
     import_algorand_msgpack = __toESM(require_dist(), 1);
     init_binarydata();
     init_intDecoding();
@@ -8121,6 +8114,7 @@ var init_encoding = __esm({
 var BooleanSchema;
 var init_boolean = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/boolean.js"() {
+    init_define_import_meta_env();
     init_encoding();
     BooleanSchema = class extends Schema {
       defaultValue() {
@@ -8161,6 +8155,7 @@ var init_boolean = __esm({
 var StringSchema;
 var init_string = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/string.js"() {
+    init_define_import_meta_env();
     init_encoding();
     StringSchema = class extends Schema {
       defaultValue() {
@@ -8201,6 +8196,7 @@ var init_string = __esm({
 var Uint64Schema;
 var init_uint642 = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/uint64.js"() {
+    init_define_import_meta_env();
     init_encoding();
     init_utils();
     Uint64Schema = class extends Schema {
@@ -8234,6 +8230,7 @@ var init_uint642 = __esm({
 var AddressSchema;
 var init_address2 = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/address.js"() {
+    init_define_import_meta_env();
     init_encoding();
     init_address();
     AddressSchema = class extends Schema {
@@ -8269,6 +8266,7 @@ var init_address2 = __esm({
 var ByteArraySchema, FixedLengthByteArraySchema;
 var init_bytearray = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/bytearray.js"() {
+    init_define_import_meta_env();
     init_encoding();
     init_binarydata();
     ByteArraySchema = class extends Schema {
@@ -8362,6 +8360,7 @@ var init_bytearray = __esm({
 var import_hi_base322, blockHashByteLength, base32Length, BlockHashSchema;
 var init_blockhash = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/blockhash.js"() {
+    init_define_import_meta_env();
     import_hi_base322 = __toESM(require_base32(), 1);
     init_encoding();
     blockHashByteLength = 32;
@@ -8405,6 +8404,7 @@ var init_blockhash = __esm({
 var import_algorand_msgpack2, SpecialCaseBinaryStringSchema;
 var init_binarystring = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/binarystring.js"() {
+    init_define_import_meta_env();
     import_algorand_msgpack2 = __toESM(require_dist(), 1);
     init_encoding();
     init_binarydata();
@@ -8449,6 +8449,7 @@ var init_binarystring = __esm({
 var ArraySchema;
 var init_array = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/array.js"() {
+    init_define_import_meta_env();
     init_encoding();
     ArraySchema = class extends Schema {
       constructor(itemSchema) {
@@ -8532,6 +8533,7 @@ function convertRawStringsInMsgpackValue(value) {
 var import_algorand_msgpack3, NamedMapSchema, Uint64MapSchema, ByteArrayMapSchema, SpecialCaseBinaryStringMapSchema;
 var init_map = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/map.js"() {
+    init_define_import_meta_env();
     import_algorand_msgpack3 = __toESM(require_dist(), 1);
     init_encoding();
     init_utils();
@@ -8877,6 +8879,7 @@ var init_map = __esm({
 var OptionalSchema;
 var init_optional = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/optional.js"() {
+    init_define_import_meta_env();
     init_encoding();
     OptionalSchema = class extends Schema {
       constructor(valueSchema) {
@@ -8921,6 +8924,7 @@ var init_optional = __esm({
 var UntypedSchema;
 var init_untyped = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/untyped.js"() {
+    init_define_import_meta_env();
     init_encoding();
     UntypedSchema = class extends Schema {
       defaultValue() {
@@ -8948,6 +8952,7 @@ var init_untyped = __esm({
 // node_modules/algosdk/dist/esm/encoding/schema/index.js
 var init_schema = __esm({
   "node_modules/algosdk/dist/esm/encoding/schema/index.js"() {
+    init_define_import_meta_env();
     init_boolean();
     init_string();
     init_uint642();
@@ -8983,6 +8988,7 @@ function boxReferencesToEncodingData(references, foreignApps, appIndex) {
 }
 var init_boxStorage = __esm({
   "node_modules/algosdk/dist/esm/boxStorage.js"() {
+    init_define_import_meta_env();
   }
 });
 
@@ -9219,6 +9225,7 @@ function foreignArraysToResourceReferences({ appIndex, accounts, foreignAssets, 
 }
 var init_appAccess = __esm({
   "node_modules/algosdk/dist/esm/appAccess.js"() {
+    init_define_import_meta_env();
     init_address();
     init_utils();
   }
@@ -9234,6 +9241,7 @@ function isOnApplicationComplete(v) {
 var TransactionType, OnApplicationComplete;
 var init_base = __esm({
   "node_modules/algosdk/dist/esm/types/transactions/base.js"() {
+    init_define_import_meta_env();
     (function(TransactionType2) {
       TransactionType2["pay"] = "pay";
       TransactionType2["keyreg"] = "keyreg";
@@ -9259,6 +9267,7 @@ var init_base = __esm({
 var HashFactory, MerkleArrayProof, MerkleSignatureVerifier, Participant, FalconVerifier, FalconSignatureStruct, SigslotCommit, Reveal, StateProof, StateProofMessage;
 var init_stateproof = __esm({
   "node_modules/algosdk/dist/esm/stateproof.js"() {
+    init_define_import_meta_env();
     init_schema();
     HashFactory = class _HashFactory {
       constructor(params) {
@@ -9675,6 +9684,7 @@ var init_stateproof = __esm({
 var HeartbeatProof, Heartbeat;
 var init_heartbeat = __esm({
   "node_modules/algosdk/dist/esm/heartbeat.js"() {
+    init_define_import_meta_env();
     init_schema();
     HeartbeatProof = class _HeartbeatProof {
       constructor(params) {
@@ -9956,6 +9966,7 @@ function decodeUnsignedTransaction(transactionBuffer) {
 var import_hi_base323, ALGORAND_TRANSACTION_LENGTH, ALGORAND_TRANSACTION_LEASE_LENGTH, NUM_ADDL_BYTES_AFTER_SIGNING, ASSET_METADATA_HASH_LENGTH, KEYREG_VOTE_KEY_LENGTH, KEYREG_SELECTION_KEY_LENGTH, KEYREG_STATE_PROOF_KEY_LENGTH, ALGORAND_TRANSACTION_GROUP_LENGTH, TX_TAG, Transaction;
 var init_transaction = __esm({
   "node_modules/algosdk/dist/esm/transaction.js"() {
+    init_define_import_meta_env();
     import_hi_base323 = __toESM(require_base32(), 1);
     init_boxStorage();
     init_appAccess();
@@ -10781,6 +10792,7 @@ function multisigAddress({ version, threshold, addrs }) {
 var MULTISIG_PREIMG2ADDR_PREFIX, INVALID_MSIG_VERSION_ERROR_MSG, INVALID_MSIG_THRESHOLD_ERROR_MSG, INVALID_MSIG_PK_ERROR_MSG, UNEXPECTED_PK_LEN_ERROR_MSG;
 var init_multisig = __esm({
   "node_modules/algosdk/dist/esm/multisig.js"() {
+    init_define_import_meta_env();
     init_naclWrappers();
     init_address();
     init_utils();
@@ -10845,6 +10857,7 @@ function encodedMultiSigToEncodingData(msig) {
 var ENCODED_SUBSIG_SCHEMA, ENCODED_MULTISIG_SCHEMA;
 var init_encoded = __esm({
   "node_modules/algosdk/dist/esm/types/transactions/encoded.js"() {
+    init_define_import_meta_env();
     init_schema();
     init_utils();
     ENCODED_SUBSIG_SCHEMA = new NamedMapSchema(allOmitEmpty([
@@ -10915,6 +10928,7 @@ function tealSignFromProgram(sk, data, program) {
 var base64regex, programTag, multisigProgramTag, LogicSig, LogicSigAccount, SIGN_PROGRAM_DATA_PREFIX;
 var init_logicsig = __esm({
   "node_modules/algosdk/dist/esm/logicsig.js"() {
+    init_define_import_meta_env();
     init_naclWrappers();
     init_address();
     init_encoding();
@@ -11258,6 +11272,7 @@ var init_logicsig = __esm({
 // node_modules/algosdk/dist/esm/types/transactions/index.js
 var init_transactions = __esm({
   "node_modules/algosdk/dist/esm/types/transactions/index.js"() {
+    init_define_import_meta_env();
     init_base();
     init_encoded();
   }
@@ -11274,6 +11289,7 @@ function encodeUnsignedSimulateTransaction(txn) {
 var SignedTransaction;
 var init_signedTransaction = __esm({
   "node_modules/algosdk/dist/esm/signedTransaction.js"() {
+    init_define_import_meta_env();
     init_encoding();
     init_transaction();
     init_logicsig();
@@ -11355,6 +11371,7 @@ var init_signedTransaction = __esm({
 var StateProofTrackingData, TxnCommitments, RewardState, UpgradeState, UpgradeVote, ParticipationUpdates, BlockHeader, ValueDelta, EvalDelta, ApplyData, SignedTxnWithAD, SignedTxnInBlock, Block;
 var init_block = __esm({
   "node_modules/algosdk/dist/esm/types/block.js"() {
+    init_define_import_meta_env();
     init_schema();
     init_signedTransaction();
     StateProofTrackingData = class _StateProofTrackingData {
@@ -12164,6 +12181,7 @@ var init_block = __esm({
 var UntypedValue;
 var init_untypedmodel = __esm({
   "node_modules/algosdk/dist/esm/client/v2/untypedmodel.js"() {
+    init_define_import_meta_env();
     init_schema();
     UntypedValue = class _UntypedValue {
       constructor(data) {
@@ -12188,6 +12206,7 @@ var init_untypedmodel = __esm({
 var TealValue, StateSchema, AppParams, AppLocalState, AppLocalStateDelta, AppParamsDelta, AppResourceRecord, AssetHolding, AssetHoldingDelta, AssetParams, AssetParamsDelta, AssetResourceRecord, VotingData, AccountBaseData, AccountData, BalanceRecord, AccountDeltas, KvValueDelta, IncludedTransactions, ModifiedCreatable, AlgoCount, AccountTotals, LedgerStateDelta;
 var init_statedelta = __esm({
   "node_modules/algosdk/dist/esm/types/statedelta.js"() {
+    init_define_import_meta_env();
     init_schema();
     init_block();
     init_untypedmodel();
@@ -13409,6 +13428,7 @@ __export(types_exports, {
 var Account, AccountApplicationResource, AccountApplicationResponse, AccountApplicationsInformationResponse, AccountAssetHolding, AccountAssetResponse, AccountAssetsInformationResponse, AccountParticipation, AccountStateDelta, AppCallLogs, Application, ApplicationInitialStates, ApplicationKVStorage, ApplicationLocalReference, ApplicationLocalState, ApplicationParams, ApplicationStateOperation, ApplicationStateSchema, Asset, AssetHolding2, AssetHoldingReference, AssetParams2, AvmKeyValue, AvmValue, BlockHashResponse, BlockLogsResponse, BlockResponse, BlockTxidsResponse, Box, BoxDescriptor, BoxReference, BoxesResponse, BuildVersion, CompileResponse, DisassembleResponse, DryrunRequest, DryrunResponse, DryrunSource, DryrunState, DryrunTxnResult, ErrorResponse, EvalDelta2, EvalDeltaKeyValue, Genesis, GenesisAllocation, GetBlockTimeStampOffsetResponse, GetSyncRoundResponse, LedgerStateDeltaForTransactionGroup, LightBlockHeaderProof, NodeStatusResponse, PendingTransactionResponse, PendingTransactionsResponse, PostTransactionsResponse, ScratchChange, SimulateInitialStates, SimulateRequest, SimulateRequestTransactionGroup, SimulateResponse, SimulateTraceConfig, SimulateTransactionGroupResult, SimulateTransactionResult, SimulateUnnamedResourcesAccessed, SimulationEvalOverrides, SimulationOpcodeTraceUnit, SimulationTransactionExecTrace, StateProof2, StateProofMessage2, SupplyResponse, TealKeyValue, TealValue2, TransactionGroupLedgerStateDeltasForRoundResponse, TransactionParametersResponse, TransactionProof, Version;
 var init_types = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/models/types.js"() {
+    init_define_import_meta_env();
     init_utils();
     init_schema();
     init_binarydata();
@@ -18171,6 +18191,7 @@ var init_types = __esm({
 var JSONRequest;
 var init_jsonrequest = __esm({
   "node_modules/algosdk/dist/esm/client/v2/jsonrequest.js"() {
+    init_define_import_meta_env();
     JSONRequest = class {
       /**
        * @param client - HTTPClient object.
@@ -18224,6 +18245,7 @@ var init_jsonrequest = __esm({
 var AccountInformation;
 var init_accountInformation = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/accountInformation.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18265,6 +18287,7 @@ var init_accountInformation = __esm({
 var AccountAssetInformation;
 var init_accountAssetInformation = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/accountAssetInformation.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18289,6 +18312,7 @@ var init_accountAssetInformation = __esm({
 var AccountAssetsInformation;
 var init_accountAssetsInformation = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/accountAssetsInformation.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18320,6 +18344,7 @@ var init_accountAssetsInformation = __esm({
 var AccountApplicationsInformation;
 var init_accountApplicationsInformation = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/accountApplicationsInformation.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18358,6 +18383,7 @@ var init_accountApplicationsInformation = __esm({
 var AccountApplicationInformation;
 var init_accountApplicationInformation = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/accountApplicationInformation.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18382,6 +18408,7 @@ var init_accountApplicationInformation = __esm({
 var Block2;
 var init_block2 = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/block.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18435,6 +18462,7 @@ function setHeaders(headers = {}) {
 var Compile;
 var init_compile = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/compile.js"() {
+    init_define_import_meta_env();
     init_binarydata();
     init_encoding();
     init_types();
@@ -18474,6 +18502,7 @@ var init_compile = __esm({
 var Dryrun;
 var init_dryrun = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/dryrun.js"() {
+    init_define_import_meta_env();
     init_encoding();
     init_jsonrequest();
     init_compile();
@@ -18508,6 +18537,7 @@ var init_dryrun = __esm({
 var Genesis2;
 var init_genesis = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/genesis.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     Genesis2 = class extends JSONRequest {
       // eslint-disable-next-line class-methods-use-this
@@ -18526,6 +18556,7 @@ var init_genesis = __esm({
 var GetAssetByID;
 var init_getAssetByID = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getAssetByID.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18549,6 +18580,7 @@ var init_getAssetByID = __esm({
 var GetApplicationByID;
 var init_getApplicationByID = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getApplicationByID.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18572,6 +18604,7 @@ var init_getApplicationByID = __esm({
 var GetBlockHash;
 var init_getBlockHash = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getBlockHash.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18595,6 +18628,7 @@ var init_getBlockHash = __esm({
 var GetBlockTxids;
 var init_getBlockTxids = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getBlockTxids.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18618,6 +18652,7 @@ var init_getBlockTxids = __esm({
 var GetApplicationBoxByName;
 var init_getApplicationBoxByName = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getApplicationBoxByName.js"() {
+    init_define_import_meta_env();
     init_binarydata();
     init_encoding();
     init_jsonrequest();
@@ -18647,6 +18682,7 @@ var init_getApplicationBoxByName = __esm({
 var GetApplicationBoxes;
 var init_getApplicationBoxes = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getApplicationBoxes.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_binarydata();
@@ -18801,6 +18837,7 @@ var init_getApplicationBoxes = __esm({
 var HealthCheck;
 var init_healthCheck = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/healthCheck.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     HealthCheck = class extends JSONRequest {
       // eslint-disable-next-line class-methods-use-this
@@ -18818,6 +18855,7 @@ var init_healthCheck = __esm({
 var PendingTransactionInformation;
 var init_pendingTransactionInformation = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/pendingTransactionInformation.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18847,6 +18885,7 @@ var init_pendingTransactionInformation = __esm({
 var PendingTransactions;
 var init_pendingTransactions = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/pendingTransactions.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18876,6 +18915,7 @@ var init_pendingTransactions = __esm({
 var PendingTransactionsByAddress;
 var init_pendingTransactionsByAddress = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/pendingTransactionsByAddress.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18905,6 +18945,7 @@ var init_pendingTransactionsByAddress = __esm({
 var GetTransactionProof;
 var init_getTransactionProof = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getTransactionProof.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -18961,6 +19002,7 @@ function isByteArray(array) {
 var SendRawTransaction;
 var init_sendRawTransaction = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/sendRawTransaction.js"() {
+    init_define_import_meta_env();
     init_utils();
     init_types();
     init_encoding();
@@ -19004,6 +19046,7 @@ var init_sendRawTransaction = __esm({
 var Status;
 var init_status = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/status.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -19024,6 +19067,7 @@ var init_status = __esm({
 var StatusAfterBlock;
 var init_statusAfterBlock = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/statusAfterBlock.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -19047,6 +19091,7 @@ var init_statusAfterBlock = __esm({
 var SuggestedParamsRequest;
 var init_suggestedParams = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/suggestedParams.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -19076,6 +19121,7 @@ var init_suggestedParams = __esm({
 var Supply;
 var init_supply = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/supply.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -19096,6 +19142,7 @@ var init_supply = __esm({
 var Versions;
 var init_versions = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/versions.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -19116,6 +19163,7 @@ var init_versions = __esm({
 var LightBlockHeaderProof2;
 var init_lightBlockHeaderProof = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/lightBlockHeaderProof.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -19139,6 +19187,7 @@ var init_lightBlockHeaderProof = __esm({
 var StateProof3;
 var init_stateproof2 = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/stateproof.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -19162,6 +19211,7 @@ var init_stateproof2 = __esm({
 var SetSyncRound;
 var init_setSyncRound = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/setSyncRound.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     SetSyncRound = class extends JSONRequest {
       constructor(c, round) {
@@ -19190,6 +19240,7 @@ var init_setSyncRound = __esm({
 var GetSyncRound;
 var init_getSyncRound = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getSyncRound.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -19210,6 +19261,7 @@ var init_getSyncRound = __esm({
 var SetBlockOffsetTimestamp;
 var init_setBlockOffsetTimestamp = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/setBlockOffsetTimestamp.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     SetBlockOffsetTimestamp = class extends JSONRequest {
       constructor(c, offset) {
@@ -19238,6 +19290,7 @@ var init_setBlockOffsetTimestamp = __esm({
 var GetBlockOffsetTimestamp;
 var init_getBlockOffsetTimestamp = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getBlockOffsetTimestamp.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types();
@@ -19266,6 +19319,7 @@ function setHeaders2(headers = {}) {
 var Disassemble;
 var init_disassemble = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/disassemble.js"() {
+    init_define_import_meta_env();
     init_binarydata();
     init_encoding();
     init_types();
@@ -19309,6 +19363,7 @@ function setSimulateTransactionsHeaders(headers = {}) {
 var SimulateRawTransactions;
 var init_simulateTransaction = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/simulateTransaction.js"() {
+    init_define_import_meta_env();
     init_encoding();
     init_jsonrequest();
     init_types();
@@ -19344,6 +19399,7 @@ var init_simulateTransaction = __esm({
 var Ready;
 var init_ready = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/ready.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     Ready = class extends JSONRequest {
       // eslint-disable-next-line class-methods-use-this
@@ -19361,6 +19417,7 @@ var init_ready = __esm({
 var UnsetSyncRound;
 var init_unsetSyncRound = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/unsetSyncRound.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     UnsetSyncRound = class extends JSONRequest {
       // eslint-disable-next-line class-methods-use-this
@@ -19386,6 +19443,7 @@ var init_unsetSyncRound = __esm({
 var GetLedgerStateDeltaForTransactionGroup;
 var init_getLedgerStateDeltaForTransactionGroup = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getLedgerStateDeltaForTransactionGroup.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_statedelta();
@@ -19411,6 +19469,7 @@ var init_getLedgerStateDeltaForTransactionGroup = __esm({
 var GetLedgerStateDelta;
 var init_getLedgerStateDelta = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getLedgerStateDelta.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_statedelta();
@@ -19436,6 +19495,7 @@ var init_getLedgerStateDelta = __esm({
 var GetTransactionGroupLedgerStateDeltasForRound;
 var init_getTransactionGroupLedgerStateDeltasForRound = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/getTransactionGroupLedgerStateDeltasForRound.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_types();
     init_encoding();
@@ -19461,6 +19521,7 @@ var init_getTransactionGroupLedgerStateDeltasForRound = __esm({
 var AlgodClient;
 var init_algod = __esm({
   "node_modules/algosdk/dist/esm/client/v2/algod/algod.js"() {
+    init_define_import_meta_env();
     init_serviceClient();
     init_types();
     init_accountInformation();
@@ -20238,6 +20299,7 @@ var init_algod = __esm({
 var KmdClient;
 var init_kmd = __esm({
   "node_modules/algosdk/dist/esm/client/kmd.js"() {
+    init_define_import_meta_env();
     init_binarydata();
     init_intDecoding();
     init_serviceClient();
@@ -20674,6 +20736,7 @@ __export(types_exports2, {
 var Account2, AccountParticipation2, AccountResponse, AccountStateDelta2, AccountsResponse, Application2, ApplicationLocalState2, ApplicationLocalStatesResponse, ApplicationLogData, ApplicationLogsResponse, ApplicationParams2, ApplicationResponse, ApplicationStateSchema2, ApplicationsResponse, Asset2, AssetBalancesResponse, AssetHolding3, AssetHoldingsResponse, AssetParams3, AssetResponse, AssetsResponse, Block3, BlockHeadersResponse, BlockRewards, BlockUpgradeState, BlockUpgradeVote, Box2, BoxDescriptor2, BoxReference2, BoxesResponse2, ErrorResponse2, EvalDelta3, EvalDeltaKeyValue2, HashFactory2, HbProofFields, HealthCheck2, HoldingRef, IndexerStateProofMessage, LocalsRef, MerkleArrayProof2, MiniAssetHolding, ParticipationUpdates2, ResourceRef, StateProofFields, StateProofParticipant, StateProofReveal, StateProofSigSlot, StateProofSignature, StateProofTracking, StateProofVerifier, StateSchema2, TealKeyValue2, TealValue3, Transaction2, TransactionApplication, TransactionAssetConfig, TransactionAssetFreeze, TransactionAssetTransfer, TransactionHeartbeat, TransactionKeyreg, TransactionPayment, TransactionResponse, TransactionSignature, TransactionSignatureLogicsig, TransactionSignatureMultisig, TransactionSignatureMultisigSubsignature, TransactionStateProof, TransactionsResponse;
 var init_types2 = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/models/types.js"() {
+    init_define_import_meta_env();
     init_utils();
     init_schema();
     init_binarydata();
@@ -25475,6 +25538,7 @@ var init_types2 = __esm({
 var MakeHealthCheck;
 var init_makeHealthCheck = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/makeHealthCheck.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -25498,6 +25562,7 @@ var init_makeHealthCheck = __esm({
 var LookupAssetBalances;
 var init_lookupAssetBalances = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupAssetBalances.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -25654,6 +25719,7 @@ function base64StringFunnel(data) {
 var LookupAccountTransactions;
 var init_lookupAccountTransactions = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupAccountTransactions.js"() {
+    init_define_import_meta_env();
     init_binarydata();
     init_encoding();
     init_jsonrequest();
@@ -26024,6 +26090,7 @@ var init_lookupAccountTransactions = __esm({
 var LookupAssetTransactions;
 var init_lookupAssetTransactions = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupAssetTransactions.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_lookupAccountTransactions();
@@ -26411,6 +26478,7 @@ var init_lookupAssetTransactions = __esm({
 var LookupBlock;
 var init_lookupBlock = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupBlock.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -26458,6 +26526,7 @@ var init_lookupBlock = __esm({
 var LookupTransactionByID;
 var init_lookupTransactionByID = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupTransactionByID.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -26497,6 +26566,7 @@ var init_lookupTransactionByID = __esm({
 var LookupAccountByID;
 var init_lookupAccountByID = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupAccountByID.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -26608,6 +26678,7 @@ var init_lookupAccountByID = __esm({
 var LookupAccountAssets;
 var init_lookupAccountAssets = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupAccountAssets.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -26749,6 +26820,7 @@ var init_lookupAccountAssets = __esm({
 var LookupAccountCreatedAssets;
 var init_lookupAccountCreatedAssets = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupAccountCreatedAssets.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -26891,6 +26963,7 @@ var init_lookupAccountCreatedAssets = __esm({
 var LookupAccountAppLocalStates;
 var init_lookupAccountAppLocalStates = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupAccountAppLocalStates.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -27031,6 +27104,7 @@ var init_lookupAccountAppLocalStates = __esm({
 var LookupAccountCreatedApplications;
 var init_lookupAccountCreatedApplications = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupAccountCreatedApplications.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -27172,6 +27246,7 @@ var init_lookupAccountCreatedApplications = __esm({
 var LookupAssetByID;
 var init_lookupAssetByID = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupAssetByID.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -27238,6 +27313,7 @@ var init_lookupAssetByID = __esm({
 var LookupApplications;
 var init_lookupApplications = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupApplications.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -27305,6 +27381,7 @@ var init_lookupApplications = __esm({
 var LookupApplicationLogs;
 var init_lookupApplicationLogs = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupApplicationLogs.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -27464,6 +27541,7 @@ var init_lookupApplicationLogs = __esm({
 var LookupApplicationBoxByIDandName;
 var init_lookupApplicationBoxByIDandName = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/lookupApplicationBoxByIDandName.js"() {
+    init_define_import_meta_env();
     init_binarydata();
     init_encoding();
     init_jsonrequest();
@@ -27509,6 +27587,7 @@ var init_lookupApplicationBoxByIDandName = __esm({
 var SearchAccounts;
 var init_searchAccounts = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/searchAccounts.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -27787,6 +27866,7 @@ var init_searchAccounts = __esm({
 var SearchForBlockHeaders;
 var init_searchForBlockHeaders = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/searchForBlockHeaders.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -27991,6 +28071,7 @@ var init_searchForBlockHeaders = __esm({
 var SearchForTransactions;
 var init_searchForTransactions = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/searchForTransactions.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_lookupAccountTransactions();
@@ -28425,6 +28506,7 @@ var init_searchForTransactions = __esm({
 var SearchForAssets;
 var init_searchForAssets = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/searchForAssets.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -28594,6 +28676,7 @@ var init_searchForAssets = __esm({
 var SearchForApplications;
 var init_searchForApplications = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/searchForApplications.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -28724,6 +28807,7 @@ var init_searchForApplications = __esm({
 var SearchForApplicationBoxes;
 var init_searchForApplicationBoxes = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/searchForApplicationBoxes.js"() {
+    init_define_import_meta_env();
     init_jsonrequest();
     init_encoding();
     init_types2();
@@ -28823,6 +28907,7 @@ var init_searchForApplicationBoxes = __esm({
 var IndexerClient;
 var init_indexer = __esm({
   "node_modules/algosdk/dist/esm/client/v2/indexer/indexer.js"() {
+    init_define_import_meta_env();
     init_serviceClient();
     init_makeHealthCheck();
     init_lookupAssetBalances();
@@ -29247,6 +29332,7 @@ async function waitForConfirmation(client, txid, waitRounds) {
 }
 var init_wait = __esm({
   "node_modules/algosdk/dist/esm/wait.js"() {
+    init_define_import_meta_env();
   }
 });
 
@@ -29272,6 +29358,7 @@ function bytesToBigInt(bytes) {
 }
 var init_bigint = __esm({
   "node_modules/algosdk/dist/esm/encoding/bigint.js"() {
+    init_define_import_meta_env();
   }
 });
 
@@ -29283,6 +29370,7 @@ function generateAccount() {
 }
 var init_account = __esm({
   "node_modules/algosdk/dist/esm/account.js"() {
+    init_define_import_meta_env();
     init_naclWrappers();
     init_address();
   }
@@ -29292,6 +29380,7 @@ var init_account = __esm({
 var english, english_default;
 var init_english = __esm({
   "node_modules/algosdk/dist/esm/mnemonic/wordlists/english.js"() {
+    init_define_import_meta_env();
     english = [
       "abandon",
       "ability",
@@ -31448,6 +31537,7 @@ function masterDerivationKeyToMnemonic(mdk) {
 var FAIL_TO_DECODE_MNEMONIC_ERROR_MSG, NOT_IN_WORDS_LIST_ERROR_MSG;
 var init_mnemonic = __esm({
   "node_modules/algosdk/dist/esm/mnemonic/mnemonic.js"() {
+    init_define_import_meta_env();
     init_english();
     init_naclWrappers();
     init_address();
@@ -31488,6 +31578,7 @@ function assignGroupID(txns) {
 var ALGORAND_MAX_TX_GROUP_SIZE, TX_GROUP_TAG;
 var init_group = __esm({
   "node_modules/algosdk/dist/esm/group.js"() {
+    init_define_import_meta_env();
     init_naclWrappers();
     init_encoding();
     init_utils();
@@ -31543,6 +31634,7 @@ function signLogicSigTransaction(txn, lsigObject) {
 }
 var init_signing = __esm({
   "node_modules/algosdk/dist/esm/signing.js"() {
+    init_define_import_meta_env();
     init_naclWrappers();
     init_address();
     init_encoding();
@@ -31703,6 +31795,7 @@ function appendSignRawMultisigSignature(multisigTxnBlob, { version, threshold, a
 var MULTISIG_MERGE_LESSTHANTWO_ERROR_MSG, MULTISIG_MERGE_MISMATCH_ERROR_MSG, MULTISIG_MERGE_MISMATCH_AUTH_ADDR_MSG, MULTISIG_MERGE_WRONG_PREIMAGE_ERROR_MSG, MULTISIG_MERGE_SIG_MISMATCH_ERROR_MSG, MULTISIG_SIGNATURE_LENGTH_ERROR_MSG, MULTISIG_KEY_NOT_EXIST_ERROR_MSG;
 var init_multisigSigning = __esm({
   "node_modules/algosdk/dist/esm/multisigSigning.js"() {
+    init_define_import_meta_env();
     init_naclWrappers();
     init_address();
     init_encoding();
@@ -31750,6 +31843,7 @@ function decode(string) {
 var char_to_integer, integer_to_char;
 var init_src = __esm({
   "node_modules/vlq/src/index.js"() {
+    init_define_import_meta_env();
     char_to_integer = {};
     integer_to_char = {};
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=".split("").forEach(function(char, i) {
@@ -31763,6 +31857,7 @@ var init_src = __esm({
 var ProgramSourceMap;
 var init_sourcemap = __esm({
   "node_modules/algosdk/dist/esm/logic/sourcemap.js"() {
+    init_define_import_meta_env();
     init_src();
     ProgramSourceMap = class {
       constructor({ version, sources, names, mappings }) {
@@ -32000,6 +32095,7 @@ function dryrunTxnResultLogicSigTrace(result, spc) {
 var defaultAppId, defaultMaxWidth;
 var init_dryrun2 = __esm({
   "node_modules/algosdk/dist/esm/dryrun.js"() {
+    init_define_import_meta_env();
     init_types();
     init_address();
     init_binarydata();
@@ -32383,6 +32479,7 @@ function makeApplicationNoOpTxnFromObject({ sender, appIndex, appArgs, accounts,
 }
 var init_makeTxn = __esm({
   "node_modules/algosdk/dist/esm/makeTxn.js"() {
+    init_define_import_meta_env();
     init_transaction();
     init_base();
     init_appAccess();
@@ -32442,6 +32539,7 @@ function isTransactionWithSigner(value) {
 }
 var init_signer = __esm({
   "node_modules/algosdk/dist/esm/signer.js"() {
+    init_define_import_meta_env();
     init_signedTransaction();
     init_signing();
     init_multisigSigning();
@@ -32487,6 +32585,7 @@ function findBoolLR(typeList, index, delta) {
 var MAX_LEN, ADDR_BYTE_SIZE, SINGLE_BYTE_SIZE, SINGLE_BOOL_SIZE, LENGTH_ENCODE_BYTE_SIZE, staticArrayRegexp, ufixedRegexp, ABIType, ABIUintType, ABIUfixedType, ABIAddressType, ABIBoolType, ABIByteType, ABIStringType, ABIArrayStaticType, ABIArrayDynamicType, ABITupleType;
 var init_abi_type = __esm({
   "node_modules/algosdk/dist/esm/abi/abi_type.js"() {
+    init_define_import_meta_env();
     init_address();
     init_bigint();
     init_utils();
@@ -33099,6 +33198,7 @@ function abiCheckTransactionType(type, txn) {
 var ABITransactionType;
 var init_transaction2 = __esm({
   "node_modules/algosdk/dist/esm/abi/transaction.js"() {
+    init_define_import_meta_env();
     (function(ABITransactionType2) {
       ABITransactionType2["any"] = "txn";
       ABITransactionType2["pay"] = "pay";
@@ -33118,6 +33218,7 @@ function abiTypeIsReference(type) {
 var ABIReferenceType;
 var init_reference = __esm({
   "node_modules/algosdk/dist/esm/abi/reference.js"() {
+    init_define_import_meta_env();
     (function(ABIReferenceType2) {
       ABIReferenceType2["account"] = "account";
       ABIReferenceType2["application"] = "application";
@@ -33171,6 +33272,7 @@ function getMethodByName(methods, name) {
 var ABIMethod;
 var init_method = __esm({
   "node_modules/algosdk/dist/esm/abi/method.js"() {
+    init_define_import_meta_env();
     init_naclWrappers();
     init_abi_type();
     init_transaction2();
@@ -33254,6 +33356,7 @@ var init_method = __esm({
 var ABIContract;
 var init_contract = __esm({
   "node_modules/algosdk/dist/esm/abi/contract.js"() {
+    init_define_import_meta_env();
     init_method();
     ABIContract = class {
       constructor(params) {
@@ -33286,6 +33389,7 @@ var init_contract = __esm({
 var ABIInterface;
 var init_interface = __esm({
   "node_modules/algosdk/dist/esm/abi/interface.js"() {
+    init_define_import_meta_env();
     init_method();
     ABIInterface = class {
       constructor(params) {
@@ -33313,6 +33417,7 @@ var init_interface = __esm({
 // node_modules/algosdk/dist/esm/abi/index.js
 var init_abi = __esm({
   "node_modules/algosdk/dist/esm/abi/index.js"() {
+    init_define_import_meta_env();
     init_abi_type();
     init_contract();
     init_interface();
@@ -33339,6 +33444,7 @@ function populateForeignArray(valueToAdd, array, zeroValue) {
 var RETURN_PREFIX, MAX_APP_ARGS, AtomicTransactionComposerStatus, AtomicTransactionComposer;
 var init_composer = __esm({
   "node_modules/algosdk/dist/esm/composer.js"() {
+    init_define_import_meta_env();
     init_abi();
     init_types();
     init_encoding();
@@ -33995,6 +34101,7 @@ function verifyBytes(bytes, signature, addr) {
 var SIGN_BYTES_PREFIX, MULTISIG_BAD_SENDER_ERROR_MSG, ERROR_MULTISIG_BAD_SENDER, ERROR_INVALID_MICROALGOS;
 var init_main = __esm({
   "node_modules/algosdk/dist/esm/main.js"() {
+    init_define_import_meta_env();
     init_naclWrappers();
     init_address();
     init_convert();
@@ -34229,6 +34336,7 @@ __export(esm_exports, {
 var esm_default;
 var init_esm = __esm({
   "node_modules/algosdk/dist/esm/index.js"() {
+    init_define_import_meta_env();
     init_main();
     init_main();
     esm_default = main_exports;
@@ -34236,12 +34344,99 @@ var init_esm = __esm({
 });
 
 // src/game/arena/testnetKit.ts
+init_define_import_meta_env();
+
+// src/game/arena/arenaKit.ts
+init_define_import_meta_env();
+var ARENA_NETWORK = define_import_meta_env_default?.VITE_ARENA_NETWORK === "mainnet" ? "mainnet" : "testnet";
+var IS_MAINNET = ARENA_NETWORK === "mainnet";
+var TESTNET_CFG = {
+  appId: 769907387,
+  // ARENA APP v2.1
+  legacyAppId: 769688298,
+  // QuantumArena v1 (superseded)
+  gonnaAsa: 769688287,
+  opUpAppId: 769688641,
+  treasuryAddr: "4OQ3LJ3JW67JEY55TMHLGZG3MWWLTVFZERGY67LBJEJLOGEUUX2PYHQGGM",
+  oracleAddr: "COI33V32HHFEGZFVGBZHD2A67TSQ4JHHTS5CE37VNLGIQHOHCP4FI4KNFA",
+  algodUrl: "https://testnet-api.algonode.cloud",
+  indexerUrl: "https://testnet-idx.algonode.cloud",
+  oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+};
+var MAINNET_CFG = {
+  // M-2 mainnet deploy (scripts/mainnet-deploy-report.md): app 3686311434,
+  // escrow 3XEQEDORZHI…47UM (app address, derived — never hardcoded below).
+  appId: 3686311434,
+  legacyAppId: 0,
+  // no legacy on mainnet
+  gonnaAsa: 2582294183,
+  // REAL mainnet $GONNA (same id as src/game/wallet.ts)
+  // M-4b: OpUp donor app mainnet (LEAD GO 2026-08-26) — create/join/close
+  // groups DO hit the opcode budget without donors: create_challenge runs
+  // ed25519verify_bare (~2700 cost) over the 700 single-call budget
+  // (proven live: logic eval error pc=1013 with opUpAppId 0). Same minimal
+  // approve-all shape as the testnet donor 769688641 (bytecode 0b8101,
+  // zero state) — deploy txid KDKCFKPCYZ2V3AMWSNRIPIIOX7MSZKUFKM6JULTFT7WPQAGANVEQ.
+  opUpAppId: 3686469118,
+  treasuryAddr: "GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU",
+  oracleAddr: "3UVNPC3IOM42HZS5HZJPVH6LBBJOJFF2WHQ4K5SDYJKKWFAJ36SKXILG4Y",
+  algodUrl: "https://mainnet-api.algonode.cloud",
+  indexerUrl: "https://mainnet-idx.algonode.cloud",
+  oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
+  // same Render service; flipped env-side to mainnet
+};
+var NET = IS_MAINNET ? MAINNET_CFG : TESTNET_CFG;
+function netLsKey(base) {
+  return base + "." + ARENA_NETWORK;
+}
+
+// src/game/arena/testnetKit.ts
+var ARENA_APP_ID = NET.appId;
+var LEGACY_ARENA_APP_ID = NET.legacyAppId;
+var GONNA_ASA = NET.gonnaAsa;
+var GONNA_ASA_TESTNET = NET.gonnaAsa;
+var OPUP_APP_ID = NET.opUpAppId;
+var TREASURY_ADDR = NET.treasuryAddr;
+var ORACLE_ADDR = NET.oracleAddr;
+var ALGOD_URL = NET.algodUrl;
+var ALGOD_TESTNET = NET.algodUrl;
+var SEAT_TTL_SECS = 3600;
+var ARENA_VERSION = 2;
+var MBR_CREATE = 358200;
+var EARLY_CLOSE_FEE_PAY = 1e6;
+var GONNA_DECIMALS = 6;
+var STAGE_NOTE_PREFIX = "gonna:v2:stage:";
+function stageNote(stageIdx) {
+  return new TextEncoder().encode(STAGE_NOTE_PREFIX + stageIdx);
+}
 function parseStageNote(note) {
   const m = /^gonna:v2:stage:(\d)$/.exec(new TextDecoder().decode(note));
   if (!m) return null;
   const k = Number(m[1]);
   return k >= 0 && k <= 6 ? k : null;
 }
+function stageNoteOpt(stageIdx) {
+  return stageIdx != null && stageIdx >= 0 && stageIdx <= 6 ? { note: stageNote(stageIdx) } : {};
+}
+var SCORE_DOMAIN = new TextEncoder().encode("QA-SCORE|");
+var VERDICT_DOMAIN = new TextEncoder().encode("QA-VERDICT|");
+var TESTNET_FEES = {
+  create: 1e3 + 1e3 + 3e3 + 4 * 1e3,
+  // pay + axfer + call + 4 opup
+  join: 1e3 + 3e3,
+  // axfer + call
+  submit: 3e3 + 4 * 1e3,
+  // call + 4 opup
+  resolve: 1e3 * (1 + 3) + 4 * 1e3,
+  // NON-TIE call (1 outer + 3 inner) + 4 opup; ties scale with the roster — buildResolveGroup computes it dynamically
+  claim: 1e3 + 2 * 1e3,
+  // call + 2 inner (stake axfer + MBR payback) — v15.3.2 BUG-1: was 2000, chain rejects it
+  close: 1e3 + 4e3,
+  // pay + call (2 inner covered by the call's 4000)
+  forfeit: 5e3
+  // call + 4 inner (2 axfer winner + fee axfer + MBR payback)
+};
+var sdkP = null;
 function sdk() {
   if (!sdkP) sdkP = Promise.resolve().then(() => (init_esm(), esm_exports));
   return sdkP;
@@ -34250,6 +34445,38 @@ async function algodClient() {
   const a = await sdk();
   return new a.Algodv2("", ALGOD_URL, "");
 }
+function u64be(v) {
+  const b = new Uint8Array(8);
+  new DataView(b.buffer).setBigUint64(0, BigInt(v), false);
+  return b;
+}
+function scoreMsg(cid, seat, addrBytes, score) {
+  const out = new Uint8Array(SCORE_DOMAIN.length + 8 + 8 + 1 + 32 + 8);
+  out.set(SCORE_DOMAIN, 0);
+  out.set(u64be(ARENA_APP_ID), SCORE_DOMAIN.length);
+  out.set(u64be(cid), SCORE_DOMAIN.length + 8);
+  out.set([seat & 255], SCORE_DOMAIN.length + 16);
+  out.set(addrBytes, SCORE_DOMAIN.length + 17);
+  out.set(u64be(score), SCORE_DOMAIN.length + 49);
+  return out;
+}
+async function verdictMsg(cid, mode, extra32, entries) {
+  const raw = new Uint8Array(entries.length * 41);
+  entries.forEach((e, i) => {
+    raw.set([e.seat & 255], i * 41);
+    raw.set(e.addr, i * 41 + 1);
+    raw.set(u64be(e.score), i * 41 + 33);
+  });
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", raw));
+  const out = new Uint8Array(VERDICT_DOMAIN.length + 8 + 8 + 1 + 32 + 32);
+  out.set(VERDICT_DOMAIN, 0);
+  out.set(u64be(ARENA_APP_ID), VERDICT_DOMAIN.length);
+  out.set(u64be(cid), VERDICT_DOMAIN.length + 8);
+  out.set([mode & 255], VERDICT_DOMAIN.length + 16);
+  out.set(extra32, VERDICT_DOMAIN.length + 17);
+  out.set(digest, VERDICT_DOMAIN.length + 49);
+  return out;
+}
 async function nextChallengeId() {
   const algod = await algodClient();
   const app = await algod.getApplicationByID(ARENA_APP_ID).do();
@@ -34257,6 +34484,57 @@ async function nextChallengeId() {
     if (new TextDecoder().decode(kv.key) === "next_challenge_id") return Number(kv.value.uint ?? 0);
   }
   return 0;
+}
+async function contractVersion() {
+  const algod = await algodClient();
+  const app = await algod.getApplicationByID(ARENA_APP_ID).do();
+  for (const kv of app.params.globalState ?? []) {
+    if (new TextDecoder().decode(kv.key) === "version") return Number(kv.value.uint ?? 0);
+  }
+  return 0;
+}
+async function readMeta(cid) {
+  const algod = await algodClient();
+  const a = await sdk();
+  try {
+    const name = new Uint8Array([109, ...u64be(cid)]);
+    const box = await algod.getApplicationBoxByName(ARENA_APP_ID, name).do();
+    const t = a.ABIType.from("(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64)");
+    const v = t.decode(box.value);
+    return { creator: v[0], stake: v[1], seatsTotal: v[2], seatsTaken: v[3], deadline: v[4], stageMode: v[5], seed: v[6], creatorScore: v[7], status: v[8], winner: v[9], paidTotal: v[10], mbrPaid: v[11] };
+  } catch {
+    return null;
+  }
+}
+async function readPlayers(cid) {
+  const algod = await algodClient();
+  const a = await sdk();
+  try {
+    const name = new Uint8Array([112, ...u64be(cid)]);
+    const box = await algod.getApplicationBoxByName(ARENA_APP_ID, name).do();
+    const t = a.ABIType.from("(byte[],uint64,bool,uint64)[]");
+    const v = t.decode(box.value);
+    return v.map((p) => ({ addr: p[0], score: p[1], signed: p[2], seatedAt: p[3] }));
+  } catch {
+    return [];
+  }
+}
+async function scanChallengeIds() {
+  const algod = await algodClient();
+  const res = await algod.getApplicationBoxes(ARENA_APP_ID).do();
+  const ids = [];
+  for (const b of res.boxes) {
+    const name = b.name;
+    if (name.length === 9 && name[0] === 109) {
+      ids.push(Number(new DataView(name.buffer, 1).getBigUint64(0, false)));
+    }
+  }
+  return ids.sort((x, y) => x - y);
+}
+async function baseParams(flatFee) {
+  const algod = await algodClient();
+  const sp = await algod.getTransactionParams().do();
+  return { ...sp, fee: flatFee, flatFee: true };
 }
 async function methodSelector(a, sig) {
   const parts = sig.split(")");
@@ -34268,9 +34546,634 @@ async function methodSelector(a, sig) {
   });
   return m.getSelector();
 }
-function b64ToBytes2(s) {
+async function appArg(a, type, val) {
+  if (type === "byte[]") return a.ABIType.from("byte[]").encode(val);
+  return a.ABIType.from("uint64").encode(BigInt(val));
+}
+function boxRef(cid, prefix) {
+  return { appIndex: ARENA_APP_ID, name: new Uint8Array([prefix, ...u64be(cid)]) };
+}
+async function opupTxns(sender, cid) {
+  if (!OPUP_APP_ID) return [];
+  const a = await sdk();
+  const out = [];
+  for (let i = 0; i < 4; i++) {
+    const note = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`QA-opup-${cid}-${i}-${Date.now()}`))
+    );
+    out.push(
+      a.makeApplicationNoOpTxnFromObject({
+        sender,
+        appIndex: OPUP_APP_ID,
+        note,
+        suggestedParams: await baseParams(1e3)
+      })
+    );
+  }
+  return out;
+}
+async function buildCreateGroup(o) {
+  const a = await sdk();
+  const appAddr = a.getApplicationAddress(ARENA_APP_ID);
+  const sig = "create_challenge(pay,axfer,uint64,uint64,uint64,uint64,byte[],uint64,byte[])uint64";
+  const appArgs = [
+    await methodSelector(a, sig),
+    await appArg(a, "uint64", o.stakeBase),
+    await appArg(a, "uint64", o.seats),
+    await appArg(a, "uint64", o.durationSecs),
+    await appArg(a, "uint64", o.stageMode),
+    await appArg(a, "byte[]", new Uint8Array(32)),
+    await appArg(a, "uint64", o.creatorScore),
+    await appArg(a, "byte[]", o.creatorScoreSig)
+  ];
+  const pay = a.makePaymentTxnWithSuggestedParamsFromObject({
+    sender: o.creator,
+    receiver: appAddr,
+    amount: MBR_CREATE,
+    suggestedParams: await baseParams(1e3)
+  });
+  const axfer = a.makeAssetTransferTxnWithSuggestedParamsFromObject({
+    sender: o.creator,
+    receiver: appAddr,
+    assetIndex: GONNA_ASA_TESTNET,
+    amount: o.stakeBase,
+    suggestedParams: await baseParams(1e3)
+  });
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.creator,
+    appIndex: ARENA_APP_ID,
+    appArgs,
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
+    // v15.2.8: the CHOSEN level is committed in the note (creator-signed,
+    // immutable). Group semantics/fees/args unchanged — the note is inert.
+    ...stageNoteOpt(o.stageIdx),
+    suggestedParams: await baseParams(3e3)
+  });
+  return [pay, axfer, call, ...await opupTxns(o.creator, o.cid)];
+}
+async function buildSpawnRumbleGroup(o) {
+  const a = await sdk();
+  const appAddr = a.getApplicationAddress(ARENA_APP_ID);
+  const sig = "spawn_rumble(pay,axfer,pay,uint64,uint64,uint64,byte[])uint64";
+  const appArgs = [
+    await methodSelector(a, sig),
+    await appArg(a, "uint64", o.stakeBase),
+    await appArg(a, "uint64", o.seats),
+    await appArg(a, "uint64", o.stageMode),
+    await appArg(a, "byte[]", new Uint8Array(32))
+  ];
+  const pay = a.makePaymentTxnWithSuggestedParamsFromObject({
+    sender: o.creator,
+    receiver: appAddr,
+    amount: MBR_CREATE,
+    suggestedParams: await baseParams(1e3)
+  });
+  const axfer = a.makeAssetTransferTxnWithSuggestedParamsFromObject({
+    sender: o.creator,
+    receiver: appAddr,
+    assetIndex: GONNA_ASA_TESTNET,
+    amount: o.stakeBase,
+    suggestedParams: await baseParams(1e3)
+  });
+  const fee = a.makePaymentTxnWithSuggestedParamsFromObject({
+    sender: o.creator,
+    receiver: TREASURY_ADDR,
+    amount: EARLY_CLOSE_FEE_PAY,
+    suggestedParams: await baseParams(1e3)
+  });
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.creator,
+    appIndex: ARENA_APP_ID,
+    appArgs,
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
+    ...stageNoteOpt(o.stageIdx),
+    suggestedParams: await baseParams(2e3)
+  });
+  return [pay, axfer, fee, call];
+}
+async function buildJoinGroup(o) {
+  const a = await sdk();
+  const appAddr = a.getApplicationAddress(ARENA_APP_ID);
+  const axfer = a.makeAssetTransferTxnWithSuggestedParamsFromObject({
+    sender: o.joiner,
+    receiver: appAddr,
+    assetIndex: GONNA_ASA_TESTNET,
+    amount: o.stakeBase,
+    suggestedParams: await baseParams(1e3)
+  });
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.joiner,
+    appIndex: ARENA_APP_ID,
+    appArgs: [await methodSelector(a, "join_challenge(axfer,uint64)uint64"), await appArg(a, "uint64", o.cid)],
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
+    suggestedParams: await baseParams(3e3)
+  });
+  return [axfer, call];
+}
+async function buildSubmitGroup(o) {
+  const a = await sdk();
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.player,
+    appIndex: ARENA_APP_ID,
+    appArgs: [
+      await methodSelector(a, "submit_score(uint64,uint64,byte[])void"),
+      await appArg(a, "uint64", o.cid),
+      await appArg(a, "uint64", o.score),
+      await appArg(a, "byte[]", o.sig)
+    ],
+    boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
+    suggestedParams: await baseParams(3e3)
+  });
+  return [call, ...await opupTxns(o.player, o.cid)];
+}
+async function buildResolveGroup(o) {
+  const a = await sdk();
+  const meta = await readMeta(o.cid);
+  if (!meta) throw new Error("card not found on chain (already settled?)");
+  const roster = await readPlayers(o.cid);
+  const innerLegs = o.tie === false ? 3 : roster.length + 1;
+  const callFee = 1e3 * (1 + innerLegs);
+  const enc = (pk) => a.encodeAddress(pk instanceof Uint8Array ? pk : Uint8Array.from(pk));
+  const creator = enc(meta.creator);
+  const accounts = [.../* @__PURE__ */ new Set([o.winner, creator, TREASURY_ADDR, ...roster.map((p) => enc(p.addr))])].filter((x) => x !== o.caller).slice(0, 4);
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.caller,
+    appIndex: ARENA_APP_ID,
+    appArgs: [
+      await methodSelector(a, "resolve(uint64,uint64,byte[],byte[])byte[]"),
+      await appArg(a, "uint64", o.cid),
+      await appArg(a, "uint64", o.stageIdx),
+      await appArg(a, "byte[]", o.seedReveal),
+      await appArg(a, "byte[]", o.verdictSig)
+    ],
+    accounts,
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
+    suggestedParams: await baseParams(callFee)
+  });
+  return [call, ...await opupTxns(o.caller, o.cid)];
+}
+var CONTINUE_FEE_MICRO = 5e6;
+function continueNote(refId, addr) {
+  return "QA-CONTINUE|" + refId + "|" + addr;
+}
+async function buildContinuePayment(o) {
+  const a = await sdk();
+  const sp = await (await algodClient()).getTransactionParams().do();
+  const pay = a.makePaymentTxnWithSuggestedParamsFromObject({
+    sender: o.sender,
+    receiver: TREASURY_ADDR,
+    amount: CONTINUE_FEE_MICRO,
+    note: new TextEncoder().encode(continueNote(o.refId, o.sender)),
+    suggestedParams: { ...sp, fee: 1e3, flatFee: true }
+  });
+  return [pay];
+}
+async function verifyContinuePayment(txid, refId, addr) {
+  const a = await sdk();
+  const want = continueNote(refId, addr);
+  const check = (t) => {
+    if (!t || t.type !== "pay") return false;
+    if (Number(t.amount) !== CONTINUE_FEE_MICRO) return false;
+    if (t.receiver !== TREASURY_ADDR) return false;
+    return t.note === want;
+  };
+  try {
+    const r = await (await algodClient()).pendingTransactionInformation(txid).do();
+    const inner = r?.txn?.txn;
+    if (inner) {
+      const view = {
+        type: inner.type,
+        amount: inner.amt,
+        receiver: inner.rcv ? a.encodeAddress(Uint8Array.from(inner.rcv)) : void 0,
+        note: inner.note ? new TextDecoder().decode(Uint8Array.from(inner.note)) : void 0
+      };
+      if (check(view)) return true;
+    }
+  } catch {
+  }
+  try {
+    const r = await fetch(`${INDEXER_URL}/v2/transactions/${txid}`);
+    if (r.ok) {
+      const j = await r.json();
+      const t = j.transaction;
+      if (t && t["tx-type"] === "pay" && t["payment-transaction"]) {
+        const view = {
+          type: "pay",
+          amount: t["payment-transaction"].amount,
+          receiver: t["payment-transaction"].receiver,
+          note: t.note ? new TextDecoder().decode(Uint8Array.from(atob(t.note), (ch) => ch.charCodeAt(0))) : void 0
+        };
+        return check(view);
+      }
+    }
+  } catch {
+  }
+  return false;
+}
+async function buildClaimGroup(o) {
+  const a = await sdk();
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.caller,
+    appIndex: ARENA_APP_ID,
+    appArgs: [await methodSelector(a, "claim(uint64)void"), await appArg(a, "uint64", o.cid)],
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
+    // v15.3.2 BUG-1: claim emits 2 inner txns (_refund_all on a roster of 1:
+    // stake axfer back + exact MBR payback) => 1000 x (1 outer + 2 inner).
+    // The old 2000 was rejected by the chain ("group fee too small").
+    suggestedParams: await baseParams(TESTNET_FEES.claim)
+  });
+  return [call];
+}
+async function buildEarlyCloseGroup(o) {
+  const a = await sdk();
+  const pay = a.makePaymentTxnWithSuggestedParamsFromObject({
+    sender: o.caller,
+    receiver: TREASURY_ADDR,
+    amount: EARLY_CLOSE_FEE_PAY,
+    suggestedParams: await baseParams(1e3)
+  });
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.caller,
+    appIndex: ARENA_APP_ID,
+    appArgs: [await methodSelector(a, "early_close(pay,uint64)void"), await appArg(a, "uint64", o.cid)],
+    accounts: [TREASURY_ADDR],
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
+    suggestedParams: await baseParams(4e3)
+  });
+  return [pay, call];
+}
+async function buildClaimForfeitGroup(o) {
+  const a = await sdk();
+  const meta = await readMeta(o.cid);
+  if (!meta) throw new Error("card not found on chain (already settled?)");
+  const creator = a.encodeAddress(meta.creator instanceof Uint8Array ? meta.creator : Uint8Array.from(meta.creator));
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.caller,
+    appIndex: ARENA_APP_ID,
+    appArgs: [
+      await methodSelector(a, "claim_forfeit(uint64,uint64)void"),
+      await appArg(a, "uint64", o.cid),
+      await appArg(a, "uint64", o.seat)
+    ],
+    accounts: [TREASURY_ADDR, creator],
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
+    suggestedParams: await baseParams(TESTNET_FEES.forfeit)
+  });
+  return [call];
+}
+var SIGN_TIMEOUT_MS = 9e4;
+var SIGN_TIMEOUT_MSG = "WALLET NOT RESPONDING - RECONNECT AND RETRY";
+function withTimeout(p, ms, timeoutMsg) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(timeoutMsg)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+function isCidRaceReject(e) {
+  const msg = String(e?.message ?? e);
+  return /status 400/i.test(msg) && /logic eval error/i.test(msg);
+}
+var SIGN_NUDGE_MS = 12e3;
+var SIGN_CANCEL_MSG = "SIGNING CANCELLED - SEALED SCORE SAFE";
+var SignCancelled = class extends Error {
+  constructor() {
+    super(SIGN_CANCEL_MSG);
+    this.name = "SignCancelled";
+  }
+};
+function isSignCancel(e) {
+  return e instanceof SignCancelled || String(e?.message ?? e).toUpperCase().startsWith("SIGNING CANCELLED");
+}
+function isWedgeError(e) {
+  const msg = String(e?.message ?? e);
+  return /request pending/i.test(msg) || /another request/i.test(msg) || /session currently connected/i.test(msg);
+}
+var recoverHook = null;
+function setSignRecoverHook(fn) {
+  recoverHook = fn;
+}
+var activeOp = null;
+function activeSignOp() {
+  return activeOp;
+}
+var StaleAttempt = class extends Error {
+};
+async function defaultSend(signed) {
+  const a = await sdk();
+  const algod = await algodClient();
+  const res = await algod.sendRawTransaction(signed).do();
+  console.debug("[arena] tx sent: " + res.txid + " \u2014 waiting for confirmation");
+  await a.waitForConfirmation(algod, res.txid, 10);
+  return res.txid;
+}
+function signSendManaged(sign2, buildTxns, opts = {}) {
+  const nudgeMs = opts.nudgeMs ?? SIGN_NUDGE_MS;
+  const timeoutMs = opts.timeoutMs ?? SIGN_TIMEOUT_MS;
+  const label = opts.label ?? "SIGN";
+  let gen = 0;
+  let settled = false;
+  let cancelled = false;
+  let recovering = false;
+  let attempt = 0;
+  let attemptStartedAt = 0;
+  let phase = "building";
+  let wedged = false;
+  let autoLeft = opts.autoRetries ?? 0;
+  let wedgeLeft = opts.wedgeRetries ?? 1;
+  let resolveDone;
+  let rejectDone;
+  const done = new Promise((res, rej) => {
+    resolveDone = res;
+    rejectDone = rej;
+  });
+  const view = {
+    label,
+    get attempt() {
+      return attempt;
+    },
+    get attemptStartedAt() {
+      return attemptStartedAt;
+    },
+    get phase() {
+      return phase;
+    },
+    get recovering() {
+      return recovering;
+    },
+    get stalled() {
+      return !settled && phase !== "sending" && attemptStartedAt > 0 && Date.now() - attemptStartedAt >= nudgeMs;
+    },
+    get cancellable() {
+      return !settled && phase !== "sending";
+    },
+    retry: () => {
+      void doRetry();
+    },
+    cancel: () => doCancel()
+  };
+  activeOp = view;
+  function settleOk(txid) {
+    settled = true;
+    if (activeOp === view) activeOp = null;
+    resolveDone(txid);
+  }
+  function settleErr(e) {
+    settled = true;
+    if (activeOp === view) activeOp = null;
+    rejectDone(e);
+  }
+  async function attemptRun(myGen) {
+    const live = () => {
+      if (cancelled) throw new SignCancelled();
+      if (myGen !== gen) throw new StaleAttempt();
+    };
+    try {
+      live();
+      phase = "building";
+      attemptStartedAt = Date.now();
+      const txns = await buildTxns();
+      live();
+      const a = await sdk();
+      a.assignGroupID(txns);
+      console.debug("[arena] " + label + " \u2014 sign start, atomic group of " + txns.length + " txn(s) (attempt " + attempt + ")");
+      phase = "signing";
+      attemptStartedAt = Date.now();
+      const signed = await withTimeout(
+        sign2([txns.map((txn) => ({ txn, signers: [txn.sender.toString()] }))]),
+        timeoutMs,
+        SIGN_TIMEOUT_MSG
+      );
+      live();
+      console.debug("[arena] wallet response \u2014 " + signed.length + " signed txn(s)");
+      phase = "sending";
+      attemptStartedAt = Date.now();
+      const txid = await (opts.send ? opts.send(signed) : defaultSend(signed));
+      live();
+      opts.onEvent?.("sent");
+      settleOk(txid);
+    } catch (e) {
+      if (e instanceof StaleAttempt) return;
+      if (cancelled || e instanceof SignCancelled) {
+        settleErr(new SignCancelled());
+        return;
+      }
+      if (autoLeft > 0 && opts.rebuildOnRetry && isCidRaceReject(e)) {
+        autoLeft--;
+        wedged = false;
+        console.debug("[arena] create 400 (stale cid race) \u2014 retrying with fresh challenge id");
+        opts.onEvent?.("cid-race-retry");
+        return attemptRun(myGen);
+      }
+      if (isWedgeError(e) && wedgeLeft > 0) {
+        wedgeLeft--;
+        wedged = true;
+        console.debug("[arena] wedged wallet session \u2014 recovering before re-send");
+        opts.onEvent?.("wedge");
+        const rec = opts.recover ?? recoverHook;
+        if (rec) {
+          recovering = true;
+          opts.onEvent?.("recover");
+          try {
+            await rec();
+          } catch (re) {
+            console.debug("[arena] session recovery failed (re-sending anyway):", re);
+          }
+          recovering = false;
+        }
+        if (cancelled) {
+          settleErr(new SignCancelled());
+          return;
+        }
+        if (myGen !== gen) return;
+        attempt++;
+        opts.onEvent?.("attempt");
+        return attemptRun(myGen);
+      }
+      if (isWedgeError(e)) wedged = true;
+      settleErr(e instanceof Error ? e : new Error(String(e)));
+    }
+  }
+  const onWire = () => phase === "sending";
+  async function doRetry() {
+    if (settled || cancelled) return;
+    if (onWire()) return;
+    opts.onEvent?.("retry");
+    const hanging = attemptStartedAt > 0;
+    const rec = opts.recover ?? recoverHook;
+    if ((wedged || hanging) && rec) {
+      recovering = true;
+      opts.onEvent?.("recover");
+      try {
+        await rec();
+      } catch (e) {
+        console.debug("[arena] session recovery failed (re-sending anyway):", e);
+      }
+      recovering = false;
+    }
+    if (settled || cancelled || onWire()) return;
+    gen++;
+    wedged = false;
+    attempt++;
+    opts.onEvent?.("attempt");
+    void attemptRun(gen);
+  }
+  function doCancel() {
+    if (settled || cancelled) return;
+    opts.onEvent?.("cancel");
+    cancelled = true;
+    gen++;
+    settleErr(new SignCancelled());
+  }
+  attempt = 1;
+  opts.onEvent?.("attempt");
+  void attemptRun(gen);
+  return { done, retry: view.retry, cancel: view.cancel };
+}
+async function signSend(sign2, txns, opts = {}) {
+  return signSendManaged(sign2, () => Promise.resolve(txns), opts).done;
+}
+var TX_KEY = netLsKey("gonna.arena.txids");
+function recordTxid(cid, txid) {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(TX_KEY) ?? "{}");
+    m[String(cid)] = txid;
+    window.localStorage.setItem(TX_KEY, JSON.stringify(m));
+  } catch {
+  }
+}
+function getTxid(cid) {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(TX_KEY) ?? "{}");
+    return m[String(cid)] ?? null;
+  } catch {
+    return null;
+  }
+}
+var RES_KEY = netLsKey("gonna.arena.resolved");
+function recordResolveAt(cid, at) {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(RES_KEY) ?? "{}");
+    m[String(cid)] = at;
+    window.localStorage.setItem(RES_KEY, JSON.stringify(m));
+  } catch {
+  }
+}
+function getResolveAt(cid) {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(RES_KEY) ?? "{}");
+    const v = m[String(cid)];
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function explorerTxUrlFor(network, txid) {
+  return "https://lora.algokit.io/" + network + "/transaction/" + txid;
+}
+function explorerTxUrl(txid) {
+  return explorerTxUrlFor(ARENA_NETWORK, txid);
+}
+var CLOSE_TX_KEY = netLsKey("gonna.arena.closetx");
+function recordCloseTxid(cid, txid) {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(CLOSE_TX_KEY) ?? "{}");
+    m[String(cid)] = txid;
+    window.localStorage.setItem(CLOSE_TX_KEY, JSON.stringify(m));
+  } catch {
+  }
+}
+function getCloseTxid(cid) {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(CLOSE_TX_KEY) ?? "{}");
+    return m[String(cid)] ?? null;
+  } catch {
+    return null;
+  }
+}
+function pickCloseTxid(cid, events) {
+  const ev = events.filter((e) => e.cid === cid).sort((x, y) => y.round - x.round)[0];
+  return ev ? ev.txid : null;
+}
+function resolveCloseTxid(cid, events) {
+  const mem = getCloseTxid(cid);
+  if (mem) return mem;
+  const txid = pickCloseTxid(cid, events);
+  if (txid) recordCloseTxid(cid, txid);
+  return txid;
+}
+var INDEXER_URL = NET.indexerUrl;
+var INDEXER_TESTNET = NET.indexerUrl;
+var EV_RESOLVED = "ae488dc6";
+var EV_FORFEITED = "24d3dd8b";
+var EV_REFUNDED = "0bfda53a";
+function hex4(b) {
+  return [...b.slice(0, 4)].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+function b64ToBytes(s) {
   return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
 }
+function u64At(b, off) {
+  return Number(new DataView(b.buffer, b.byteOffset + off, 8).getBigUint64(0, false));
+}
+async function fetchArenaCloseEvents(maxPages = 5) {
+  const a = await sdk();
+  const ZERO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ";
+  const out = [];
+  let next = null;
+  for (let page = 0; page < maxPages; page++) {
+    const url = INDEXER_URL + "/v2/transactions?application-id=" + ARENA_APP_ID + "&tx-type=appl&limit=100" + (next ? "&next=" + encodeURIComponent(next) : "");
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("indexer http " + r.status);
+    const j = await r.json();
+    for (const t of j.transactions ?? []) {
+      for (const log of t.logs ?? []) {
+        const b = b64ToBytes(log);
+        if (b.length < 12) continue;
+        const sel = hex4(b);
+        const at = (t["round-time"] ?? 0) * 1e3;
+        if (sel === EV_RESOLVED || sel === EV_FORFEITED) {
+          if (b.length < 60) continue;
+          const winnerRaw = a.encodeAddress(b.slice(12, 44));
+          out.push({
+            cid: u64At(b, 4),
+            kind: sel === EV_RESOLVED ? "resolved" : "forfeited",
+            winner: winnerRaw === ZERO ? null : winnerRaw,
+            payout: u64At(b, 44),
+            fee: u64At(b, 52),
+            reason: null,
+            txid: t.id,
+            round: t["confirmed-round"],
+            at
+          });
+        } else if (sel === EV_REFUNDED) {
+          if (b.length < 20) continue;
+          out.push({ cid: u64At(b, 4), kind: "refunded", winner: null, payout: 0, fee: 0, reason: u64At(b, 12), txid: t.id, round: t["confirmed-round"], at });
+        }
+      }
+    }
+    next = j["next-token"] ?? null;
+    if (!next) break;
+  }
+  return out;
+}
+var STAGE_KEY = "gonna.arena.stages";
+var STAGE_MEM_MAX = 500;
 function readStageCache() {
   try {
     const j = JSON.parse(window.localStorage.getItem(STAGE_KEY) ?? "{}");
@@ -34305,6 +35208,9 @@ function applyStageScan(cache, hits) {
   const scannedThrough = (cache.scannedThrough ?? 0) >= cache.fromCid ? cid : cache.scannedThrough ?? 0;
   return { fromCid: cid, stages, scannedThrough };
 }
+var CREATE_SIG = "create_challenge(pay,axfer,uint64,uint64,uint64,uint64,byte[],uint64,byte[])uint64";
+var SPAWN_SIG = "spawn_rumble(pay,axfer,pay,uint64,uint64,uint64,byte[])uint64";
+var stageMemo = null;
 async function fetchArenaCreateStages(opts = {}) {
   if (!opts.force && stageMemo && Date.now() - stageMemo.at < 3e4) return stageMemo.stages;
   let cache = readStageCache();
@@ -34344,7 +35250,7 @@ async function fetchArenaCreateStages(opts = {}) {
         if (typeof t["confirmed-round"] !== "number") continue;
         const args = t["application-transaction"]?.["application-args"];
         if (!args || args.length === 0) continue;
-        const first = b64ToBytes2(args[0]);
+        const first = b64ToBytes(args[0]);
         if (!eq(first, selCreate) && !eq(first, selSpawn)) continue;
         if (skipped > 0) {
           skipped--;
@@ -34353,7 +35259,7 @@ async function fetchArenaCreateStages(opts = {}) {
         hits.push({
           round: t["confirmed-round"],
           offset: t["intra-round-offset"] ?? 0,
-          stage: typeof t.note === "string" ? parseStageNote(b64ToBytes2(t.note)) : null
+          stage: typeof t.note === "string" ? parseStageNote(b64ToBytes(t.note)) : null
         });
         if (hits.length >= need) break;
       }
@@ -34368,206 +35274,112 @@ async function fetchArenaCreateStages(opts = {}) {
   stageMemo = { at: Date.now(), stages: out.stages };
   return out.stages;
 }
-var ARENA_APP_ID, LEGACY_ARENA_APP_ID, GONNA_ASA, GONNA_ASA_TESTNET, OPUP_APP_ID, TREASURY_ADDR, ORACLE_ADDR, ALGOD_URL, ALGOD_TESTNET, SCORE_DOMAIN, VERDICT_DOMAIN, TESTNET_FEES, sdkP, TX_KEY, RES_KEY, CLOSE_TX_KEY, INDEXER_URL, INDEXER_TESTNET, STAGE_KEY, STAGE_MEM_MAX, CREATE_SIG, SPAWN_SIG, stageMemo;
-var init_testnetKit = __esm({
-  "src/game/arena/testnetKit.ts"() {
-    init_arenaKit();
-    ARENA_APP_ID = NET.appId;
-    LEGACY_ARENA_APP_ID = NET.legacyAppId;
-    GONNA_ASA = NET.gonnaAsa;
-    GONNA_ASA_TESTNET = NET.gonnaAsa;
-    OPUP_APP_ID = NET.opUpAppId;
-    TREASURY_ADDR = NET.treasuryAddr;
-    ORACLE_ADDR = NET.oracleAddr;
-    ALGOD_URL = NET.algodUrl;
-    ALGOD_TESTNET = NET.algodUrl;
-    SCORE_DOMAIN = new TextEncoder().encode("QA-SCORE|");
-    VERDICT_DOMAIN = new TextEncoder().encode("QA-VERDICT|");
-    TESTNET_FEES = {
-      create: 1e3 + 1e3 + 3e3 + 4 * 1e3,
-      // pay + axfer + call + 4 opup
-      join: 1e3 + 3e3,
-      // axfer + call
-      submit: 3e3 + 4 * 1e3,
-      // call + 4 opup
-      resolve: 1e3 * (1 + 3) + 4 * 1e3,
-      // NON-TIE call (1 outer + 3 inner) + 4 opup; ties scale with the roster — buildResolveGroup computes it dynamically
-      claim: 1e3 + 2 * 1e3,
-      // call + 2 inner (stake axfer + MBR payback) — v15.3.2 BUG-1: was 2000, chain rejects it
-      close: 1e3 + 4e3,
-      // pay + call (2 inner covered by the call's 4000)
-      forfeit: 5e3
-      // call + 4 inner (2 axfer winner + fee axfer + MBR payback)
-    };
-    sdkP = null;
-    TX_KEY = netLsKey("gonna.arena.txids");
-    RES_KEY = netLsKey("gonna.arena.resolved");
-    CLOSE_TX_KEY = netLsKey("gonna.arena.closetx");
-    INDEXER_URL = NET.indexerUrl;
-    INDEXER_TESTNET = NET.indexerUrl;
-    STAGE_KEY = "gonna.arena.stages";
-    STAGE_MEM_MAX = 500;
-    CREATE_SIG = "create_challenge(pay,axfer,uint64,uint64,uint64,uint64,byte[],uint64,byte[])uint64";
-    SPAWN_SIG = "spawn_rumble(pay,axfer,pay,uint64,uint64,uint64,byte[])uint64";
-    stageMemo = null;
-  }
-});
-
-// .tmp-m1-entry.ts
-init_arenaKit();
-
-// src/game/b64.ts
-var T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-var R = /* @__PURE__ */ new Map();
-for (let i = 0; i < 64; i++) R.set(T[i], i);
-
-// src/game/arena/oracleClient.ts
-init_arenaKit();
-var ORACLE_BASE_URL_TESTNET = "https://gonna-arena-oracle-testnet.onrender.com";
-var ORACLE_BASE_URL_MAINNET = NET.oracleBaseUrl;
-var ORACLE_BASE_URL_DEFAULT = ARENA_NETWORK === "mainnet" ? ORACLE_BASE_URL_MAINNET : ORACLE_BASE_URL_TESTNET;
-var LS_ORACLE_URL = netLsKey("gonna.arena.oracleurl");
-function oracleBaseUrl() {
+var CARD_KEY = "gonna.arena.cards";
+var CARD_MEM_MAX = 200;
+function readCardMem() {
   try {
-    const q = new URLSearchParams(window.location.search).get("oracle");
-    if (q) {
-      window.localStorage.setItem(LS_ORACLE_URL, q);
-      return q;
+    return JSON.parse(window.localStorage.getItem(CARD_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+function rememberCard(m) {
+  try {
+    const all = readCardMem();
+    const prev = all[String(m.cid)];
+    const merged = prev ? { ...prev, ...m, players: m.players.length > 0 ? m.players : prev.players, closedAt: m.closedAt ?? prev.closedAt } : m;
+    if (prev && prev.stageVerified === true && m.stageVerified !== true) {
+      merged.stageVerified = true;
+      merged.stageIdx = prev.stageIdx;
     }
-    const stored = window.localStorage.getItem(LS_ORACLE_URL);
-    if (stored) return stored;
+    all[String(m.cid)] = merged;
+    const keys = Object.keys(all);
+    if (keys.length > CARD_MEM_MAX) {
+      const sorted = keys.sort((x, y) => Number(x) - Number(y));
+      for (const k of sorted.slice(0, keys.length - CARD_MEM_MAX)) delete all[k];
+    }
+    window.localStorage.setItem(CARD_KEY, JSON.stringify(all));
   } catch {
   }
-  return ORACLE_BASE_URL_DEFAULT;
 }
-
-// src/game/arena/chainAdapter.ts
-init_testnetKit();
-init_arenaKit();
-
-// src/game/font.ts
-var GLYPH_ROWS = {
-  A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
-  B: ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
-  C: ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
-  D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
-  E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
-  F: ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
-  G: ["01110", "10001", "10000", "10111", "10001", "10001", "01111"],
-  H: ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
-  I: ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
-  J: ["00111", "00010", "00010", "00010", "00010", "10010", "01100"],
-  K: ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
-  L: ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
-  M: ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
-  N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
-  O: ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
-  P: ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
-  Q: ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
-  R: ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
-  S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
-  T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
-  U: ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
-  V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
-  W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
-  X: ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
-  Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
-  Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
-  "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
-  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
-  "2": ["01110", "10001", "00001", "00110", "01000", "10000", "11111"],
-  "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
-  "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
-  "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
-  "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
-  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
-  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
-  "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
-  " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
-  "!": ["00100", "00100", "00100", "00100", "00100", "00000", "00100"],
-  "?": ["01110", "10001", "00001", "00110", "00100", "00000", "00100"],
-  ".": ["00000", "00000", "00000", "00000", "00000", "00110", "00110"],
-  ",": ["00000", "00000", "00000", "00000", "00110", "00110", "01100"],
-  ":": ["00000", "00110", "00110", "00000", "00110", "00110", "00000"],
-  $: ["00100", "01111", "10100", "01110", "00101", "11110", "00100"],
-  "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
-  "\u2014": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
-  // v15.2.7: em dash = honest UNKNOWN value (terminal card stake)
-  "'": ["00100", "00100", "01000", "00000", "00000", "00000", "00000"],
-  "/": ["00001", "00001", "00010", "00100", "01000", "10000", "10000"],
-  ">": ["10000", "01000", "00100", "00010", "00100", "01000", "10000"],
-  "<": ["00001", "00010", "00100", "01000", "00100", "00010", "00001"],
-  "%": ["11001", "11010", "00010", "00100", "01000", "01011", "10011"],
-  "+": ["00000", "00100", "00100", "11111", "00100", "00100", "00000"],
-  "(": ["00010", "00100", "01000", "01000", "01000", "00100", "00010"],
-  ")": ["01000", "00100", "00010", "00010", "00010", "00100", "01000"],
-  "=": ["00000", "00000", "11111", "00000", "11111", "00000", "00000"],
-  "*": ["00000", "10101", "01110", "11111", "01110", "10101", "00000"],
-  "&": ["01100", "10010", "10100", "01000", "10101", "10010", "01101"],
-  // v10: SIGN & STAKE
-  "_": ["00000", "00000", "00000", "00000", "00000", "00000", "11111"]
-};
-var GLYPHS = /* @__PURE__ */ new Map();
-for (const ch of Object.keys(GLYPH_ROWS)) {
-  const rows = GLYPH_ROWS[ch];
-  const pts = [];
-  for (let y = 0; y < 7; y++) {
-    for (let x = 0; x < 5; x++) {
-      if (rows[y].charCodeAt(x) === 49) pts.push(x, y);
-    }
-  }
-  GLYPHS.set(ch, new Uint8Array(pts));
+function rememberedCard(cid) {
+  return readCardMem()[String(cid)] ?? null;
 }
-
-// src/game/arena/chainAdapter.ts
-init_testnetKit();
-var SEAT_TTL_MS = 3600 * 1e3;
-var LS_KEY = netLsKey("gonna.arena.v1");
-var LS_ADAPTER = netLsKey("gonna.arena.adapter");
-function normMode(v) {
-  if (v === "live" || v === "mock") return v;
-  if (v === "testnet") return "live";
-  return null;
+function rememberedCards() {
+  return Object.values(readCardMem());
 }
-function arenaMode() {
-  try {
-    const q = normMode(new URLSearchParams(window.location.search).get("arena"));
-    if (q) {
-      window.localStorage.setItem(LS_ADAPTER, q);
-      return q;
-    }
-    if (window.location.hostname.includes("gonna.bond") && window.location.pathname.includes("arena-testnet")) {
-      return "live";
-    }
-    const stored = normMode(window.localStorage.getItem(LS_ADAPTER));
-    if (stored) {
-      window.localStorage.setItem(LS_ADAPTER, stored);
-      return stored;
-    }
-    return "live";
-  } catch {
-    return "live";
-  }
-}
-function arenaUsesTestnetChain() {
-  return !IS_MAINNET && arenaMode() === "live";
-}
-
-// .tmp-m1-entry.ts
-init_testnetKit();
 export {
-  ARENA_FIXTURES_ENABLED,
+  ALGOD_TESTNET,
+  ALGOD_URL,
+  ARENA_APP_ID,
   ARENA_NETWORK,
+  ARENA_VERSION,
+  CONTINUE_FEE_MICRO,
+  GONNA_ASA,
+  GONNA_ASA_TESTNET,
+  GONNA_DECIMALS,
+  INDEXER_TESTNET,
+  INDEXER_URL,
   IS_MAINNET,
-  NET,
-  ORACLE_BASE_URL_MAINNET,
-  ORACLE_BASE_URL_TESTNET,
-  arenaMode,
-  arenaUsesTestnetChain,
+  LEGACY_ARENA_APP_ID,
+  OPUP_APP_ID,
+  ORACLE_ADDR,
+  SEAT_TTL_SECS,
+  SIGN_CANCEL_MSG,
+  SIGN_NUDGE_MS,
+  SIGN_TIMEOUT_MS,
+  SIGN_TIMEOUT_MSG,
+  STAGE_NOTE_PREFIX,
+  SignCancelled,
+  TESTNET_FEES,
+  TREASURY_ADDR,
+  activeSignOp,
+  algodClient,
+  applyStageScan,
+  buildClaimForfeitGroup,
+  buildClaimGroup,
+  buildContinuePayment,
+  buildCreateGroup,
+  buildEarlyCloseGroup,
+  buildJoinGroup,
+  buildResolveGroup,
+  buildSpawnRumbleGroup,
+  buildSubmitGroup,
+  continueNote,
+  contractVersion,
+  explorerTxUrl,
+  explorerTxUrlFor,
+  fetchArenaCloseEvents,
   fetchArenaCreateStages,
-  netLsKey,
-  oracleBaseUrl,
-  readStageCache
+  getCloseTxid,
+  getResolveAt,
+  getTxid,
+  isCidRaceReject,
+  isSignCancel,
+  isWedgeError,
+  nextChallengeId,
+  parseStageNote,
+  pickCloseTxid,
+  readMeta,
+  readPlayers,
+  readStageCache,
+  recordCloseTxid,
+  recordResolveAt,
+  recordTxid,
+  rememberCard,
+  rememberedCard,
+  rememberedCards,
+  resolveCloseTxid,
+  scanChallengeIds,
+  scoreMsg,
+  sdk,
+  setSignRecoverHook,
+  signSend,
+  signSendManaged,
+  stageNote,
+  verdictMsg,
+  verifyContinuePayment,
+  withTimeout
 };
 /*! Bundled license information:
 

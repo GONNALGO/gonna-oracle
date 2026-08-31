@@ -146,13 +146,51 @@ export async function recoverTestnetSession(): Promise<void> {
   await connectTestnetPera();
 }
 
-// Pera-compatible atomic-group signer for the connected testnet account
+// v17.0.8 (Prince: "CANNOT READ PROPERTIES OF NULL (READING
+// 'SENDCUSTOMREQUEST')"): the Pera lib can hand back a LIVE-looking session
+// (reconnectSession returns the cached account) while its internal
+// WalletConnect client is NULL — every sign then dies inside the lib with
+// that raw TypeError and the degen is locked out of ACCEPT / CREATE / CLAIM.
+// Narrow detector: ONLY the null-client crash class qualifies — a user
+// rejection ('rejected' / 'cancelled') must NEVER trigger the heal.
+export function isPeraSessionFatal(e: unknown): boolean {
+  const m = String((e as { message?: string })?.message ?? e ?? '').toLowerCase();
+  if (m.includes('reject') || m.includes('cancel') || m.includes('declin')) return false;
+  return m.includes('sendcustomrequest') || (m.includes('null') && (m.includes('client') || m.includes('reading')));
+}
+
+// Pera-compatible atomic-group signer for the connected testnet account.
+// v17.0.8: on the null-client crash, HEAL (drop the wedged session, rebuild
+// the instance, reconnect) and retry the SAME sign ONCE — all inside the
+// original tap's user gesture, so a fresh pairing is allowed to open.
 export async function peraSignFn(address: string): Promise<TxSignFn> {
   const p = await peraInstance();
   return async (groups) => {
     console.debug('[arena] pera.signTransaction → ' + groups.length + ' group(s) for ' + address.slice(0, 6) + '..');
-    const signed = await p.signTransaction(groups.map((g) => g.map((w) => ({ txn: w.txn, signers: [address] }))));
-    console.debug('[arena] pera.signTransaction ✓ ' + signed.length + ' signed');
-    return signed as Uint8Array[];
+    const toSign = groups.map((g) => g.map((w) => ({ txn: w.txn, signers: [address] })));
+    try {
+      const signed = await p.signTransaction(toSign);
+      console.debug('[arena] pera.signTransaction ✓ ' + signed.length + ' signed');
+      return signed as Uint8Array[];
+    } catch (e) {
+      if (!isPeraSessionFatal(e)) throw e;
+      console.debug('[arena] pera session fatal mid-sign — heal + one retry:', e);
+      try {
+        await withTimeout(p.disconnect(), PROBE_TIMEOUT_MS, 'disconnect timeout');
+      } catch {
+        pera = null; // wedged beyond disconnect — rebuild from scratch
+      }
+      const p2 = await peraInstance();
+      let accounts: string[] = [];
+      try {
+        accounts = await withTimeout(p2.reconnectSession(), PROBE_TIMEOUT_MS, 'reconnect timeout');
+      } catch { /* session truly gone */ }
+      if (!accounts.includes(address)) {
+        throw new Error('WALLET SESSION LOST - TAP CONNECT TO RE-PAIR');
+      }
+      const signed = await p2.signTransaction(toSign);
+      console.debug('[arena] pera.signTransaction ✓ after heal, ' + signed.length + ' signed');
+      return signed as Uint8Array[];
+    }
   };
 }

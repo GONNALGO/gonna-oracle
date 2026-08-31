@@ -21,7 +21,7 @@ import type { Art } from '../sprites';
 import * as wallet from '../wallet';
 import { SKIN_INFO, skinPortrait, skinPortraitFailed, SHELF_PAGE, shelfPages, shelfPageClamp, tintedFighterPortrait } from '../skins';
 import type { SkinId } from '../skins';
-import { getArenaAdapter, arenaMode, arenaUsesTestnetChain, closeGate, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
+import { getArenaAdapter, arenaMode, arenaUsesTestnetChain, closeGate, CATASTROPHE_MS, duelForfeitInfo, feeLine, fmtAgo, fmtAmount, fmtCountdown, fmtGonna, fmtMMSS, fmtStake, isCidMovedError, CID_MOVED_MSG, splitPot } from './chainAdapter';
 import { activeSignOp, explorerTxUrl, getCloseTxid, getTxid, isSignCancel, SIGN_CANCEL_MSG } from './testnetKit';
 import { ARENA_FIXTURES_ENABLED, ARENA_NETWORK } from './arenaKit';
 import type { SignOpView } from './testnetKit';
@@ -931,6 +931,7 @@ export class ArenaUI {
       return { act: 'move' };
     }
     if (id.startsWith('claim:')) return this.doClaim(Number(id.slice(6)));
+    if (id.startsWith('sweep:')) return this.doClaimCatastrophe(Number(id.slice(6)));
 
     // ---- v10.4: SHARE (private cards, owner only, while live) ----
     if (id === 'viewchain') {
@@ -1237,6 +1238,7 @@ export class ArenaUI {
     if (id === 'resolve') return this.doResolve();
     if (id === 'forfeit') return this.doClaimForfeit();
     if (id === 'vclaim') return this.doClaim(this.current ? this.current.id : -1);
+    if (id === 'vsweep') return this.doClaimCatastrophe(this.current ? this.current.id : -1);
     if (id === 'close') return this.doEarlyClose();
     if (id === 'rematch') return this.doRematch();
     return { act: 'none' };
@@ -1500,6 +1502,25 @@ export class ArenaUI {
       () => this.adapter().claimForfeit!(c.id, me),
       () => {
         this.current = { ...c, status: 'closed', forfeited: true };
+        void this.refreshBoard();
+        void this.refreshHistory();
+      },
+    );
+    return { act: 'move' };
+  }
+
+  // v17.0.8: CATASTROPHE SWEEP — the contract deletes both boxes on success,
+  // so the card is terminal the moment the tx confirms (same as forfeit)
+  private doClaimCatastrophe(id: number): ArenaAction {
+    if (!this.adapter().claimCatastrophe) return this.fail('SWEEP IS A LIVE-CHAIN CONTRACT PATH');
+    console.debug('[arena] CATASTROPHE SWEEP — start (card #' + id + ')');
+    void this.run(
+      () => this.adapter().claimCatastrophe!(id, arenaAddress()),
+      () => {
+        if (this.current && this.current.id === id) {
+          this.current = { ...this.current, status: 'closed' };
+        }
+        this.buildFeed();
         void this.refreshBoard();
         void this.refreshHistory();
       },
@@ -1826,7 +1847,13 @@ export class ArenaUI {
       const live = card.status === 'open' || card.status === 'full';
       const freeSeats = card.seatsTotal - card.players.length;
       const msLeft = card.deadline - Date.now();
-      const claimable = mine && card.status === 'expired';
+      // v17.0.8 (Prince: dead CLAIM on the expired 100M table): the lobby
+      // CLAIM must mirror the CHAIN gate — claim() asserts seats_taken == 0,
+      // so an expired card WITH seated joiners is NOT claimable; it settles
+      // by RESOLVE (a joiner signed), the duel forfeit clock, or the +7d
+      // sweep. Before this fix the row offered a tx the contract rejects.
+      const gate = closeGate(card, me);
+      const claimable = gate?.kind === 'claim' || gate?.kind === 'catastrophe';
       // row panel
       c.fillStyle = mine ? '#101a10' : PANEL;
       c.fillRect(8, y, VW - 16 - 22, ROW_H - 4);
@@ -1870,7 +1897,16 @@ export class ArenaUI {
       // smaller gold button wins the tap (tap() matches in reverse order)
       this.hots.push({ id: 'card:' + card.id, x: 8, y, w: VW - 16 - 22, h: ROW_H - 4 });
       if (claimable) {
-        this.btn(c, frame, { id: 'claim:' + card.id, x: VW - 96, y: y + 22, w: 60, h: 14 }, 'CLAIM', { gold: true });
+        if (gate?.kind === 'catastrophe') {
+          this.btn(c, frame, { id: 'sweep:' + card.id, x: VW - 96, y: y + 22, w: 60, h: 14 }, 'SWEEP', { gold: true });
+        } else {
+          this.btn(c, frame, { id: 'claim:' + card.id, x: VW - 96, y: y + 22, w: 60, h: 14 }, 'CLAIM', { gold: true });
+        }
+      } else if (!live && card.status === 'expired' && gate?.kind === 'locked') {
+        // v17.0.8: honestly locked until the +7d sweep — show the date, never
+        // a dead CLAIM (contract rejects it: seats are taken, nobody signed)
+        const sweepAt = new Date(card.deadline + CATASTROPHE_MS).toISOString().slice(5, 16).replace('T', ' ');
+        drawText(c, 'SWEEP ' + sweepAt, VW - 96, y + 26, 1, '#ff8a3c');
       }
     }
     // v10.3: page keys on the right rail + PAGE indicator
@@ -2482,10 +2518,24 @@ export class ArenaUI {
           this.btn(c, frame, { id: 'forfeit', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM FORFEIT', { red: true });
           ay += 24;
         } else if (joiners.length > 0) {
-          drawTextSh(c, 'TABLE LOCKED - NO SCORES SEALED', VW / 2, ay, 1, '#ff8a3c', 'center');
-          ay += 12;
-          drawText(c, 'A SIGNED SCORE SETTLES IT - ELSE THE +7D SWEEP REFUNDS ALL', VW / 2, ay, 1, GRAY, 'center');
-          ay += 14;
+          // v17.0.8: the +7d sweep is REAL here — when the window is open the
+          // participant gets a working SWEEP button (permissionless on-chain);
+          // before that, the exact UTC date, never a dead CLAIM.
+          const gate2 = closeGate(card, me);
+          if (gate2?.kind === 'catastrophe') {
+            drawTextSh(c, 'NO SCORES SEALED - SWEEP WINDOW OPEN', VW / 2, ay, 1, '#ff8a3c', 'center');
+            ay += 12;
+            drawText(c, 'FULL REFUND TO EVERY PAYER - ZERO FEE', VW / 2, ay, 1, GRAY, 'center');
+            ay += 12;
+            this.btn(c, frame, { id: 'vsweep', x: 92, y: ay, w: 200, h: 20 }, 'SWEEP REFUND ALL', { gold: true });
+            ay += 24;
+          } else {
+            const sweepAt = new Date(card.deadline + CATASTROPHE_MS).toISOString().slice(0, 16).replace('T', ' ');
+            drawTextSh(c, 'TABLE LOCKED - NO SCORES SEALED', VW / 2, ay, 1, '#ff8a3c', 'center');
+            ay += 12;
+            drawText(c, 'A SIGNED SCORE SETTLES IT - ELSE THE SWEEP REFUNDS ALL ' + sweepAt + ' UTC', VW / 2, ay, 1, GRAY, 'center');
+            ay += 14;
+          }
         } else {
           this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM YOUR STAKE BACK', { gold: true });
           ay += 24;

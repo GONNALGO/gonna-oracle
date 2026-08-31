@@ -662,12 +662,37 @@ export function __testSetLib(provider: WalletProvider, lib: WalletLib | null): v
   else delete libs[k];
 }
 
-// v9.1 readiness: raw transaction signing through the active wallet session
+// v17.0.8 (Prince: "CANNOT READ PROPERTIES OF NULL (READING
+// 'SENDCUSTOMREQUEST')"): a restored Pera session can LOOK live (address
+// cached) while the WalletConnect client inside the lib is null — every sign
+// dies with that raw TypeError. Narrow detector: user rejections never heal.
+function isSessionFatal(e: unknown): boolean {
+  const m = String((e as { message?: string })?.message ?? e ?? '').toLowerCase();
+  if (m.includes('reject') || m.includes('cancel') || m.includes('declin')) return false;
+  return m.includes('sendcustomrequest') || (m.includes('null') && (m.includes('client') || m.includes('reading')));
+}
+
+// v9.1 readiness: raw transaction signing through the active wallet session.
+// v17.0.8: on the null-client crash, HEAL (drop the wedged session, fresh
+// re-pair via recoverSession) and retry the SAME sign ONCE — the tap's user
+// gesture is still alive, so a new pairing modal may open.
 export async function signTransactions(txGroups: unknown[][]): Promise<Uint8Array[]> {
   if (mock) throw new Error('mock wallet cannot sign');
-  const w = (activeLibKey ? libs[activeLibKey] : null) ?? (state.provider ? libs[libKey(state.provider)] : null);
+  const pick = () => (activeLibKey ? libs[activeLibKey] : null) ?? (state.provider ? libs[libKey(state.provider)] : null);
+  const w = pick();
   if (!w || !w.signTransaction) throw new Error('wallet not connected');
-  return w.signTransaction(txGroups, state.address ?? undefined);
+  try {
+    return await w.signTransaction(txGroups, state.address ?? undefined);
+  } catch (e) {
+    if (!isSessionFatal(e) || !state.provider) throw e;
+    console.debug('[wallet] session fatal mid-sign — heal + one retry:', e);
+    await recoverSession(); // disconnect + fresh pairing (connect rebuilds)
+    const w2 = pick();
+    if (!w2 || !w2.signTransaction || !state.address) {
+      throw new Error('WALLET SESSION LOST - TAP CONNECT TO RE-PAIR');
+    }
+    return w2.signTransaction(txGroups, state.address);
+  }
 }
 
 // v9.1: CI mock mode — the mock wallet cannot really sign, but the SEAL flow

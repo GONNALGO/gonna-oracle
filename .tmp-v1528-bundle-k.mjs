@@ -51,6 +51,7 @@ var TREASURY_ADDR = NET.treasuryAddr;
 var ORACLE_ADDR = NET.oracleAddr;
 var ALGOD_URL = NET.algodUrl;
 var ALGOD_TESTNET = NET.algodUrl;
+var CATASTROPHE_WINDOW_SECS = 7 * 24 * 3600;
 var STAGE_NOTE_PREFIX = "gonna:v2:stage:";
 function stageNote(stageIdx) {
   return new TextEncoder().encode(STAGE_NOTE_PREFIX + stageIdx);

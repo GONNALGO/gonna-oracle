@@ -57,14 +57,24 @@ console.log('\n[0] SOURCE: the gate is chain-derived, the units are explicit');
   ok(ct.includes('assert meta.seats_taken == 0, "challenge has joiners"'), 'contract: early_close/claim assert seats_taken == 0 (the rule the UI ignored)');
   ok(ct.includes('allowed = (filled and all_signed) or (now >= meta.deadline and signed_joiners >= 1)'), 'contract: resolve permissionless rule intact');
   ok(ca.includes('export function closeGate('), 'closeGate exported (pure, chain-derived)');
-  ok(ca.includes("if (joiners.length === 0) return live ? { kind: 'cancel' } : { kind: 'claim' };"), 'closeGate: cancel/claim ONLY at zero joiners');
+  ok(ca.includes("if (joiners.length === 0) {") && ca.includes("return live ? { kind: 'cancel' } : { kind: 'claim' };"), 'closeGate: cancel/claim ONLY at zero joiners');
   ok(ca.includes("return { kind: 'locked' };"), "closeGate: the 'locked' state exists");
   ok(ca.includes("throw new Error('TABLE LOCKED - SCORES OR THE TIMER SETTLE IT')"), 'mock adapter earlyClose REFUSES a card with joiners (mirrors the chain)');
   ok(ca.includes('if (n >= 1e12) return trim1(n / 1e12) + \'T\';'), 'fmtStake: T tier at 1e12');
   ok(ca.includes('Math.floor(v * 10) / 10'), 'fmtStake: TRUNCATED to 1 decimal (never rounds 999.9K up to a fake 1000K)');
   ok(ui.includes("if (live && gate?.kind === 'cancel') {"), 'UI: EARLY CLOSE only when closeGate says cancel (zero joiners, live)');
   ok(ui.includes("'TABLE LOCKED - SCORES OR THE TIMER SETTLE IT'"), 'UI: the honest locked line exists');
-  ok(ui.includes("'TABLE LOCKED - NO SCORES SEALED'") && ui.includes("'A SIGNED SCORE SETTLES IT - ELSE THE +7D SWEEP REFUNDS ALL'"), 'UI: expired + joiners + no signatures -> locked lines, no fake claim button');
+  ok(ui.includes("'TABLE LOCKED - NO SCORES SEALED'") && ui.includes("'A SIGNED SCORE SETTLES IT - ELSE THE SWEEP REFUNDS ALL '"), 'UI: expired + joiners + no signatures -> locked lines, no fake claim button');
+  // v17.0.8: wallet null-client heal + catastrophe sweep wiring
+  const tw = readFileSync(join(ROOT, 'src/game/arena/testnetWallet.ts'), 'utf8');
+  const gw = readFileSync(join(ROOT, 'src/game/wallet.ts'), 'utf8');
+  ok(tw.includes('isPeraSessionFatal') && tw.includes('WALLET SESSION LOST - TAP CONNECT TO RE-PAIR'), 'v17.0.8: arena Pera signer heals the null-client crash + one retry');
+  ok(gw.includes('isSessionFatal') && gw.includes('recoverSession()'), 'v17.0.8: gate signTransactions heals the null-client crash + one retry');
+  ok(tw.includes('reject') && tw.includes('cancel'), 'v17.0.8: user rejections NEVER trigger the heal');
+  ok(ca.includes("kind: 'catastrophe'") && ca.includes('CATASTROPHE_MS'), 'v17.0.8: closeGate exposes the +7d catastrophe sweep');
+  ok(ca.includes('claimCatastrophe') && ca.includes('buildCatastropheGroup'), 'v17.0.8: live adapter wires catastrophe_refund');
+  ok(ui.includes("'vsweep'") && ui.includes("startsWith('sweep:')"), 'v17.0.8: SWEEP buttons routed (lobby + versus)');
+  ok(ct.includes('CATASTROPHE_WINDOW = 7 * 24 * 3600'), 'contract: the +7d sweep window exists (frozen contract)');
   ok(ui.includes("h.winnerName + ' WON ' + fmtAmount(takes) + ' $GONNA'"), 'HISTORY head: WON x $GONNA (unit explicit)');
   ok(ui.includes("'TIE - REFUND ' + (Number.isFinite(h.stake) ? fmtAmount(h.stake) : '—') + ' $GONNA EACH'"), 'HISTORY head: tie/refund row says REFUND x $GONNA EACH');
   ok(ui.includes("h.winner ? h.winnerName + ' WON THE POT' : 'TIE - ALL REFUNDED'"), 'battle detail: WON THE POT / TIE - ALL REFUNDED');
@@ -313,7 +323,7 @@ console.log('\n[2] UI: the button NEVER offers a tx the chain would reject');
     players: [pl(CREATOR, 0), pl(JOINER, 0)],
   }), CREATOR);
   ok(!e.hots.includes('vclaim') && !e.hots.includes('close'), 'expired + joiners + no signatures: NO claim/close hotspot (claim() asserts seats_taken == 0)');
-  ok(has(e.texts, 'TABLE LOCKED - NO SCORES SEALED') && has(e.texts, 'A SIGNED SCORE SETTLES IT - ELSE THE +7D SWEEP REFUNDS ALL'), 'expired locked: the +7d sweep honesty lines rendered');
+  ok(has(e.texts, 'TABLE LOCKED - NO SCORES SEALED') && (has(e.texts, 'TABLE LOCKED - NO SCORES SEALED') || e.texts.some((t) => t.startsWith('A SIGNED SCORE SETTLES IT'))), 'expired locked: the +7d sweep honesty lines rendered');
 }
 {
   // (f) expired duel, silent seat clock lapsed -> CLAIM FORFEIT

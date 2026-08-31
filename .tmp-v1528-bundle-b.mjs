@@ -95,6 +95,7 @@ __export(testnetKit_exports, {
   ARENA_APP_ID: () => ARENA_APP_ID,
   ARENA_NETWORK: () => ARENA_NETWORK,
   ARENA_VERSION: () => ARENA_VERSION,
+  CATASTROPHE_WINDOW_SECS: () => CATASTROPHE_WINDOW_SECS,
   CONTINUE_FEE_MICRO: () => CONTINUE_FEE_MICRO,
   GONNA_ASA: () => GONNA_ASA,
   GONNA_ASA_TESTNET: () => GONNA_ASA_TESTNET,
@@ -117,6 +118,7 @@ __export(testnetKit_exports, {
   activeSignOp: () => activeSignOp,
   algodClient: () => algodClient,
   applyStageScan: () => applyStageScan,
+  buildCatastropheGroup: () => buildCatastropheGroup,
   buildClaimForfeitGroup: () => buildClaimForfeitGroup,
   buildClaimGroup: () => buildClaimGroup,
   buildContinuePayment: () => buildContinuePayment,
@@ -522,6 +524,19 @@ async function buildClaimGroup(o3) {
     // stake axfer back + exact MBR payback) => 1000 x (1 outer + 2 inner).
     // The old 2000 was rejected by the chain ("group fee too small").
     suggestedParams: await baseParams(TESTNET_FEES.claim)
+  });
+  return [call];
+}
+async function buildCatastropheGroup(o3) {
+  const a3 = await sdk();
+  const call = a3.makeApplicationNoOpTxnFromObject({
+    sender: o3.caller,
+    appIndex: ARENA_APP_ID,
+    appArgs: [await methodSelector(a3, "catastrophe_refund(uint64)void"), await appArg(a3, "uint64", o3.cid)],
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o3.cid, 109), boxRef(o3.cid, 112)],
+    // fee: 1000 x (1 outer + payers axfers + 1 MBR pay), 2000 margin floor
+    suggestedParams: await baseParams(Math.max(2e3, 1e3 * (1 + o3.payers + 1)))
   });
   return [call];
 }
@@ -1015,7 +1030,7 @@ function rememberedCard(cid) {
 function rememberedCards() {
   return Object.values(readCardMem());
 }
-var ARENA_APP_ID, LEGACY_ARENA_APP_ID, GONNA_ASA, GONNA_ASA_TESTNET, OPUP_APP_ID, TREASURY_ADDR, ORACLE_ADDR, ALGOD_URL, ALGOD_TESTNET, SEAT_TTL_SECS, ARENA_VERSION, MBR_CREATE, EARLY_CLOSE_FEE_PAY, GONNA_DECIMALS, STAGE_NOTE_PREFIX, SCORE_DOMAIN, VERDICT_DOMAIN, TESTNET_FEES, sdkP, CONTINUE_FEE_MICRO, SIGN_TIMEOUT_MS, SIGN_TIMEOUT_MSG, SIGN_NUDGE_MS, SIGN_CANCEL_MSG, SignCancelled, recoverHook, activeOp, StaleAttempt, TX_KEY, RES_KEY, CLOSE_TX_KEY, INDEXER_URL, INDEXER_TESTNET, EV_RESOLVED, EV_FORFEITED, EV_REFUNDED, STAGE_KEY, STAGE_MEM_MAX, CREATE_SIG, SPAWN_SIG, stageMemo, CARD_KEY, CARD_MEM_MAX;
+var ARENA_APP_ID, LEGACY_ARENA_APP_ID, GONNA_ASA, GONNA_ASA_TESTNET, OPUP_APP_ID, TREASURY_ADDR, ORACLE_ADDR, ALGOD_URL, ALGOD_TESTNET, SEAT_TTL_SECS, CATASTROPHE_WINDOW_SECS, ARENA_VERSION, MBR_CREATE, EARLY_CLOSE_FEE_PAY, GONNA_DECIMALS, STAGE_NOTE_PREFIX, SCORE_DOMAIN, VERDICT_DOMAIN, TESTNET_FEES, sdkP, CONTINUE_FEE_MICRO, SIGN_TIMEOUT_MS, SIGN_TIMEOUT_MSG, SIGN_NUDGE_MS, SIGN_CANCEL_MSG, SignCancelled, recoverHook, activeOp, StaleAttempt, TX_KEY, RES_KEY, CLOSE_TX_KEY, INDEXER_URL, INDEXER_TESTNET, EV_RESOLVED, EV_FORFEITED, EV_REFUNDED, STAGE_KEY, STAGE_MEM_MAX, CREATE_SIG, SPAWN_SIG, stageMemo, CARD_KEY, CARD_MEM_MAX;
 var init_testnetKit = __esm({
   "src/game/arena/testnetKit.ts"() {
     init_arenaKit();
@@ -1029,6 +1044,7 @@ var init_testnetKit = __esm({
     ALGOD_URL = NET.algodUrl;
     ALGOD_TESTNET = NET.algodUrl;
     SEAT_TTL_SECS = 3600;
+    CATASTROPHE_WINDOW_SECS = 7 * 24 * 3600;
     ARENA_VERSION = 2;
     MBR_CREATE = 358200;
     EARLY_CLOSE_FEE_PAY = 1e6;
@@ -52139,7 +52155,10 @@ function oracleIsDev() {
 }
 function oracleLine() {
   if (oracleIsDev()) return "QA DEV ORACLE - LOCAL KEY (NEVER SHIPPED)";
-  return "SERVER ORACLE - " + oracleBaseUrl().replace(/^https?:\/\//, "");
+  const base = oracleBaseUrl();
+  const isDefault = base === ORACLE_BASE_URL_DEFAULT;
+  if (isDefault) return ARENA_NETWORK === "mainnet" ? "SERVER ORACLE - MAINNET" : "SERVER ORACLE - TESTNET";
+  return "CUSTOM ORACLE - " + base.replace(/^https?:\/\//, "");
 }
 var OracleError = class extends Error {
   status;
@@ -52986,8 +53005,12 @@ function duelForfeitInfo(card, me2, nowMs = Date.now(), opts) {
   if (nowMs > expiredAt) return { kind: "claimable", seat: otherIdx, expiredAt };
   return null;
 }
+var CATASTROPHE_MS = 7 * 24 * 3600 * 1e3;
 function closeGate(card, me2, nowMs = Date.now()) {
-  if (me2 === null || card.creator !== me2) return null;
+  if (me2 === null) return null;
+  const isCreator = card.creator === me2;
+  const isPayer = isCreator || card.players.some((p4) => p4.address === me2);
+  if (!isPayer) return null;
   const live = card.status === "open" || card.status === "full";
   if (!live && card.status !== "expired") return null;
   const joiners = card.players.slice(1);
@@ -52996,7 +53019,11 @@ function closeGate(card, me2, nowMs = Date.now()) {
   const joinerSigned = joiners.some((p4) => p4.score > 0);
   if (live && tableFull && allSigned || card.status === "expired" && joinerSigned) return { kind: "resolve" };
   if (duelForfeitInfo(card, me2, nowMs, { includeExpired: true })?.kind === "claimable") return { kind: "forfeit" };
-  if (joiners.length === 0) return live ? { kind: "cancel" } : { kind: "claim" };
+  if (joiners.length === 0) {
+    if (!isCreator) return null;
+    return live ? { kind: "cancel" } : { kind: "claim" };
+  }
+  if (card.status === "expired" && nowMs >= card.deadline + CATASTROPHE_MS) return { kind: "catastrophe" };
   return { kind: "locked" };
 }
 var LS_KEY = netLsKey("gonna.arena.v1");
@@ -53684,6 +53711,26 @@ var TestnetArenaAdapter = class {
     }
     return { payout: 0, txid };
   }
+  // v17.0.8: CATASTROPHE SWEEP — permissionless, after deadline + 7d. Every
+  // payer refunded in full, zero fee, boxes deleted. Client pre-checks mirror
+  // the contract asserts so the button never offers a tx the chain rejects.
+  async claimCatastrophe(id, _address) {
+    const me2 = await this.id();
+    const before = await this.getChallenge(id);
+    if (!before) throw new Error("challenge not found");
+    if (before.status !== "expired") throw new Error("SWEEP NEEDS AN EXPIRED CARD");
+    if (Date.now() < before.deadline + CATASTROPHE_MS) {
+      throw new Error("SWEEP OPENS " + new Date(before.deadline + CATASTROPHE_MS).toISOString().slice(0, 16).replace("T", " ") + " UTC");
+    }
+    const players = await readPlayers(id);
+    const txns = await buildCatastropheGroup({ caller: me2.address, cid: id, payers: Math.max(1, players.length) });
+    const txid = await signSend(me2.sign, txns, { label: "CATASTROPHE SWEEP" });
+    recordTxid(id, txid);
+    recordCloseTxid(id, txid);
+    recordResolveAt(id, Date.now());
+    if (before) this.rememberClosed(before, "refunded", null, 0, 0);
+    return { payout: 0, txid };
+  }
   async earlyClose(id, _address) {
     const me2 = await this.id();
     const before = await this.getChallenge(id);
@@ -54100,13 +54147,41 @@ async function recoverTestnetSession() {
   }
   await connectTestnetPera();
 }
+function isPeraSessionFatal(e3) {
+  const m5 = String(e3?.message ?? e3 ?? "").toLowerCase();
+  if (m5.includes("reject") || m5.includes("cancel") || m5.includes("declin")) return false;
+  return m5.includes("sendcustomrequest") || m5.includes("null") && (m5.includes("client") || m5.includes("reading"));
+}
 async function peraSignFn(address) {
   const p4 = await peraInstance();
   return async (groups) => {
     console.debug("[arena] pera.signTransaction \u2192 " + groups.length + " group(s) for " + address.slice(0, 6) + "..");
-    const signed = await p4.signTransaction(groups.map((g5) => g5.map((w5) => ({ txn: w5.txn, signers: [address] }))));
-    console.debug("[arena] pera.signTransaction \u2713 " + signed.length + " signed");
-    return signed;
+    const toSign = groups.map((g5) => g5.map((w5) => ({ txn: w5.txn, signers: [address] })));
+    try {
+      const signed = await p4.signTransaction(toSign);
+      console.debug("[arena] pera.signTransaction \u2713 " + signed.length + " signed");
+      return signed;
+    } catch (e3) {
+      if (!isPeraSessionFatal(e3)) throw e3;
+      console.debug("[arena] pera session fatal mid-sign \u2014 heal + one retry:", e3);
+      try {
+        await withTimeout(p4.disconnect(), PROBE_TIMEOUT_MS, "disconnect timeout");
+      } catch {
+        pera = null;
+      }
+      const p22 = await peraInstance();
+      let accounts = [];
+      try {
+        accounts = await withTimeout(p22.reconnectSession(), PROBE_TIMEOUT_MS, "reconnect timeout");
+      } catch {
+      }
+      if (!accounts.includes(address)) {
+        throw new Error("WALLET SESSION LOST - TAP CONNECT TO RE-PAIR");
+      }
+      const signed = await p22.signTransaction(toSign);
+      console.debug("[arena] pera.signTransaction \u2713 after heal, " + signed.length + " signed");
+      return signed;
+    }
   };
 }
 
@@ -54535,11 +54610,28 @@ function shortAddress() {
   if (!a3) return "";
   return a3.slice(0, 5) + "..." + a3.slice(-4);
 }
+function isSessionFatal(e3) {
+  const m5 = String(e3?.message ?? e3 ?? "").toLowerCase();
+  if (m5.includes("reject") || m5.includes("cancel") || m5.includes("declin")) return false;
+  return m5.includes("sendcustomrequest") || m5.includes("null") && (m5.includes("client") || m5.includes("reading"));
+}
 async function signTransactions(txGroups) {
   if (mock) throw new Error("mock wallet cannot sign");
-  const w5 = (activeLibKey ? libs[activeLibKey] : null) ?? (state.provider ? libs[libKey(state.provider)] : null);
+  const pick = () => (activeLibKey ? libs[activeLibKey] : null) ?? (state.provider ? libs[libKey(state.provider)] : null);
+  const w5 = pick();
   if (!w5 || !w5.signTransaction) throw new Error("wallet not connected");
-  return w5.signTransaction(txGroups, state.address ?? void 0);
+  try {
+    return await w5.signTransaction(txGroups, state.address ?? void 0);
+  } catch (e3) {
+    if (!isSessionFatal(e3) || !state.provider) throw e3;
+    console.debug("[wallet] session fatal mid-sign \u2014 heal + one retry:", e3);
+    await recoverSession();
+    const w22 = pick();
+    if (!w22 || !w22.signTransaction || !state.address) {
+      throw new Error("WALLET SESSION LOST - TAP CONNECT TO RE-PAIR");
+    }
+    return w22.signTransaction(txGroups, state.address);
+  }
 }
 var KEY_NFD_SEGS = "gonna.nfd.segs.v5";
 var segStore = {};
@@ -55569,6 +55661,7 @@ var ArenaUI = class {
       return { act: "move" };
     }
     if (id.startsWith("claim:")) return this.doClaim(Number(id.slice(6)));
+    if (id.startsWith("sweep:")) return this.doClaimCatastrophe(Number(id.slice(6)));
     if (id === "viewchain") {
       const ch = this.current;
       const txid = ch ? getCloseTxid(ch.id) : null;
@@ -55845,6 +55938,7 @@ var ArenaUI = class {
     if (id === "resolve") return this.doResolve();
     if (id === "forfeit") return this.doClaimForfeit();
     if (id === "vclaim") return this.doClaim(this.current ? this.current.id : -1);
+    if (id === "vsweep") return this.doClaimCatastrophe(this.current ? this.current.id : -1);
     if (id === "close") return this.doEarlyClose();
     if (id === "rematch") return this.doRematch();
     return { act: "none" };
@@ -56057,6 +56151,24 @@ var ArenaUI = class {
       () => this.adapter().claimForfeit(c3.id, me2),
       () => {
         this.current = { ...c3, status: "closed", forfeited: true };
+        void this.refreshBoard();
+        void this.refreshHistory();
+      }
+    );
+    return { act: "move" };
+  }
+  // v17.0.8: CATASTROPHE SWEEP — the contract deletes both boxes on success,
+  // so the card is terminal the moment the tx confirms (same as forfeit)
+  doClaimCatastrophe(id) {
+    if (!this.adapter().claimCatastrophe) return this.fail("SWEEP IS A LIVE-CHAIN CONTRACT PATH");
+    console.debug("[arena] CATASTROPHE SWEEP \u2014 start (card #" + id + ")");
+    void this.run(
+      () => this.adapter().claimCatastrophe(id, arenaAddress()),
+      () => {
+        if (this.current && this.current.id === id) {
+          this.current = { ...this.current, status: "closed" };
+        }
+        this.buildFeed();
         void this.refreshBoard();
         void this.refreshHistory();
       }
@@ -56345,7 +56457,8 @@ var ArenaUI = class {
       const live = card.status === "open" || card.status === "full";
       const freeSeats = card.seatsTotal - card.players.length;
       const msLeft = card.deadline - Date.now();
-      const claimable = mine && card.status === "expired";
+      const gate = closeGate(card, me2);
+      const claimable = gate?.kind === "claim" || gate?.kind === "catastrophe";
       c3.fillStyle = mine ? "#101a10" : PANEL;
       c3.fillRect(8, y5, VW - 16 - 22, ROW_H - 4);
       c3.strokeStyle = mine ? "#2e5a26" : "#232838";
@@ -56380,7 +56493,14 @@ var ArenaUI = class {
       }
       this.hots.push({ id: "card:" + card.id, x: 8, y: y5, w: VW - 16 - 22, h: ROW_H - 4 });
       if (claimable) {
-        this.btn(c3, frame, { id: "claim:" + card.id, x: VW - 96, y: y5 + 22, w: 60, h: 14 }, "CLAIM", { gold: true });
+        if (gate?.kind === "catastrophe") {
+          this.btn(c3, frame, { id: "sweep:" + card.id, x: VW - 96, y: y5 + 22, w: 60, h: 14 }, "SWEEP", { gold: true });
+        } else {
+          this.btn(c3, frame, { id: "claim:" + card.id, x: VW - 96, y: y5 + 22, w: 60, h: 14 }, "CLAIM", { gold: true });
+        }
+      } else if (!live && card.status === "expired" && gate?.kind === "locked") {
+        const sweepAt = new Date(card.deadline + CATASTROPHE_MS).toISOString().slice(5, 16).replace("T", " ");
+        drawText2(c3, "SWEEP " + sweepAt, VW - 96, y5 + 26, 1, "#ff8a3c");
       }
     }
     if (this.page > 0) this.btn(c3, frame, { id: "page:prev", x: VW - 26, y: TOP, w: 18, h: 14 }, "<", { small: true });
@@ -56881,10 +57001,21 @@ var ArenaUI = class {
           this.btn(c3, frame, { id: "forfeit", x: 92, y: ay, w: 200, h: 20 }, "CLAIM FORFEIT", { red: true });
           ay += 24;
         } else if (joiners.length > 0) {
-          drawTextSh2(c3, "TABLE LOCKED - NO SCORES SEALED", VW / 2, ay, 1, "#ff8a3c", "center");
-          ay += 12;
-          drawText2(c3, "A SIGNED SCORE SETTLES IT - ELSE THE +7D SWEEP REFUNDS ALL", VW / 2, ay, 1, GRAY2, "center");
-          ay += 14;
+          const gate22 = closeGate(card, me2);
+          if (gate22?.kind === "catastrophe") {
+            drawTextSh2(c3, "NO SCORES SEALED - SWEEP WINDOW OPEN", VW / 2, ay, 1, "#ff8a3c", "center");
+            ay += 12;
+            drawText2(c3, "FULL REFUND TO EVERY PAYER - ZERO FEE", VW / 2, ay, 1, GRAY2, "center");
+            ay += 12;
+            this.btn(c3, frame, { id: "vsweep", x: 92, y: ay, w: 200, h: 20 }, "SWEEP REFUND ALL", { gold: true });
+            ay += 24;
+          } else {
+            const sweepAt = new Date(card.deadline + CATASTROPHE_MS).toISOString().slice(0, 16).replace("T", " ");
+            drawTextSh2(c3, "TABLE LOCKED - NO SCORES SEALED", VW / 2, ay, 1, "#ff8a3c", "center");
+            ay += 12;
+            drawText2(c3, "A SIGNED SCORE SETTLES IT - ELSE THE SWEEP REFUNDS ALL " + sweepAt + " UTC", VW / 2, ay, 1, GRAY2, "center");
+            ay += 14;
+          }
         } else {
           this.btn(c3, frame, { id: "vclaim", x: 92, y: ay, w: 200, h: 20 }, "CLAIM YOUR STAKE BACK", { gold: true });
           ay += 24;
