@@ -34401,6 +34401,7 @@ var ORACLE_ADDR = NET.oracleAddr;
 var ALGOD_URL = NET.algodUrl;
 var ALGOD_TESTNET = NET.algodUrl;
 var SEAT_TTL_SECS = 3600;
+var CATASTROPHE_WINDOW_SECS = 7 * 24 * 3600;
 var ARENA_VERSION = 2;
 var MBR_CREATE = 358200;
 var EARLY_CLOSE_FEE_PAY = 1e6;
@@ -34786,6 +34787,19 @@ async function buildClaimGroup(o) {
     // stake axfer back + exact MBR payback) => 1000 x (1 outer + 2 inner).
     // The old 2000 was rejected by the chain ("group fee too small").
     suggestedParams: await baseParams(TESTNET_FEES.claim)
+  });
+  return [call];
+}
+async function buildCatastropheGroup(o) {
+  const a = await sdk();
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.caller,
+    appIndex: ARENA_APP_ID,
+    appArgs: [await methodSelector(a, "catastrophe_refund(uint64)void"), await appArg(a, "uint64", o.cid)],
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
+    // fee: 1000 x (1 outer + payers axfers + 1 MBR pay), 2000 margin floor
+    suggestedParams: await baseParams(Math.max(2e3, 1e3 * (1 + o.payers + 1)))
   });
   return [call];
 }
@@ -35314,6 +35328,7 @@ export {
   ARENA_APP_ID,
   ARENA_NETWORK,
   ARENA_VERSION,
+  CATASTROPHE_WINDOW_SECS,
   CONTINUE_FEE_MICRO,
   GONNA_ASA,
   GONNA_ASA_TESTNET,
@@ -35336,6 +35351,7 @@ export {
   activeSignOp,
   algodClient,
   applyStageScan,
+  buildCatastropheGroup,
   buildClaimForfeitGroup,
   buildClaimGroup,
   buildContinuePayment,

@@ -18,7 +18,7 @@
 import * as wallet from '../wallet';
 import type { AccountType, ChallengePlayer } from './chainAdapter';
 import { arenaMode, mockAccountType, setTestnetIdentityProvider } from './chainAdapter';
-import { connectTestnetPera, liveTestnetSignFn, recoverTestnetSession, testnetAddress } from './testnetWallet';
+import { connectTestnetPera, isPeraSessionFatal, liveTestnetSignFn, recoverTestnetSession, testnetAddress } from './testnetWallet';
 import { qaActive, qaPlayerAddress, qaSignFn } from './qaSigner';
 import { setSignRecoverHook } from './testnetKit';
 import { netLsKey } from './arenaKit';
@@ -103,8 +103,14 @@ setTestnetIdentityProvider(async () => {
       try {
         return await arenaSign(groups);
       } catch (e) {
-        // session died mid-flow: fall through to the gate
-        console.debug('[arena] arena Pera signer threw, trying gate fallback:', e);
+        // v17.0.9 (Prince: the DEAD DUPLICATE request): the gate fallback must
+        // fire ONLY when the arena session is genuinely DEAD (null WC client).
+        // ANY other error — user rejection, wallet timeout, a lost response —
+        // already delivered a request to Pera; re-signing through the gate
+        // fires a SECOND, IDENTICAL request that surfaces minutes later as a
+        // dead transaction to sign. Rethrow instead: one group, one request.
+        if (!isPeraSessionFatal(e)) throw e;
+        console.debug('[arena] arena Pera session fatal, trying gate fallback:', e);
       }
     }
     // 2) main-gate session (same WC storage; the gate speaks testnet here)

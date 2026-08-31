@@ -75,6 +75,10 @@ console.log('\n[0] SOURCE: the gate is chain-derived, the units are explicit');
   ok(ca.includes('claimCatastrophe') && ca.includes('buildCatastropheGroup'), 'v17.0.8: live adapter wires catastrophe_refund');
   ok(ui.includes("'vsweep'") && ui.includes("startsWith('sweep:')"), 'v17.0.8: SWEEP buttons routed (lobby + versus)');
   ok(ct.includes('CATASTROPHE_WINDOW = 7 * 24 * 3600'), 'contract: the +7d sweep window exists (frozen contract)');
+  // v17.0.9: no dead duplicate wallet requests — the gate fallback fires ONLY on a fatal session
+  const aw = readFileSync(join(ROOT, 'src/game/arena/arenaWallet.ts'), 'utf8');
+  ok(aw.includes('if (!isPeraSessionFatal(e)) throw e;'), 'v17.0.9: arena->gate sign fallback rethrows non-fatal errors (one group, one request)');
+  ok(!aw.includes('signer threw, trying gate fallback'), 'v17.0.9: the catch-all fallback that fired duplicate requests is gone');
   ok(ui.includes("h.winnerName + ' WON ' + fmtAmount(takes) + ' $GONNA'"), 'HISTORY head: WON x $GONNA (unit explicit)');
   ok(ui.includes("'TIE - REFUND ' + (Number.isFinite(h.stake) ? fmtAmount(h.stake) : '—') + ' $GONNA EACH'"), 'HISTORY head: tie/refund row says REFUND x $GONNA EACH');
   ok(ui.includes("h.winner ? h.winnerName + ' WON THE POT' : 'TIE - ALL REFUNDED'"), 'battle detail: WON THE POT / TIE - ALL REFUNDED');

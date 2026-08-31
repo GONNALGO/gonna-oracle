@@ -54755,7 +54755,8 @@ setTestnetIdentityProvider(async () => {
       try {
         return await arenaSign(groups);
       } catch (e3) {
-        console.debug("[arena] arena Pera signer threw, trying gate fallback:", e3);
+        if (!isPeraSessionFatal(e3)) throw e3;
+        console.debug("[arena] arena Pera session fatal, trying gate fallback:", e3);
       }
     }
     if (gateAddr === target && isConnected()) {
