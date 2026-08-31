@@ -43,6 +43,15 @@ export const INPUT_LOG_MIN_VERSION = 1; // decode accepts v1 (legacy), v2 and v3
 export const INPUT_LOG_CAP = 300000; // SPEC §5: frame cap (v3 = 600KB raw max)
 const MAGIC = [0x47, 0x49, 0x4c]; // 'GIL'
 
+// v17.0.11: sessionStorage key for the LIVE run checkpoint (edge-swipe armor).
+// The engine snapshots the growing tape every 300 frames + on pagehide; if the
+// page dies mid-run (completed iOS back gesture, app kill) the ARENA lobby
+// offers to RECOVER the run: the prefix tape replays byte-exact to the saved
+// score, so the oracle signs it like any sealed run. Cleared after a
+// successful sign. Pure constant here so engine + arenaUI share it with no
+// import cycle.
+export const ARENA_RUN_CKPT_KEY = 'gonna.arena.ckpt';
+
 export interface InputLog {
   v: 1 | 2 | 3;
   build: string;

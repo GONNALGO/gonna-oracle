@@ -96,6 +96,22 @@ console.log('\n[0] SOURCE: the gate is chain-derived, the units are explicit');
   ok(repSrc.includes('pressed[BTNS[b]!] = ((e >> b) & 1) === 1;'), 'v17.0.10: replay driver applies recorded edges verbatim');
   ok(verSrc.includes("raw[3] !== 1 && raw[3] !== 2 && raw[3] !== 3"), 'v17.0.10: server codec accepts v3');
   ok(verSrc.includes('1_200_000'), 'v17.0.10: sign-score body ceiling raised for the double-size v3 tape');
+  // v17.0.11 (Prince edge-swipe report): OS gesture armor. (1) auto-pause when the
+  // OS steals the screen mid-run — paused frames are never recorded, replay-safe;
+  // (2) pagehide + every-300-frames checkpoint of the live GIL v3 tape to
+  // sessionStorage — a prefix replays byte-exact (proven: repro-prefix 24/24);
+  // (3) THE PIT RECOVER banner arms the recovered seal into the normal sign flow;
+  // (4) joystick origin clamped out of the iOS back-gesture strip.
+  ok(engSrc.includes("document.addEventListener('visibilitychange', this.onVisChange)"), 'v17.0.11: auto-pause on OS screen steal');
+  ok(engSrc.includes("window.addEventListener('pagehide', this.onPageHide)"), 'v17.0.11: last-chance checkpoint on page unload');
+  ok(engSrc.includes('if (this.inputLogFrames % 300 === 0) this.saveRunCheckpoint();'), 'v17.0.11: rolling 300-frame tape checkpoint');
+  ok(engSrc.includes('this.saveRunCheckpoint();\n'), 'v17.0.11: FINAL checkpoint at finishArenaRun (seal-screen death covered)');
+  const uiSrc = readFileSync(join(ROOT, 'src/game/arena/arenaUI.ts'), 'utf8');
+  ok(uiSrc.includes("'RECOVER LOST RUN: ' + this.ckpt.score + ' PTS'"), 'v17.0.11: RECOVER banner in THE PIT');
+  ok(uiSrc.includes('private doRecover(): ArenaAction'), 'v17.0.11: doRecover arms the checkpoint seal');
+  ok(uiSrc.match(/clearRunCheckpoint\(\); \/\/ v17\.0\.11: signed/g)?.length === 2, 'v17.0.11: checkpoint cleared after BOTH sign paths (create + submit)');
+  const tcSrc = readFileSync(join(ROOT, 'src/game/touch.ts'), 'utf8');
+  ok(tcSrc.includes('this.joyOX = Math.max(26, x);'), 'v17.0.11: joystick origin out of the iOS back-gesture strip');
   ok(ui.includes("h.winnerName + ' WON ' + fmtAmount(takes) + ' $GONNA'"), 'HISTORY head: WON x $GONNA (unit explicit)');
   ok(ui.includes("'TIE - REFUND ' + (Number.isFinite(h.stake) ? fmtAmount(h.stake) : '—') + ' $GONNA EACH'"), 'HISTORY head: tie/refund row says REFUND x $GONNA EACH');
   ok(ui.includes("h.winner ? h.winnerName + ' WON THE POT' : 'TIE - ALL REFUNDED'"), 'battle detail: WON THE POT / TIE - ALL REFUNDED');

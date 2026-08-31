@@ -52,7 +52,7 @@ import type { ArenaAction } from './arena/arenaUI';
 import { arenaMode, setLinkStageHint } from './arena/chainAdapter';
 import type { SealedRunInfo } from './arena/chainAdapter';
 import { adoptOracleFromHash } from './arena/oracleLink';
-import { encodeInputLogB64, INPUT_LOG_CAP, maskFromDown } from './arena/inputLog';
+import { encodeInputLogB64, INPUT_LOG_CAP, maskFromDown, ARENA_RUN_CKPT_KEY } from './arena/inputLog';
 import { buildVer } from './ver';
 // v10.4: ?duel=<id> parsed once per page load (StrictMode double-boot safe)
 // v15.2.8: ?st=<0-6> rides single-mode share links — the committed level hint
@@ -198,6 +198,9 @@ export class Game implements GameCtx {
     ctx.canvas.addEventListener('pointerdown', this.onMouseDown);
     // v9.1: swipe scroll on the leaderboard (mouse drag + touch drag)
     ctx.canvas.addEventListener('pointermove', this.onPointerMove);
+    // v17.0.11 (Prince edge-swipe report): OS-level gestures armor.
+    document.addEventListener('visibilitychange', this.onVisChange);
+    window.addEventListener('pagehide', this.onPageHide);
     // v9 boot: wallet session restore + skin assets + persisted fighter
     wallet.init();
     // v9.2.2: ATTEMPT the title music immediately on page load. Autoplay
@@ -227,6 +230,55 @@ export class Game implements GameCtx {
     // v10.4: ?duel=<id> deep-link — straight into the ARENA card detail
     adoptOracleFromHash(); // #oracle= master link (testnet-only, hash scrubbed)
     this.bootArenaDeepLink();
+  }
+
+  // v17.0.11: the OS steals the screen mid-run (edge-swipe back preview, app
+  // switch, control center) -> freeze the sim so enemies never hit a
+  // defenseless player. REPLAY-SAFE BY CONSTRUCTION: paused frames return
+  // before the recorder, so the tape stays identical on both sides.
+  private onVisChange = (): void => {
+    if (typeof document === 'undefined') return;
+    if (document.hidden && this.scene === 'play' && !this.paused && this.arenaRun) this.togglePause();
+  };
+
+  // v17.0.11: last-chance tape snapshot when the page is being unloaded
+  // (a COMPLETED edge swipe kills the page — without this the run is gone).
+  private onPageHide = (): void => {
+    this.saveRunCheckpoint();
+  };
+
+  // v17.0.11: snapshot the LIVE tape (levels+edges prefix + current score) to
+  // sessionStorage every 300 recorded frames. A prefix replays byte-exact to
+  // the saved score, so a recovered checkpoint signs like any sealed run.
+  private saveRunCheckpoint(): void {
+    try {
+      if (!this.arenaRun || !this.inputLogMasks || this.inputLogFrames === 0) return;
+      const frames = this.inputLogFrames;
+      const build = buildVer();
+      const seedLabel = this.descent ? this.descent.seedLabel : (this.arenaRunSeedLabel ?? 'UNSEEDED');
+      const inputLogB64 = encodeInputLogB64({
+        v: 3,
+        build,
+        seedLabel,
+        frames,
+        truncated: this.inputLogTruncated,
+        masks: this.inputLogMasks.subarray(0, frames),
+        edges: this.inputLogEdges ? this.inputLogEdges.subarray(0, frames) : null,
+      });
+      sessionStorage.setItem(ARENA_RUN_CKPT_KEY, JSON.stringify({
+        seedLabel,
+        frames,
+        durationSec: frames / 60,
+        build,
+        score: Math.max(0, Math.floor(this.score)),
+        stageMode: this.arenaRun.stageMode,
+        stageIdx: this.arenaRun.stageIdx,
+        inputLogB64,
+        ts: Date.now(),
+      }));
+    } catch {
+      /* storage full/blocked — the checkpoint is best-effort armor */
+    }
   }
 
   private onMouseDown = (e: PointerEvent): void => {
@@ -516,6 +568,9 @@ export class Game implements GameCtx {
     this.inputLogMasks = new Uint8Array(INPUT_LOG_CAP); // v16: fresh input log per run
     this.inputLogEdges = new Uint8Array(INPUT_LOG_CAP); // v17.0.10: GIL v3 edges
     this.inputLogFrames = 0;
+    // v17.0.11: a NEW run invalidates any older checkpoint (a crash in the
+    // first frames must never recover a PREVIOUS card's tape)
+    try { sessionStorage.removeItem(ARENA_RUN_CKPT_KEY); } catch { /* best-effort */ }
     this.inputLogTruncated = false;
     this.startNewGame(); // fresh run: score/lives/stage 0 (loadStage picks up arenaRunRng)
     if (stageMode === 'stage') {
@@ -526,6 +581,10 @@ export class Game implements GameCtx {
 
   private finishArenaRun(): void {
     if (!this.arenaRun) return;
+    // v17.0.11: FINAL checkpoint with the complete tape — a page kill on the
+    // seal screen (before SIGN) is recoverable too. Cleared only after a
+    // successful sign (arenaUI resetSeal).
+    this.saveRunCheckpoint();
     // v16: seal the input log WITH the score — header build/seedLabel/frames,
     // base64, attached to the oracle sign-score body by the ARENA UI.
     // v16.1 (SPEC-m2 §2/§4): GIL v2 — frame 0 is the FIRST play frame, and a
@@ -1163,6 +1222,8 @@ export class Game implements GameCtx {
   destroy(): void {
     this.ctx.canvas.removeEventListener('pointerdown', this.onMouseDown);
     this.ctx.canvas.removeEventListener('pointermove', this.onPointerMove);
+    document.removeEventListener('visibilitychange', this.onVisChange);
+    window.removeEventListener('pagehide', this.onPageHide);
     this.removeMsgInput();
     this.shareAnchors.clear(); // v9.2.1: drop the DOM share anchors too
     this.cardViewer.close(); // v9.2.3: and the fullscreen card viewer
@@ -2231,6 +2292,8 @@ export class Game implements GameCtx {
         this.inputLogMasks[this.inputLogFrames] = maskFromDown(inp.down);
         if (this.inputLogEdges) this.inputLogEdges[this.inputLogFrames] = maskFromDown(inp.pressed as never);
         this.inputLogFrames++;
+        // v17.0.11: rolling checkpoint — a page kill mid-run stays recoverable
+        if (this.inputLogFrames % 300 === 0) this.saveRunCheckpoint();
       } else {
         this.inputLogTruncated = true; // honest cut at the 300k cap
       }

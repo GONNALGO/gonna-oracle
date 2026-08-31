@@ -492,7 +492,12 @@ export class TouchControls {
       }
       if (this.joyId === -1) {
         this.joyId = e.pointerId;
-        this.joyOX = x;
+        // v17.0.11 (Prince edge-swipe report): keep the joystick origin OUT of
+        // the OS back-gesture strip (iOS Safari starts the swipe-back from the
+        // outermost ~24 CSS px). A thumb landing there both steals the run's
+        // input AND risks killing the page. The arena checkpoint covers the
+        // kill; this clamp prevents the steal in the first place.
+        this.joyOX = Math.max(26, x);
         this.joyOY = y;
         this.joyDX = 0;
         this.joyDY = 0;

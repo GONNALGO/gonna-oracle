@@ -28,6 +28,7 @@ import type { SignOpView } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
 import { qaActive, qaScore } from './qaSigner';
 import type { Challenge, ChallengeConfig, FighterPick, HistoryEntry, LegacyStats, SealedRunInfo, Visibility } from './chainAdapter';
+import { ARENA_RUN_CKPT_KEY } from './inputLog';
 import { arenaAddress, arenaPlayer, arenaSession } from './arenaWallet';
 import { renderShareCard, shareCardBlob, shareStageOf, shareText, shareUrl } from './shareCard';
 
@@ -381,6 +382,7 @@ export class ArenaUI {
     if (this.notice) lines.unshift(this.notice); // v14.2: status wins the head
     this.feedLines = lines;
     this.feedT = 0;
+    this.scanRunCheckpoint(); // v17.0.11: a recoverable run surfaces the banner
   }
 
   // ---------- input ----------
@@ -932,6 +934,7 @@ export class ArenaUI {
     }
     if (id.startsWith('claim:')) return this.doClaim(Number(id.slice(6)));
     if (id.startsWith('sweep:')) return this.doClaimCatastrophe(Number(id.slice(6)));
+    if (id === 'recover') return this.doRecover(); // v17.0.11: edge-swipe armor
 
     // ---- v10.4: SHARE (private cards, owner only, while live) ----
     if (id === 'viewchain') {
@@ -1363,6 +1366,78 @@ export class ArenaUI {
     this.continuePaying = false;
   }
 
+  // v17.0.11 (Prince edge-swipe report): RECOVER A LOST RUN. The engine
+  // checkpoints the live tape (GIL v3 prefix + score) to sessionStorage every
+  // 300 frames + on pagehide; if the page died mid-run (completed iOS back
+  // gesture, app kill) THE PIT offers to arm the recovered seal — the prefix
+  // replays byte-exact to the saved score, so the oracle signs it like any
+  // run. Cleared ONLY after a successful sign (or when a new run starts).
+  private ckpt: { score: number; run: SealedRunInfo; cid: number | null } | null = null;
+
+  private clearRunCheckpoint(): void {
+    this.ckpt = null;
+    try { sessionStorage.removeItem(ARENA_RUN_CKPT_KEY); } catch { /* best-effort */ }
+  }
+
+  private scanRunCheckpoint(): void {
+    try {
+      const raw = sessionStorage.getItem(ARENA_RUN_CKPT_KEY);
+      if (!raw) { this.ckpt = null; return; }
+      const j = JSON.parse(raw) as Record<string, unknown>;
+      const score = Math.max(0, Math.floor(Number(j.score)));
+      const frames = Number(j.frames);
+      const seedLabel = String(j.seedLabel ?? '');
+      const build = String(j.build ?? '');
+      const inputLogB64 = typeof j.inputLogB64 === 'string' ? j.inputLogB64 : '';
+      const ts = Number(j.ts ?? 0);
+      // honest limits: no score/frames/tape, no seed, or stale (>2h) -> drop it
+      if (!score || !frames || !inputLogB64 || !seedLabel || Date.now() - ts > 2 * 3600_000) {
+        this.clearRunCheckpoint();
+        return;
+      }
+      const m = /^(?:PIT|RUN)-(\d+)$/.exec(seedLabel);
+      this.ckpt = {
+        score,
+        cid: m ? Number(m[1]) : null,
+        run: { seedLabel, frames, durationSec: Number(j.durationSec ?? frames / 60), build, inputLogB64 },
+      };
+    } catch {
+      this.ckpt = null;
+    }
+  }
+
+  private doRecover(): ArenaAction {
+    const k = this.ckpt;
+    if (!k) return { act: 'none' };
+    const cid = k.cid;
+    const card = cid !== null
+      ? this.cards.find((x) => x.id === cid) ?? this.mine.find((x) => x.id === cid) ?? null
+      : null;
+    if (card) {
+      // card on-chain + my seat unsigned -> joiner seal screen (SIGN SCORE)
+      this.current = card;
+      this.sealRole = 'joiner';
+      this.notice = 'RUN #' + cid + ' RECOVERED - ' + k.score + ' PTS ARMED';
+    } else {
+      // creator draft (the card was never created): pin the cid — the CREATE
+      // flow carries the recovered run and the CID_MOVED guard still holds
+      this.sealRole = 'creator';
+      this.sealRunCid = cid;
+      this.notice = 'RUN RECOVERED - ' + k.score + ' PTS ARMED';
+    }
+    // arm the recovered seal — the EXACT same fields a fresh finishArenaRun sets
+    this.sealedScore = k.score;
+    this.sealedRun = k.run;
+    this.sealBest = k.score;
+    this.sealBestRun = k.run;
+    this.sealRuns = 1;
+    this.pendingRun = false;
+    this.screen = 'seal';
+    this.err = '';
+    this.focus = 0;
+    return { act: 'move' };
+  }
+
   // v14.4: single by-id entry point into the card detail — chips and board
   // rows BOTH land here, so a tap can never open a different card than the
   // one it was labeled with
@@ -1408,6 +1483,7 @@ export class ArenaUI {
         this.verdict = false;
         this.rematchOf = null; // the rematch became its own card
         this.resetSeal(); // consumed — the score lives on-chain now
+        this.clearRunCheckpoint(); // v17.0.11: signed — the armor stands down
         this.nextIdHint = c.id + 1; // v15: the NEXT card's DESCENT seed hint
         this.focus = 0;
         this.buildFeed();
@@ -1451,6 +1527,7 @@ export class ArenaUI {
       (nc) => {
         this.current = nc;
         this.resetSeal();
+        this.clearRunCheckpoint(); // v17.0.11: signed — the armor stands down
         this.screen = 'versus';
       },
     );
@@ -1796,10 +1873,17 @@ export class ArenaUI {
       drawTextSh(c, 'PRACTICE', 10, 4, 1, DIM, 'left', '#0a3d00');
       this.btn(c, frame, { id: 'golive', x: VW - 96, y: 2, w: 88, h: 12 }, 'GO LIVE', { green: true });
     }
-    c.fillStyle = '#04140a';
-    c.fillRect(4, 44, VW - 8, 11);
+    // v17.0.11: RECOVER banner wins the feed strip when a lost run is armed
+    if (this.ckpt && arenaMode() === 'live') {
+      c.fillStyle = '#2a1204';
+      c.fillRect(4, 44, VW - 8, 11);
+      this.btn(c, frame, { id: 'recover', x: 6, y: 45, w: VW - 12, h: 9 }, 'RECOVER LOST RUN: ' + this.ckpt.score + ' PTS' + (this.ckpt.cid !== null ? ' (CARD #' + this.ckpt.cid + ')' : ''), { gold: true });
+    } else {
+      c.fillStyle = '#04140a';
+      c.fillRect(4, 44, VW - 8, 11);
+    }
     const line = this.feedLines.length > 0 ? this.feedLines[0] : 'THE PIT IS LISTENING';
-    drawText(c, 'LIVE> ' + line, 10, 46, 1, FLUO);
+    if (!(this.ckpt && arenaMode() === 'live')) drawText(c, 'LIVE> ' + line, 10, 46, 1, FLUO); // v17.0.11: the RECOVER banner owns the strip
 
     // v13: MY OPEN CARDS — compact chips strip under the feed (mobile-first:
     // zero extra screens, thumb-reachable, private cards included)
