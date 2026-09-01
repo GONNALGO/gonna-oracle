@@ -1,0 +1,53 @@
+=== TABLE12: cid=96 stake=1000000 players=13 build=ve6a716ae ===
+  create OK (creator score=5500)
+file:///mnt/agents/output/monorepo-clone/.tmp-kit-campaign.mjs:5780
+        throw new URLTokenBaseHTTPError(message, {
+              ^
+
+URLTokenBaseHTTPError: Network request error. Received status 400 (Bad Request): TransactionPool.Remember: transaction 37K73SDQOK4JYGLFGZB7RYCJQSNWUFGEXQ4CRWWLCXKFSFPSVEJQ: account B272KAQD4DE6OXG74THNXZWRMP275FIHHWCBD3AIJUYVPDYFN3K6IYGODU balance 199000 below min 200000 (1 assets)
+    at _URLTokenBaseHTTPClient.checkHttpError (file:///mnt/agents/output/monorepo-clone/.tmp-kit-campaign.mjs:5780:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async _URLTokenBaseHTTPClient.formatFetchResponse (file:///mnt/agents/output/monorepo-clone/.tmp-kit-campaign.mjs:5787:9)
+    at async _HTTPClient.post (file:///mnt/agents/output/monorepo-clone/.tmp-kit-campaign.mjs:6014:23)
+    at async SendRawTransaction.do (file:///mnt/agents/output/monorepo-clone/.tmp-kit-campaign.mjs:18224:21)
+    at async send (file:///mnt/agents/output/monorepo-clone/scripts/e2e-mainnet-campaign.mjs:105:13)
+    at async table12 (file:///mnt/agents/output/monorepo-clone/scripts/e2e-mainnet-campaign.mjs:206:5)
+    at async file:///mnt/agents/output/monorepo-clone/scripts/e2e-mainnet-campaign.mjs:303:43 {
+  response: HTTPClientResponse {
+    body: Uint8Array(216) [
+      123,  34, 109, 101, 115, 115,  97, 103, 101,  34,  58,  34,
+       84, 114,  97, 110, 115,  97,  99, 116, 105, 111, 110,  80,
+      111, 111, 108,  46,  82, 101, 109, 101, 109,  98, 101, 114,
+       58,  32, 116, 114,  97, 110, 115,  97,  99, 116, 105, 111,
+      110,  32,  51,  55,  75,  55,  51,  83,  68,  81,  79,  75,
+       52,  74,  89,  71,  76,  70,  71,  90,  66,  55,  82,  89,
+       67,  74,  81,  83,  78,  87,  85,  70,  71,  69,  88,  81,
+       52,  67,  82,  87,  87,  76,  67,  88,  75,  70,  83,  70,
+       80,  83,  86,  69,
+      ... 116 more items
+    ],
+    text: '{"message":"TransactionPool.Remember: transaction 37K73SDQOK4JYGLFGZB7RYCJQSNWUFGEXQ4CRWWLCXKFSFPSVEJQ: account B272KAQD4DE6OXG74THNXZWRMP275FIHHWCBD3AIJUYVPDYFN3K6IYGODU balance 199000 below min 200000 (1 assets)"}\n',
+    format: 'application/json',
+    headers: {
+      '216': 'content-length',
+      '*': 'access-control-allow-origin',
+      'h3=":443"; ma=86400': 'alt-svc',
+      DYNAMIC: 'cf-cache-status',
+      'a3442fcc587e3656-FRA': 'cf-ray',
+      'keep-alive': 'connection',
+      'application/json': 'content-type',
+      'Tue, 01 Sep 2026 12:13:02 GMT': 'date',
+      cloudflare: 'server',
+      'Accept-Encoding, Origin': 'vary',
+      'mainnet-v1.0': 'x-and-bl',
+      'de2@de_central': 'x-and-nl',
+      '0.061': 'x-and-rt',
+      'algod-catchup-sticky': 'x-and-sr'
+    },
+    status: 400,
+    ok: false
+  },
+  status: 400
+}
+
+Node.js v20.20.2

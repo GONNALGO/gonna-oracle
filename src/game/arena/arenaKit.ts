@@ -53,8 +53,8 @@ const TESTNET_CFG: ArenaNetConfig = {
 const MAINNET_CFG: ArenaNetConfig = {
     // M-2 mainnet deploy (scripts/mainnet-deploy-report.md): app 3686311434,
     // escrow 3XEQEDORZHI…47UM (app address, derived — never hardcoded below).
-    appId: 3686311434,
-    legacyAppId: 0, // no legacy on mainnet
+    appId: 3691139011, // QuantumArena v3 (per-seat refund claims — ties safe at ANY size)
+    legacyAppId: 3686311434, // v2.1: pre-v3 cards stay resolvable there
     gonnaAsa: 2582294183, // REAL mainnet $GONNA (same id as src/game/wallet.ts)
     // M-4b: OpUp donor app mainnet (LEAD GO 2026-08-26) — create/join/close
     // groups DO hit the opcode budget without donors: create_challenge runs
@@ -74,7 +74,12 @@ const MAINNET_CFG: ArenaNetConfig = {
 export const ARENA_NETS: Record<ArenaNetwork, ArenaNetConfig> = { testnet: TESTNET_CFG, mainnet: MAINNET_CFG };
 // static conditional: folds at build time (see comment above) — the inactive
 // row never ships inside a bundle of the other network
-export const NET: ArenaNetConfig = IS_MAINNET ? MAINNET_CFG : TESTNET_CFG;
+const BASE_NET: ArenaNetConfig = IS_MAINNET ? MAINNET_CFG : TESTNET_CFG;
+// QA/campaign escape hatch (build-time define, never set in the shipped game):
+// VITE_ARENA_APP_ID pins the kit to a specific app — the cleanup fleet keeps
+// settling v2.1 cards while production runs v3.
+const APP_ID_OVERRIDE = Number((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_ARENA_APP_ID ?? 0);
+export const NET: ArenaNetConfig = APP_ID_OVERRIDE > 0 ? { ...BASE_NET, appId: APP_ID_OVERRIDE } : BASE_NET;
 
 // M-1: testnet demo fixtures (GONNA 7/42 on the connected shelf, mock piazza
 // dressing) are DEV-ONLY — a mainnet build must never show fake holdings.

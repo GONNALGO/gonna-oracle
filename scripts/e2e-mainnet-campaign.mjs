@@ -27,7 +27,7 @@ const STATE_FILE = ROOT + '/.tmp-campaign-state.json';
 
 execFileSync('npx', ['esbuild', 'src/game/arena/testnetKit.ts', '--bundle', '--format=esm', '--platform=node',
   `--banner:js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
-  `--define:import.meta.env={"DEV":false,"PROD":true,"VITE_ARENA_NETWORK":"mainnet","VITE_QA_ORACLE":""}`,
+  `--define:import.meta.env={"DEV":false,"PROD":true,"VITE_ARENA_NETWORK":"mainnet","VITE_QA_ORACLE":"","VITE_ARENA_APP_ID":"${process.env.E2E_APP_ID ?? ''}"}`,
   `--outfile=./.tmp-kit-campaign.mjs`], { cwd: ROOT, stdio: 'pipe' });
 const kit = await import(`${ROOT}/.tmp-kit-campaign.mjs`);
 const replay = await import(`${ROOT}/oracle-server/replay/replay.mjs`);
@@ -178,21 +178,41 @@ async function table12() {
   const SEATS = Number(process.env.E2E_SEATS || 12); // joiners (v17.0.12: production cap = 4)
   const TIE = !!process.env.E2E_TIE; // v17.0.12: identical runs on every seat -> perfect tie -> full refunds
   const joiners = JOINERS12.slice(0, SEATS);
-  const cid = await kit.nextChallengeId();
+  const cid = process.env.E2E_CID ? Number(process.env.E2E_CID) : await kit.nextChallengeId();
   const seed = `PIT-${cid}`;
   const creatorRole = 'DEPLOYER';
-  console.log(`=== TABLE${SEATS}: cid=${cid} stake=${STAKE} players=${SEATS + 1} build=${BUILD} ===`);
-  const runC = TIE ? playStageRun(stageIdx, seed, 7, 900) : playStageRun(stageIdx, seed, 40); // TIE: same bot as the seats -> perfect tie
-  const sigC = await sign(cid, 0, creatorRole, runC, seed, stageIdx);
-  await send(await kit.buildCreateGroup({
-    creator: addr(creatorRole), cid, stakeBase: STAKE, seats: SEATS, durationSecs: 86400,
-    stageMode: 1, creatorScore: runC.score, creatorScoreSig: Buffer.from(sigC.sigB64, 'base64'), stageIdx,
-  }), W[creatorRole]);
-  console.log(`  create OK (creator score=${runC.score})`);
-  const scores = [runC.score];
+  console.log(`=== TABLE${SEATS}: cid=${cid} stake=${STAKE} players=${SEATS + 1} build=${BUILD} reuse=${!!process.env.E2E_CID} ===`);
+  let scores;
+  if (process.env.E2E_CID) {
+    // reuse an already-created table (creator score already on-chain)
+    var preRoster = await kit.readPlayers(cid);
+    scores = preRoster.filter((p) => p.signed).map((p) => Number(p.score));
+    console.log(`  reusing cid ${cid}: ${preRoster.length} seated, signed scores=${JSON.stringify(scores)}`);
+  } else {
+    const runC = TIE ? playStageRun(stageIdx, seed, 7, 900) : playStageRun(stageIdx, seed, 40); // TIE: same bot as the seats -> perfect tie
+    const sigC = await sign(cid, 0, creatorRole, runC, seed, stageIdx);
+    await send(await kit.buildCreateGroup({
+      creator: addr(creatorRole), cid, stakeBase: STAKE, seats: SEATS, durationSecs: 86400,
+      stageMode: 1, creatorScore: runC.score, creatorScoreSig: Buffer.from(sigC.sigB64, 'base64'), stageIdx,
+    }), W[creatorRole]);
+    console.log(`  create OK (creator score=${runC.score})`);
+    scores = [runC.score];
+  }
   for (const [i, role] of joiners.entries()) {
-    await send(await kit.buildJoinGroup({ joiner: addr(role), cid, stakeBase: STAKE }), W[role]);
-    const run = TIE ? playStageRun(stageIdx, seed, 7, 900) : playStageRun(stageIdx, seed, 5 + i * 16, Math.max(700, FRAMES - i * 110), i); // distinct cadence+caps -> a real winner; TIE: identical -> refund path
+    const already = typeof preRoster !== 'undefined' && preRoster[i + 1] && algosdk.encodeAddress(Uint8Array.from(preRoster[i + 1].addr)) === addr(role);
+    if (already) console.log(`  seat ${i + 1} ${role}: already seated — skipping join`);
+    else await send(await kit.buildJoinGroup({ joiner: addr(role), cid, stakeBase: STAKE }), W[role]);
+    let run = TIE ? playStageRun(stageIdx, seed, 7, 900) : playStageRun(stageIdx, seed, 5 + i * 16, Math.max(700, FRAMES - i * 110), i); // distinct cadence+caps -> a real winner; TIE: identical -> refund path
+    // v17.0.13: at >6 seats a perfect tie is UNRESOLVABLE on-chain (access-list
+    // cap) — never let a seat collide with ANY previous score. Re-play with a
+    // fresh salt until distinct.
+    let guard = 0;
+    while (!TIE && scores.includes(run.score)) {
+      guard += 1;
+      if (guard > 12) throw new Error(`seat ${i + 1}: cannot find a distinct score — ABORT before funds lock`);
+      run = playStageRun(stageIdx, seed, 5 + i * 16 + guard * 997, Math.max(700, FRAMES - i * 110 - guard * 40), i + guard);
+    }
+    if (already && preRoster[i + 1].signed) { scores.push(Number(preRoster[i + 1].score)); console.log(`  seat ${i + 1} ${role}: already signed score=${preRoster[i + 1].score}`); continue; }
     const sg = await sign(cid, i + 1, role, run, seed, stageIdx);
     await send(await kit.buildSubmitGroup({ player: addr(role), cid, score: run.score, sig: Buffer.from(sg.sigB64, 'base64') }), W[role]);
     scores.push(run.score);

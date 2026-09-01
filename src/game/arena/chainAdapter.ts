@@ -11,7 +11,7 @@ export type AccountType = 'ed25519' | 'falcon';
 export type Visibility = 'public' | 'private';
 export type Format = 'duel' | 'open';
 export type StageMode = 'full' | 'single' | 'random';
-export type ChallengeStatus = 'open' | 'full' | 'resolved' | 'expired' | 'claimed' | 'closed';
+export type ChallengeStatus = 'open' | 'full' | 'resolved' | 'expired' | 'claimed' | 'closed' | 'refunding';
 
 export interface FighterPick {
   skin: string;
@@ -65,6 +65,7 @@ export interface ChallengePlayer {
   // v2 seat clock (testnet only — mock cards leave both undefined)
   signed?: boolean; // oracle-signed score accepted on-chain
   seatedAt?: number; // ms epoch: create for seat 0, join otherwise
+  claimed?: boolean; // v3: seat refunded on a REFUNDING card
 }
 
 export interface Challenge {
@@ -454,6 +455,7 @@ export type CloseGate =
   | { kind: 'resolve' } // resolvable NOW (full + all signed, or expired with a signed joiner)
   | { kind: 'forfeit' } // duel: the silent unsigned seat's clock lapsed -> claim_forfeit
   | { kind: 'catastrophe' } // expired + unresolvable, deadline+7d passed: permissionless full sweep
+  | { kind: 'claimRefund' } // v3: card in REFUNDING — per-seat permissionless claims open
   | { kind: 'locked' }; // joiners seated, nothing settles it yet — scores or the timer
 
 // contract.py: CATASTROPHE_WINDOW = 7 * 24 * 3600
@@ -467,6 +469,9 @@ export function closeGate(card: Challenge, me: string | null, nowMs = Date.now()
   const isCreator = card.creator === me;
   const isPayer = isCreator || card.players.some((p) => p.address === me);
   if (!isPayer) return null;
+  // v3: a card in REFUNDING (perfect tie / catastrophe) pays every seat via
+  // permissionless claim_refund — any payer can trigger the whole chain.
+  if (card.status === 'refunding') return { kind: 'claimRefund' };
   const live = card.status === 'open' || card.status === 'full';
   if (!live && card.status !== 'expired') return null; // terminal card: nothing to gate
   const joiners = card.players.slice(1); // seat 0 is the creator — joiners are seats_taken
@@ -989,7 +994,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const statusCode = Number(meta.status);
     const expired = (statusCode === 0 || statusCode === 1) && Number(meta.deadline) <= nowSec;
     const status: ChallengeStatus =
-      statusCode === 3 || statusCode === 4 ? 'closed' : statusCode === 2 ? 'resolved' : expired ? 'expired' : statusCode === 1 || seatsTaken >= seatsTotal ? 'full' : 'open';
+      statusCode === 5 ? 'refunding' : statusCode === 3 || statusCode === 4 ? 'closed' : statusCode === 2 ? 'resolved' : expired ? 'expired' : statusCode === 1 || seatsTaken >= seatsTotal ? 'full' : 'open';
     const creator = encOpt(meta.creator);
     const stageMode: StageMode = Number(meta.stageMode) === 0 ? 'full' : Number(meta.stageMode) === 1 ? 'single' : 'random';
     const stageRes = await this.cardStage(cid, stageMode);
@@ -1020,6 +1025,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
         accountType: 'ed25519' as AccountType,
         signed: p.signed, // v2 seat clock
         seatedAt: Number(p.seatedAt) * 1000,
+        claimed: p.claimed === true, // v3: seat refunded (refunding cards)
       })),
       winner: statusCode === 2 && meta.winner.length === 32 ? enc(meta.winner) : null,
       // v15.2.7 (BUG-1): seats_taken counts JOINER seats only — the contract
@@ -1099,15 +1105,10 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       // re-reads the counter, so it either re-signs for the SAME runCid or
       // dies right here with CID_MOVED — a mismatched card can never exist.
       if (cfg.runCid !== undefined && cid !== cfg.runCid) throw new CidMovedError(cfg.runCid, cid);
-      // v17.0.12 TIE-SAFETY (cid 66 mainnet finding): a perfect tie refunds
-      // every signed player in ONE call and _gonna_dest must read each ASA
-      // holding — those holdings must fit the 16-ref access list, so ties
-      // are only refundable up to 7 seated players. The contract is
-      // immutable: a bigger table that ties would lock its pot FOREVER.
-      // Hard-stop ANY open table above 4 joiners (5 seats), UI or no UI.
-      if (cfg.format !== 'duel' && cfg.seatsTotal > 4) {
-        throw new Error('TIE-SAFETY: open tables are capped at 4 joiners (a bigger table that ends in a perfect tie could never refund on-chain)');
-      }
+      // v18 (QuantumArena v3): ties enter STATUS_REFUNDING and every seat is
+      // refunded by individual permissionless claim_refund calls — ONE holding
+      // per call, the AVM access cap is never approached at ANY table size.
+      // The v17.0.12 four-joiner hard-stop is RETIRED (8/12-seat tables back).
       // v16 (SPEC §3.2): the SERVER oracle re-verifies the cid against the
       // on-chain next_challenge_id BEFORE it signs (seat 0 = create) — the
       // sig ask carries the sealed run telemetry (input log, frames, build).
@@ -1367,6 +1368,33 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     return { payout: 0, txid }; // exact legs live in the inner txns
   }
 
+  // v3: claim EVERY unclaimed seat refund of a REFUNDING card in ONE atomic
+  // group (one wallet prompt). Permissionless on-chain — the caller triggers,
+  // the roster addresses receive. The final claim also frees the boxes and
+  // sends the MBR back to the creator.
+  async claimRefunds(id: number, _address: string): Promise<ClaimResult> {
+    const me = await this.id();
+    const before = await this.getChallenge(id);
+    if (!before) throw new Error('challenge not found');
+    if (before.status !== 'refunding') throw new Error('card is not in refunding state');
+    const players = await kit.readPlayers(id);
+    const a = await kit.sdk();
+    const groups = [];
+    for (let seat = 0; seat < players.length; seat++) {
+      if (players[seat].claimed) continue;
+      const playerAddr = a.encodeAddress(players[seat].addr instanceof Uint8Array ? players[seat].addr : Uint8Array.from(players[seat].addr));
+      groups.push(await kit.buildClaimRefundGroup({ caller: me.address, cid: id, seat, playerAddr }));
+    }
+    if (groups.length === 0) throw new Error('all seats already refunded');
+    const txns = groups.flat();
+    const txid = await kit.signSend(me.sign, txns, { label: 'REFUND ALL SEATS' });
+    kit.recordTxid(id, txid);
+    kit.recordCloseTxid(id, txid);
+    kit.recordResolveAt(id, Date.now());
+    this.rememberClosed(before, 'refunded', null, 0, 0);
+    return { payout: 0, txid };
+  }
+
   async earlyClose(id: number, _address: string): Promise<Challenge> {
     const me = await this.id();
     // v15.2.1: the contract DELETES both boxes on early_close, so a post-tx
@@ -1583,7 +1611,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
   }
 
   async listOpenChallenges(): Promise<Challenge[]> {
-    return (await this.scan()).filter((c) => c.status === 'open' || c.status === 'full' || c.status === 'expired');
+    return (await this.scan()).filter((c) => c.status === 'open' || c.status === 'full' || c.status === 'expired' || c.status === 'refunding');
   }
 
   async myChallenges(address: string): Promise<Challenge[]> {
@@ -1700,7 +1728,7 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     const { wins, losses, won, lost, net, bestWin } = accumulateLegacy(hist, address);
     // OPEN: live cards where I'm seated (or the creator) — not settled yet
     const mine = await this.myChallenges(address);
-    const open = mine.filter((c) => c.status === 'open' || c.status === 'full' || c.status === 'expired').length;
+    const open = mine.filter((c) => c.status === 'open' || c.status === 'full' || c.status === 'expired' || c.status === 'refunding').length;
     const played = wins + losses;
     return { played, wins, losses, open, winRate: played > 0 ? Math.round((wins / played) * 100) : 0, won, lost, net, bestWin };
   }

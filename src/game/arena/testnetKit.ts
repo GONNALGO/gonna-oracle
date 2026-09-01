@@ -154,6 +154,7 @@ export interface PlayerTuple {
   score: bigint;
   signed: boolean;
   seatedAt: bigint; // v2: seat timestamp (create for seat 0, join otherwise)
+  claimed?: boolean; // v3: seat stake already refunded (refunding cards)
 }
 
 export async function nextChallengeId(): Promise<number> {
@@ -187,10 +188,16 @@ export async function readMeta(cid: number): Promise<MetaTuple | null> {
   try {
     const name = new Uint8Array([0x6d, ...u64be(cid)]); // 'm' + cid8
     const box = await algod.getApplicationBoxByName(ARENA_APP_ID, name).do();
-    // v2 layout (+mbr_paid): 148B for a duel pre-resolve (winner empty)
-    const t = a.ABIType.from('(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64)');
-    const v = t.decode(box.value) as [Uint8Array, bigint, bigint, bigint, bigint, bigint, Uint8Array, bigint, bigint, Uint8Array, bigint, bigint];
-    return { creator: v[0], stake: v[1], seatsTotal: v[2], seatsTaken: v[3], deadline: v[4], stageMode: v[5], seed: v[6], creatorScore: v[7], status: v[8], winner: v[9], paidTotal: v[10], mbrPaid: v[11] };
+    // v3 layout (+claimed_count,+refund_reason): 14 fields; v2.1: 12 fields
+    try {
+      const t3 = a.ABIType.from('(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64,uint64,uint64,uint64)');
+      const w = t3.decode(box.value) as [Uint8Array, bigint, bigint, bigint, bigint, bigint, Uint8Array, bigint, bigint, Uint8Array, bigint, bigint, bigint, bigint];
+      return { creator: w[0], stake: w[1], seatsTotal: w[2], seatsTaken: w[3], deadline: w[4], stageMode: w[5], seed: w[6], creatorScore: w[7], status: w[8], winner: w[9], paidTotal: w[10], mbrPaid: w[11] };
+    } catch {
+      const t = a.ABIType.from('(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64)');
+      const v = t.decode(box.value) as [Uint8Array, bigint, bigint, bigint, bigint, bigint, Uint8Array, bigint, bigint, Uint8Array, bigint, bigint];
+      return { creator: v[0], stake: v[1], seatsTotal: v[2], seatsTaken: v[3], deadline: v[4], stageMode: v[5], seed: v[6], creatorScore: v[7], status: v[8], winner: v[9], paidTotal: v[10], mbrPaid: v[11] };
+    }
   } catch {
     return null; // box gone (claimed/forfeited/closed) or network hiccup
   }
@@ -202,10 +209,16 @@ export async function readPlayers(cid: number): Promise<PlayerTuple[]> {
   try {
     const name = new Uint8Array([0x70, ...u64be(cid)]); // 'p' + cid8
     const box = await algod.getApplicationBoxByName(ARENA_APP_ID, name).do();
-    // v2 layout (+seated_at): (byte[],uint64,bool,uint64)[]
-    const t = a.ABIType.from('(byte[],uint64,bool,uint64)[]');
-    const v = t.decode(box.value) as [Uint8Array, bigint, boolean, bigint][];
-    return v.map((p) => ({ addr: p[0], score: p[1], signed: p[2], seatedAt: p[3] }));
+    // v3 layout (+claimed): (byte[],uint64,bool,uint64,bool)[] ; v2.1: 4 fields
+    try {
+      const t3 = a.ABIType.from('(byte[],uint64,bool,uint64,bool)[]');
+      const w = t3.decode(box.value) as [Uint8Array, bigint, boolean, bigint, boolean][];
+      return w.map((p) => ({ addr: p[0], score: p[1], signed: p[2], seatedAt: p[3], claimed: p[4] }));
+    } catch {
+      const t = a.ABIType.from('(byte[],uint64,bool,uint64)[]');
+      const v = t.decode(box.value) as [Uint8Array, bigint, boolean, bigint][];
+      return v.map((p) => ({ addr: p[0], score: p[1], signed: p[2], seatedAt: p[3], claimed: false }));
+    }
   } catch {
     return [];
   }
@@ -647,6 +660,30 @@ export async function buildClaimForfeitGroup(o: { caller: string; cid: number; s
     suggestedParams: await baseParams(TESTNET_FEES.forfeit),
   });
   return [call];
+}
+
+// v3: PER-SEAT refund claim for a STATUS_REFUNDING card (tie / catastrophe).
+// Permissionless: any caller can trigger any seat's refund — the payment
+// always goes to the roster address. One holding per call: scales to ANY
+// table size (the v2.1 all-in-one tie refund bricked over 6 seats).
+export async function buildClaimRefundGroup(o: { caller: string; cid: number; seat: number; playerAddr: string }): Promise<Txn[]> {
+  const a = await sdk();
+  const meta = await readMeta(o.cid);
+  if (!meta) throw new Error('card not found on chain (fully refunded?)');
+  const creator = a.encodeAddress(meta.creator instanceof Uint8Array ? meta.creator : Uint8Array.from(meta.creator));
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.caller, appIndex: ARENA_APP_ID,
+    appArgs: [
+      await methodSelector(a, 'claim_refund(uint64,uint64)void'),
+      await appArg(a, 'uint64', o.cid),
+      await appArg(a, 'uint64', o.seat),
+    ],
+    accounts: [o.playerAddr, creator], // holding of the payee + MBR receiver
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)],
+    suggestedParams: await baseParams(4000), // axfer + (final: pay + 2 box del)
+  });
+  return [call, ...(await opupTxns(o.caller, o.cid, 1))];
 }
 
 // sign as one atomic group (Pera-style {txn, signers} groups) and broadcast

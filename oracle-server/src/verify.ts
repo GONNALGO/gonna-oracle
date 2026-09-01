@@ -24,6 +24,8 @@ import { ReplayVerifier } from './replay/replayer.js';
 export interface Deps {
   cfg: OracleConfig;
   chain: ChainClient;
+  /** v3 flip: per-app chain clients (multi-app serving). Absent in tests. */
+  chains?: Map<number, ChainClient>;
   store: StoreLike;
   signer: OracleSigner;
   /** M2 replay verifier (SPEC-m2 §5). Required when cfg.replayEnforce. */
@@ -224,7 +226,11 @@ function logSignScoreReject(reason: string, body: SignScoreBody, extra: Record<s
 // §3.2 POST /v1/sign-score — ALL checks, in SPEC order
 // ---------------------------------------------------------------------------
 export async function handleSignScore(deps: Deps, rawBody: unknown, ip: string): Promise<Reply> {
-  const { cfg, chain, store, signer } = deps;
+  const { cfg, store, signer } = deps;
+  // v3 flip: the request MAY pin an app (legacy v2.1 cards keep settling).
+  const wantApp = Number((rawBody as Record<string, unknown>)?.['appId'] ?? cfg.appId);
+  const chain = deps.chains?.get(wantApp) ?? (wantApp === cfg.appId ? deps.chain : undefined);
+  if (!chain) return bad('unknown appId', 400);
 
   // 0. body shape
   const body = parseSignScoreBody(rawBody);
@@ -341,7 +347,7 @@ export async function handleSignScore(deps: Deps, rawBody: unknown, ip: string):
 
   // sign (byte-exact SPEC §1)
   const addrBytes = algosdk.decodeAddress(body.addr).publicKey;
-  const sig = signer.sign(scoreMsg(cfg.appId, body.cid, body.seat, addrBytes, body.score));
+  const sig = signer.sign(scoreMsg(wantApp, body.cid, body.seat, addrBytes, body.score));
   const sigRow: SigRow = {
     cid: body.cid,
     seat: body.seat,
@@ -373,7 +379,10 @@ export async function handleSignScore(deps: Deps, rawBody: unknown, ip: string):
 // §3.3 POST /v1/verdict — everything derived from chain
 // ---------------------------------------------------------------------------
 export async function handleVerdict(deps: Deps, rawBody: unknown): Promise<Reply> {
-  const { cfg, chain, signer } = deps;
+  const { cfg, signer } = deps;
+  const wantApp = Number((rawBody as Record<string, unknown>)?.['appId'] ?? cfg.appId);
+  const chain = deps.chains?.get(wantApp) ?? (wantApp === cfg.appId ? deps.chain : undefined);
+  if (!chain) return bad('unknown appId', 400);
   if (typeof rawBody !== 'object' || rawBody === null) return bad('malformed request body');
   const cid = (rawBody as Record<string, unknown>)['cid'];
   if (!Number.isInteger(cid) || (cid as number) < 0) return bad('malformed request body');
@@ -418,7 +427,7 @@ export async function handleVerdict(deps: Deps, rawBody: unknown): Promise<Reply
     stageMode = 'stage';
   }
 
-  const msg = verdictMsg(cfg.appId, cid as number, meta.stageMode, extra, digest);
+  const msg = verdictMsg(wantApp, cid as number, meta.stageMode, extra, digest);
   const sig = signer.sign(msg);
   return ok({
     verdictSigB64: b64encode(sig),

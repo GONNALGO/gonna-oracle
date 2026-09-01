@@ -13,6 +13,8 @@ export interface ScoreCaps {
 export interface OracleConfig {
   network: 'testnet' | 'mainnet';
   appId: number;
+  /** v3 flip: every app this oracle signs for (appId = appIds[0], primary). */
+  appIds: number[];
   gonnaAsaId: number;
   treasuryAddr: string;
   algodUrl: string;
@@ -167,6 +169,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OracleConfig {
   return {
     network: networkRaw,
     appId: reqInt(env, 'ARENA_APP_ID'),
+    // ARENA_APP_IDS: comma list, first = primary (default: ARENA_APP_ID only).
+    appIds: ((env['ARENA_APP_IDS'] ?? '').trim()
+      ? (env['ARENA_APP_IDS'] ?? '').split(',').map((x) => Number(x.trim())).filter((n) => Number.isInteger(n) && n > 0)
+      : [reqInt(env, 'ARENA_APP_ID')]),
     gonnaAsaId: intEnv(env, 'GONNA_ASA_ID', 0),
     treasuryAddr: req(env, 'TREASURY_ADDR'),
     algodUrl: (env['ALGOD_URL'] ?? DEFAULT_ALGOD[networkRaw] ?? '').trim(),

@@ -1,0 +1,19 @@
+=== TABLE12: cid=96 stake=1000000 players=13 build=ve6a716ae reuse=true ===
+  reusing cid 96: 2 seated, signed scores=[5500]
+  seat 1 QA_G01: already seated — skipping join
+  seat 1 QA_G01: score=0 joined+signed+submitted
+  seat 2 QA_G02: score=3600 joined+signed+submitted
+  seat 3 QA_G03: score=3500 joined+signed+submitted
+  seat 4 QA_G04: score=4650 joined+signed+submitted
+  seat 5 QA_G05: score=3550 joined+signed+submitted
+  seat 6 QA_G06: score=2400 joined+signed+submitted
+  seat 7 QA_G07: score=3900 joined+signed+submitted
+  seat 8 QA_G08: score=1450 joined+signed+submitted
+  seat 9 QA_G09: score=2300 joined+signed+submitted
+  seat 10 QA_G10: score=100 joined+signed+submitted
+  seat 11 QA_G11: score=300 joined+signed+submitted
+  seat 12 QA_G12: score=850 joined+signed+submitted
+  RESOLVE txid=FQCNKTMHARKTKNIK4LLMJKQZVFNTOUPHH7ROO5W2AXMYMTLAXWBQ top=5500 x1 winner boxes=deleted
+  legs table12: winner=12350000 (want 12350000) OK | treasury=650000 (want 650000) OK | MBR=358200 OK
+=== TABLE12 stage5 WIN DONE ===
+=== CAMPAIGN DONE: 0 duels + table12 all green ===

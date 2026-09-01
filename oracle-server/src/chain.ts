@@ -161,8 +161,13 @@ export class HttpChainClient implements ChainClient {
     try {
       const name = new Uint8Array([0x6d, ...u64be(cid)]); // 'm' + cid8
       const box = await this.algod.getApplicationBoxByName(this.appId, name).do();
-      const t = algosdk.ABIType.from('(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64)');
-      const v = t.decode(box.value) as [Uint8Array, bigint, bigint, bigint, bigint, bigint, Uint8Array, bigint, bigint, Uint8Array, bigint, bigint];
+      // v3 meta (+claimed_count,+refund_reason): 14 fields; v2.1: 12 fields
+      let v: [Uint8Array, bigint, bigint, bigint, bigint, bigint, Uint8Array, bigint, bigint, Uint8Array, bigint, bigint];
+      try {
+        v = algosdk.ABIType.from('(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64,uint64,uint64)').decode(box.value) as typeof v;
+      } catch {
+        v = algosdk.ABIType.from('(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64)').decode(box.value) as typeof v;
+      }
       return {
         // algosdk decodes ABI byte[] to a plain Array — coerce to Uint8Array
         // (algosdk.encodeAddress / nacl demand a real Uint8Array; live-E2E v16)
@@ -183,9 +188,14 @@ export class HttpChainClient implements ChainClient {
     try {
       const name = new Uint8Array([0x70, ...u64be(cid)]); // 'p' + cid8
       const box = await this.algod.getApplicationBoxByName(this.appId, name).do();
-      const t = algosdk.ABIType.from('(byte[],uint64,bool,uint64)[]');
-      const v = t.decode(box.value) as [Uint8Array, bigint, boolean, bigint][];
-      return v.map((p) => ({ addr: Uint8Array.from(p[0]), score: p[1], signed: p[2], seatedAt: p[3] }));
+      // v3 roster (+claimed): 5-tuple entries; v2.1: 4-tuple
+      try {
+        const w = algosdk.ABIType.from('(byte[],uint64,bool,uint64,bool)[]').decode(box.value) as [Uint8Array, bigint, boolean, bigint, boolean][];
+        return w.map((p) => ({ addr: Uint8Array.from(p[0]), score: p[1], signed: p[2], seatedAt: p[3] }));
+      } catch {
+        const v = algosdk.ABIType.from('(byte[],uint64,bool,uint64)[]').decode(box.value) as [Uint8Array, bigint, boolean, bigint][];
+        return v.map((p) => ({ addr: Uint8Array.from(p[0]), score: p[1], signed: p[2], seatedAt: p[3] }));
+      }
     } catch {
       return [];
     }

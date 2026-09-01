@@ -88,7 +88,7 @@ export function stageLabel(stageMode: string, stageIdx: number | null, verified 
 // is immutable: no update, no delete). Until QuantumArena v3 (per-seat
 // permissionless refund claims), open tables are capped at 4 joiners (5
 // seats): every tie stays refundable, no funds can ever be locked.
-const SEAT_OPTS = [4];
+const SEAT_OPTS = [4, 8, 12]; // v18: v3 per-seat refunds make ties safe at ANY size (v17.0.12 cap retired)
 const DUR_OPTS: { label: string; secs: number }[] = [
   { label: '4H', secs: 4 * 3600 },
   { label: '12H', secs: 12 * 3600 },
@@ -203,7 +203,7 @@ export class ArenaUI {
     return {
       visibility: 'public',
       format: 'duel',
-      seatsTotal: 4, // v17.0.12: tie-safety cap (see SEAT_OPTS)
+      seatsTotal: 8, // v18: 8/12 back with v3 per-seat refunds (see SEAT_OPTS)
       durationSecs: 12 * 3600,
       stageMode: 'full',
       stageIdx: null,
@@ -941,6 +941,7 @@ export class ArenaUI {
     }
     if (id.startsWith('claim:')) return this.doClaim(Number(id.slice(6)));
     if (id.startsWith('sweep:')) return this.doClaimCatastrophe(Number(id.slice(6)));
+    if (id.startsWith('refund:')) return this.doClaimRefunds(Number(id.slice(7)));
     if (id === 'recover') return this.doRecover(); // v17.0.11: edge-swipe armor
 
     // ---- v10.4: SHARE (private cards, owner only, while live) ----
@@ -1249,6 +1250,7 @@ export class ArenaUI {
     if (id === 'forfeit') return this.doClaimForfeit();
     if (id === 'vclaim') return this.doClaim(this.current ? this.current.id : -1);
     if (id === 'vsweep') return this.doClaimCatastrophe(this.current ? this.current.id : -1);
+    if (id === 'vrefund') return this.doClaimRefunds(this.current ? this.current.id : -1);
     if (id === 'close') return this.doEarlyClose();
     if (id === 'rematch') return this.doRematch();
     return { act: 'none' };
@@ -1612,6 +1614,24 @@ export class ArenaUI {
     return { act: 'move' };
   }
 
+  private doClaimRefunds(id: number): ArenaAction {
+    const ad = this.adapter() as unknown as { claimRefunds?: (id: number, addr: string) => Promise<unknown> };
+    if (!ad.claimRefunds) return this.fail('REFUNDS ARE A LIVE-CHAIN CONTRACT PATH');
+    console.debug('[arena] CLAIM REFUNDS (v3 per-seat) — start (card #' + id + ')');
+    void this.run(
+      () => ad.claimRefunds!(id, arenaAddress()),
+      () => {
+        if (this.current && this.current.id === id) {
+          this.current = { ...this.current, status: 'closed' };
+        }
+        this.buildFeed();
+        void this.refreshBoard();
+        void this.refreshHistory();
+      },
+    );
+    return { act: 'move' };
+  }
+
   private doEarlyClose(): ArenaAction {
     const c = this.current;
     if (!c) return { act: 'none' };
@@ -1944,7 +1964,7 @@ export class ArenaUI {
       // by RESOLVE (a joiner signed), the duel forfeit clock, or the +7d
       // sweep. Before this fix the row offered a tx the contract rejects.
       const gate = closeGate(card, me);
-      const claimable = gate?.kind === 'claim' || gate?.kind === 'catastrophe';
+      const claimable = gate?.kind === 'claim' || gate?.kind === 'catastrophe' || gate?.kind === 'claimRefund';
       // row panel
       c.fillStyle = mine ? '#101a10' : PANEL;
       c.fillRect(8, y, VW - 16 - 22, ROW_H - 4);
@@ -1990,6 +2010,8 @@ export class ArenaUI {
       if (claimable) {
         if (gate?.kind === 'catastrophe') {
           this.btn(c, frame, { id: 'sweep:' + card.id, x: VW - 96, y: y + 22, w: 60, h: 14 }, 'SWEEP', { gold: true });
+        } else if (gate?.kind === 'claimRefund') {
+          this.btn(c, frame, { id: 'refund:' + card.id, x: VW - 96, y: y + 22, w: 60, h: 14 }, 'REFUND', { gold: true });
         } else {
           this.btn(c, frame, { id: 'claim:' + card.id, x: VW - 96, y: y + 22, w: 60, h: 14 }, 'CLAIM', { gold: true });
         }
@@ -2631,6 +2653,16 @@ export class ArenaUI {
           this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM YOUR STAKE BACK', { gold: true });
           ay += 24;
         }
+      } else if (card.status === 'refunding') {
+        // v3: perfect tie / catastrophe — every seat refunds itself via
+        // permissionless per-seat claims. ONE tap fires the whole chain.
+        const left = card.players.filter((p) => !p.claimed).length;
+        drawTextSh(c, 'PERFECT TIE - REFUNDING', VW / 2, ay, 1, '#ff8a3c', 'center');
+        ay += 12;
+        drawText(c, 'EVERY SEAT GETS THE FULL STAKE BACK - ZERO FEE', VW / 2, ay, 1, GRAY, 'center');
+        ay += 12;
+        this.btn(c, frame, { id: 'vrefund', x: 92, y: ay, w: 200, h: 20 }, 'REFUND ' + left + ' SEATS', { gold: true });
+        ay += 24;
       } else if (card.status === 'resolved' || card.status === 'claimed') {
         if (potUnknown) {
           // v15.2.7 (BUG-3c): terminal card, event log AND memory both missing

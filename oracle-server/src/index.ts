@@ -157,13 +157,20 @@ async function main(): Promise<void> {
   // never returned by the API, never written to the DB.
   const mnemonic = resolveMnemonic(cfg);
   const signer = signerFromMnemonic(mnemonic);
-  const chain = new HttpChainClient({
-    algodUrl: cfg.algodUrl,
-    indexerUrl: cfg.indexerUrl,
-    appId: cfg.appId,
-    treasuryAddr: cfg.treasuryAddr,
-  });
-  await bootChecks(cfg, chain, signer); // throws -> exit 1 below
+  // v3 flip: one chain client per served app (primary = cfg.appId). Legacy
+  // v2.1 cards keep settling through the same instance.
+  const chains = new Map<number, HttpChainClient>();
+  for (const id of cfg.appIds) {
+    const ch = new HttpChainClient({
+      algodUrl: cfg.algodUrl,
+      indexerUrl: cfg.indexerUrl,
+      appId: id,
+      treasuryAddr: cfg.treasuryAddr,
+    });
+    await bootChecks(cfg, ch, signer); // throws -> exit 1 below
+    chains.set(id, ch);
+  }
+  const chain = chains.get(cfg.appId)!;
   const store = await openStore(cfg); // turso when configured, else local SQLite
   // SEV-2b warnings (M-1): receipts on ephemeral local storage do not survive
   // a redeploy on the free tier. Mainnet should set TURSO_URL/TURSO_AUTH_TOKEN.
@@ -191,7 +198,7 @@ async function main(): Promise<void> {
   const replay = cfg.replayEnforce
     ? new ReplayVerifier({ bundlesDir: cfg.replayBundlesDir, timeoutMs: cfg.replayTimeoutMs })
     : undefined;
-  const app = createApp({ cfg, chain, store, signer, replay });
+  const app = createApp({ cfg, chain, chains, store, signer, replay });
   serve({ fetch: app.fetch, port: cfg.port }, (info) => {
     console.log(`[oracle] ready addr=${signer.addr} ${configLogLine(cfg)} listening=${info.port}`);
   });

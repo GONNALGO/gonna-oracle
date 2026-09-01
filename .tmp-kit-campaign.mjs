@@ -42,7 +42,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var define_import_meta_env_default;
 var init_define_import_meta_env = __esm({
   "<define:import.meta.env>"() {
-    define_import_meta_env_default = { DEV: false, PROD: true, VITE_ARENA_NETWORK: "mainnet", VITE_QA_ORACLE: "" };
+    define_import_meta_env_default = { DEV: false, PROD: true, VITE_ARENA_NETWORK: "mainnet", VITE_QA_ORACLE: "", VITE_ARENA_APP_ID: "" };
   }
 });
 
@@ -34366,9 +34366,10 @@ var TESTNET_CFG = {
 var MAINNET_CFG = {
   // M-2 mainnet deploy (scripts/mainnet-deploy-report.md): app 3686311434,
   // escrow 3XEQEDORZHI…47UM (app address, derived — never hardcoded below).
-  appId: 3686311434,
-  legacyAppId: 0,
-  // no legacy on mainnet
+  appId: 3691139011,
+  // QuantumArena v3 (per-seat refund claims — ties safe at ANY size)
+  legacyAppId: 3686311434,
+  // v2.1: pre-v3 cards stay resolvable there
   gonnaAsa: 2582294183,
   // REAL mainnet $GONNA (same id as src/game/wallet.ts)
   // M-4b: OpUp donor app mainnet (LEAD GO 2026-08-26) — create/join/close
@@ -34385,7 +34386,9 @@ var MAINNET_CFG = {
   oracleBaseUrl: "https://gonna-arena-oracle-testnet.onrender.com"
   // same Render service; flipped env-side to mainnet
 };
-var NET = IS_MAINNET ? MAINNET_CFG : TESTNET_CFG;
+var BASE_NET = IS_MAINNET ? MAINNET_CFG : TESTNET_CFG;
+var APP_ID_OVERRIDE = Number(define_import_meta_env_default?.VITE_ARENA_APP_ID ?? 0);
+var NET = APP_ID_OVERRIDE > 0 ? { ...BASE_NET, appId: APP_ID_OVERRIDE } : BASE_NET;
 function netLsKey(base) {
   return base + "." + ARENA_NETWORK;
 }
@@ -34500,9 +34503,15 @@ async function readMeta(cid) {
   try {
     const name = new Uint8Array([109, ...u64be(cid)]);
     const box = await algod.getApplicationBoxByName(ARENA_APP_ID, name).do();
-    const t = a.ABIType.from("(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64)");
-    const v = t.decode(box.value);
-    return { creator: v[0], stake: v[1], seatsTotal: v[2], seatsTaken: v[3], deadline: v[4], stageMode: v[5], seed: v[6], creatorScore: v[7], status: v[8], winner: v[9], paidTotal: v[10], mbrPaid: v[11] };
+    try {
+      const t3 = a.ABIType.from("(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64,uint64,uint64,uint64)");
+      const w = t3.decode(box.value);
+      return { creator: w[0], stake: w[1], seatsTotal: w[2], seatsTaken: w[3], deadline: w[4], stageMode: w[5], seed: w[6], creatorScore: w[7], status: w[8], winner: w[9], paidTotal: w[10], mbrPaid: w[11] };
+    } catch {
+      const t = a.ABIType.from("(byte[],uint64,uint64,uint64,uint64,uint64,byte[],uint64,uint64,byte[],uint64,uint64)");
+      const v = t.decode(box.value);
+      return { creator: v[0], stake: v[1], seatsTotal: v[2], seatsTaken: v[3], deadline: v[4], stageMode: v[5], seed: v[6], creatorScore: v[7], status: v[8], winner: v[9], paidTotal: v[10], mbrPaid: v[11] };
+    }
   } catch {
     return null;
   }
@@ -34513,9 +34522,15 @@ async function readPlayers(cid) {
   try {
     const name = new Uint8Array([112, ...u64be(cid)]);
     const box = await algod.getApplicationBoxByName(ARENA_APP_ID, name).do();
-    const t = a.ABIType.from("(byte[],uint64,bool,uint64)[]");
-    const v = t.decode(box.value);
-    return v.map((p) => ({ addr: p[0], score: p[1], signed: p[2], seatedAt: p[3] }));
+    try {
+      const t3 = a.ABIType.from("(byte[],uint64,bool,uint64,bool)[]");
+      const w = t3.decode(box.value);
+      return w.map((p) => ({ addr: p[0], score: p[1], signed: p[2], seatedAt: p[3], claimed: p[4] }));
+    } catch {
+      const t = a.ABIType.from("(byte[],uint64,bool,uint64)[]");
+      const v = t.decode(box.value);
+      return v.map((p) => ({ addr: p[0], score: p[1], signed: p[2], seatedAt: p[3], claimed: false }));
+    }
   } catch {
     return [];
   }
@@ -34857,6 +34872,28 @@ async function buildClaimForfeitGroup(o) {
     suggestedParams: await baseParams(TESTNET_FEES.forfeit)
   });
   return [call];
+}
+async function buildClaimRefundGroup(o) {
+  const a = await sdk();
+  const meta = await readMeta(o.cid);
+  if (!meta) throw new Error("card not found on chain (fully refunded?)");
+  const creator = a.encodeAddress(meta.creator instanceof Uint8Array ? meta.creator : Uint8Array.from(meta.creator));
+  const call = a.makeApplicationNoOpTxnFromObject({
+    sender: o.caller,
+    appIndex: ARENA_APP_ID,
+    appArgs: [
+      await methodSelector(a, "claim_refund(uint64,uint64)void"),
+      await appArg(a, "uint64", o.cid),
+      await appArg(a, "uint64", o.seat)
+    ],
+    accounts: [o.playerAddr, creator],
+    // holding of the payee + MBR receiver
+    foreignAssets: [GONNA_ASA_TESTNET],
+    boxes: [boxRef(o.cid, 109), boxRef(o.cid, 112)],
+    suggestedParams: await baseParams(4e3)
+    // axfer + (final: pay + 2 box del)
+  });
+  return [call, ...await opupTxns(o.caller, o.cid, 1)];
 }
 var SIGN_TIMEOUT_MS = 9e4;
 var SIGN_TIMEOUT_MSG = "WALLET NOT RESPONDING - RECONNECT AND RETRY";
@@ -35370,6 +35407,7 @@ export {
   buildCatastropheGroup,
   buildClaimForfeitGroup,
   buildClaimGroup,
+  buildClaimRefundGroup,
   buildContinuePayment,
   buildCreateGroup,
   buildEarlyCloseGroup,
