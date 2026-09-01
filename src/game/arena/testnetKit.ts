@@ -254,16 +254,15 @@ function boxRef(cid: number, prefix: number) {
   return { appIndex: ARENA_APP_ID, name: new Uint8Array([prefix, ...u64be(cid)]) };
 }
 
-// 4 NoOp calls to the budget-donor app, unique notes (OpUp pattern v5.0.0)
-async function opupTxns(sender: string, cid: number): Promise<Txn[]> {
-  // M-4: no OpUp donor app on mainnet (opUpAppId 0 in arenaKit) — the donors
-  // are a client-side budget booster, NOT a contract dependency, so the group
-  // is built without them. Deploy deploy/opup.ts + fill the id if a group
-  // ever hits the opcode budget on mainnet.
+// NoOp calls to the budget-donor app, unique notes (OpUp pattern v5.0.0).
+// v17.0.12: count param — joins of big rosters need more than the default 4.
+async function opupTxns(sender: string, cid: number, count = 4): Promise<Txn[]> {
+  // M-4b: mainnet donor 3686469118 live since 2026-08-26 (arenaKit MAINNET_CFG).
+  // Donors are a client-side budget booster, NOT a contract dependency.
   if (!OPUP_APP_ID) return [];
   const a = await sdk();
   const out: Txn[] = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < count; i++) {
     const note = new Uint8Array(
       await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`QA-opup-${cid}-${i}-${Date.now()}`)),
     );
@@ -374,7 +373,14 @@ export async function buildJoinGroup(o: { joiner: string; cid: number; stakeBase
     boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)],
     suggestedParams: await baseParams(3000),
   });
-  return [axfer, call];
+  // v17.0.12 (BULLETPROOF mainnet finding): join_challenge's opcode cost grows
+  // with the roster size (roster concat loop). The bare [axfer, call] group
+  // has a single 700-opcode budget and blows the dynamic cost budget around
+  // seat 8 on mainnet (proven live: pc=2003 concat, cid 62/63) — the LAST
+  // seats of a big table could never join. Pool budget like create/submit/
+  // resolve already do: 6 OpUp donor calls (+4200 opcodes, headroom for the
+  // full 13-seat roster). Fees stay flat; nothing is trapped.
+  return [axfer, call, ...(await opupTxns(o.joiner, o.cid, 6))];
 }
 
 export async function buildSubmitGroup(o: { player: string; cid: number; score: number; sig: Uint8Array }): Promise<Txn[]> {
@@ -438,9 +444,35 @@ export async function buildResolveGroup(o: {
   const callFee = 1000 * (1 + innerLegs); // 1 outer app call + inner legs
   const enc = (pk: Uint8Array | number[]) => a.encodeAddress(pk instanceof Uint8Array ? pk : Uint8Array.from(pk));
   const creator = enc(meta.creator);
-  const accounts = [...new Set([o.winner, creator, TREASURY_ADDR, ...roster.map((p) => enc(p.addr))])]
-    .filter((x) => x !== o.caller) // the sender is always available — save the slot
-    .slice(0, 4);
+  // v17.0.12 (BULLETPROOF mainnet finding, cid 66): on a TIE the contract
+  // refunds EVERY signed roster leg and reads each player's ASA holding
+  // (asset_holding_get) — those accounts must be AVAILABLE to the app call.
+  // The legacy `accounts` array holds at most 4, so ties of 5+ players were
+  // UNRESOLVABLE (proven live: "unavailable Account" pc=4245 on a 13-seat
+  // tie). Fix: the AVM access list carries holdings refs for the WHOLE
+  // roster (2 boxes + 13 holdings + treasury = 16, the protocol cap).
+  // Winner path (<= 3 payouts) keeps the legacy arrays — proven, untouched.
+  const needAccess = o.tie !== false && roster.length > 2;
+  // v17.0.12b: the access list has NO account×asset cross product (that only
+  // exists in the legacy arrays) — _gonna_dest's asset_holding_get needs an
+  // EXPLICIT holding ref per payee, treasury included (redirect sink). Size
+  // probed live on mainnet: 30+ entries accepted, so the 13-seat worst case
+  // (13 roster holdings + treasury + 2 boxes ~ 30 refs) fits comfortably.
+  const access = needAccess
+    ? [
+        { box: { appIndex: ARENA_APP_ID, name: new Uint8Array([0x6d, ...u64be(o.cid)]) } },
+        { box: { appIndex: ARENA_APP_ID, name: new Uint8Array([0x70, ...u64be(o.cid)]) } },
+        ...[...new Set(roster.map((p) => enc(p.addr)))].map((addr) => ({
+          holding: { address: addr, assetIndex: GONNA_ASA_TESTNET },
+        })),
+        { holding: { address: TREASURY_ADDR, assetIndex: GONNA_ASA_TESTNET } },
+      ]
+    : undefined;
+  const accounts = needAccess
+    ? undefined
+    : [...new Set([o.winner, creator, TREASURY_ADDR, ...roster.map((p) => enc(p.addr))])]
+        .filter((x) => x !== o.caller) // the sender is always available — save the slot
+        .slice(0, 4);
   const call = a.makeApplicationNoOpTxnFromObject({
     sender: o.caller, appIndex: ARENA_APP_ID,
     appArgs: [
@@ -450,12 +482,17 @@ export async function buildResolveGroup(o: {
       await appArg(a, 'byte[]', o.seedReveal),
       await appArg(a, 'byte[]', o.verdictSig),
     ],
-    accounts,
-    foreignAssets: [GONNA_ASA_TESTNET],
-    boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)],
+    ...(needAccess
+      ? { access }
+      : { accounts, foreignAssets: [GONNA_ASA_TESTNET], boxes: [boxRef(o.cid, 0x6d), boxRef(o.cid, 0x70)] }),
     suggestedParams: await baseParams(callFee),
   });
-  return [call, ...(await opupTxns(o.caller, o.cid))];
+  // v17.0.12 (BULLETPROOF mainnet finding, cid 66): resolve over a FULL
+  // 13-seat roster blows the pooled opcode budget at ed25519verify_bare
+  // (cost 1725) with the default 4 donors — the verdict sig check plus the
+  // roster scan outgrow 3500. Scale donors with the roster (13 seats ->
+  // 10 donors = 7700 budget; group stays <= 12 txns, well under the 16 cap).
+  return [call, ...(await opupTxns(o.caller, o.cid, 4 + Math.ceil(roster.length / 2)))];
 }
 
 // ---------- v12: CONTINUE — 5 ALGO flat to the treasury, 1/match ----------

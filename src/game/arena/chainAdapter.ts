@@ -1099,6 +1099,15 @@ export class TestnetArenaAdapter implements ArenaAdapter {
       // re-reads the counter, so it either re-signs for the SAME runCid or
       // dies right here with CID_MOVED — a mismatched card can never exist.
       if (cfg.runCid !== undefined && cid !== cfg.runCid) throw new CidMovedError(cfg.runCid, cid);
+      // v17.0.12 TIE-SAFETY (cid 66 mainnet finding): a perfect tie refunds
+      // every signed player in ONE call and _gonna_dest must read each ASA
+      // holding — those holdings must fit the 16-ref access list, so ties
+      // are only refundable up to 7 seated players. The contract is
+      // immutable: a bigger table that ties would lock its pot FOREVER.
+      // Hard-stop ANY open table above 4 joiners (5 seats), UI or no UI.
+      if (cfg.format !== 'duel' && cfg.seatsTotal > 4) {
+        throw new Error('TIE-SAFETY: open tables are capped at 4 joiners (a bigger table that ends in a perfect tie could never refund on-chain)');
+      }
       // v16 (SPEC §3.2): the SERVER oracle re-verifies the cid against the
       // on-chain next_challenge_id BEFORE it signs (seat 0 = create) — the
       // sig ask carries the sealed run telemetry (input log, frames, build).

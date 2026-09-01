@@ -81,7 +81,14 @@ export function stageLabel(stageMode: string, stageIdx: number | null, verified 
   const base = 'LV' + (stageIdx + 1) + ' ' + STAGE_NAMES[stageIdx];
   return verified ? base : base + ' (UNVERIFIED)';
 }
-const SEAT_OPTS = [4, 8, 12];
+// v17.0.12 (BULLETPROOF mainnet finding, cid 66): a PERFECT TIE refunds every
+// signed player, and _gonna_dest must READ each player's ASA holding — those
+// holdings must fit ONE txn's access list (max 16 non-box refs ≈ 7 payees).
+// A tie at a 9- or 13-seat table would be UNRESOLVABLE FOREVER (the contract
+// is immutable: no update, no delete). Until QuantumArena v3 (per-seat
+// permissionless refund claims), open tables are capped at 4 joiners (5
+// seats): every tie stays refundable, no funds can ever be locked.
+const SEAT_OPTS = [4];
 const DUR_OPTS: { label: string; secs: number }[] = [
   { label: '4H', secs: 4 * 3600 },
   { label: '12H', secs: 12 * 3600 },
@@ -196,7 +203,7 @@ export class ArenaUI {
     return {
       visibility: 'public',
       format: 'duel',
-      seatsTotal: 8,
+      seatsTotal: 4, // v17.0.12: tie-safety cap (see SEAT_OPTS)
       durationSecs: 12 * 3600,
       stageMode: 'full',
       stageIdx: null,
