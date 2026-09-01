@@ -465,7 +465,16 @@ export async function buildResolveGroup(o: {
         ...[...new Set(roster.map((p) => enc(p.addr)))].map((addr) => ({
           holding: { address: addr, assetIndex: GONNA_ASA_TESTNET },
         })),
-        { holding: { address: TREASURY_ADDR, assetIndex: GONNA_ASA_TESTNET } },
+        // NOTE: no treasury holding here — the tie path never READS the
+        // treasury holding (a non-opted-in payee's refund redirects to the
+        // treasury as a plain axfer RECEIVER, which needs no availability).
+        // Boxes count toward the 16-ref cap: 2 boxes + 2 x roster + 2 escrow
+        // = 14 refs at the 5-seat production cap (18 would bust at 7 seats).
+        // v17.0.12c (cid 77): the ESCROW's own holding must be explicit too —
+        // in access-list mode there is no account×asset cross product, so the
+        // inner refund axfer's SENDER (the app address) is unavailable without
+        // it. Legacy arrays get it for free via foreignAssets; access doesn't.
+        { holding: { address: a.getApplicationAddress(ARENA_APP_ID).toString(), assetIndex: GONNA_ASA_TESTNET } },
       ]
     : undefined;
   const accounts = needAccess

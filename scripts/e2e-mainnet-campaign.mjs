@@ -174,14 +174,15 @@ async function playDuel(stageIdx, creatorRole, joinerRole) {
 }
 
 async function table12() {
-  const stageIdx = 0; // stage 1 open table
+  const stageIdx = Number(process.env.E2E_STAGE_IDX || 0); // descent level (0-based)
   const SEATS = Number(process.env.E2E_SEATS || 12); // joiners (v17.0.12: production cap = 4)
+  const TIE = !!process.env.E2E_TIE; // v17.0.12: identical runs on every seat -> perfect tie -> full refunds
   const joiners = JOINERS12.slice(0, SEATS);
   const cid = await kit.nextChallengeId();
   const seed = `PIT-${cid}`;
   const creatorRole = 'DEPLOYER';
   console.log(`=== TABLE${SEATS}: cid=${cid} stake=${STAKE} players=${SEATS + 1} build=${BUILD} ===`);
-  const runC = playStageRun(stageIdx, seed, 40);
+  const runC = TIE ? playStageRun(stageIdx, seed, 7, 900) : playStageRun(stageIdx, seed, 40); // TIE: same bot as the seats -> perfect tie
   const sigC = await sign(cid, 0, creatorRole, runC, seed, stageIdx);
   await send(await kit.buildCreateGroup({
     creator: addr(creatorRole), cid, stakeBase: STAKE, seats: SEATS, durationSecs: 86400,
@@ -191,7 +192,7 @@ async function table12() {
   const scores = [runC.score];
   for (const [i, role] of joiners.entries()) {
     await send(await kit.buildJoinGroup({ joiner: addr(role), cid, stakeBase: STAKE }), W[role]);
-    const run = playStageRun(stageIdx, seed, 5 + i * 16, Math.max(700, FRAMES - i * 110), i); // distinct cadence+caps -> a real winner
+    const run = TIE ? playStageRun(stageIdx, seed, 7, 900) : playStageRun(stageIdx, seed, 5 + i * 16, Math.max(700, FRAMES - i * 110), i); // distinct cadence+caps -> a real winner; TIE: identical -> refund path
     const sg = await sign(cid, i + 1, role, run, seed, stageIdx);
     await send(await kit.buildSubmitGroup({ player: addr(role), cid, score: run.score, sig: Buffer.from(sg.sigB64, 'base64') }), W[role]);
     scores.push(run.score);
@@ -202,18 +203,31 @@ async function table12() {
   if (vr.status !== 200) throw new Error(`table12 cid ${cid}: verdict ${vr.status}`);
   const roster = await kit.readPlayers(cid);
   const top = roster.reduce((a, b) => (Number(b.score) > Number(a.score) ? b : a));
+  const nTop = roster.filter((p) => p.signed && Number(p.score) === Number(top.score)).length;
+  const isTie = nTop > 1;
+  // v17.0.12: a seated caller's holding needs an extra access ref on big
+  // ties — resolve big ties from a non-roster wallet (permissionless).
+  const resolver = isTie && roster.length > 2 ? 'PLAYER_QA4' : creatorRole;
   const rr = await send(await kit.buildResolveGroup({
-    caller: addr(creatorRole), cid, stageIdx, seedReveal: new Uint8Array(0),
+    caller: addr(resolver), cid, stageIdx, seedReveal: new Uint8Array(0),
     verdictSig: Buffer.from(vj.verdictSigB64, 'base64'),
-    winner: algosdk.encodeAddress(Uint8Array.from(top.addr)), tie: false,
-  }), W[creatorRole]);
+    winner: algosdk.encodeAddress(Uint8Array.from(top.addr)), tie: isTie,
+  }), W[resolver]);
   await sleep(9000);
   const legs = await legsOf(rr.txid);
   const meta = await kit.readMeta(cid);
-  console.log(`  RESOLVE txid=${rr.txid} winner score=${Number(top.score)} boxes=${meta ? 'PRESENT!' : 'deleted'}`);
-  if (meta) throw new Error('table12: boxes not deleted');
-  assertLegs(legs, { pot: STAKE * (SEATS + 1), winnerAddr: algosdk.encodeAddress(Uint8Array.from(top.addr)), creatorAddr: addr(creatorRole), label: 'table12' });
-  console.log(`=== TABLE${SEATS} DONE ===`);
+  console.log(`  RESOLVE txid=${rr.txid} top=${Number(top.score)} x${nTop} ${isTie ? 'TIE' : 'winner'} boxes=${meta ? 'PRESENT!' : 'deleted'}`);
+  if (meta) throw new Error('table: boxes not deleted');
+  if (isTie) {
+    const refunds = legs.filter((l) => l.gonna === STAKE);
+    const treasuryLeg = legs.find((l) => l.gonna && l.to === 'GONHNV3XMSPTGZITI4PXUZGCMIELXHVADCJQPZKVCTXDNJZVIYDIEGKPHU');
+    const mbr = legs.find((l) => l.algo && l.to === addr(creatorRole));
+    console.log(`  tie legs: refunds=${refunds.length}/${roster.length} treasury=${treasuryLeg ? 'PRESENT!' : 'none OK'} MBR=${mbr ? mbr.algo : 0}`);
+    if (refunds.length !== roster.length || treasuryLeg || !mbr || mbr.algo !== 358_200) throw new Error('table: tie legs wrong');
+  } else {
+    assertLegs(legs, { pot: STAKE * (SEATS + 1), winnerAddr: algosdk.encodeAddress(Uint8Array.from(top.addr)), creatorAddr: addr(creatorRole), label: 'table' + SEATS });
+  }
+  console.log(`=== TABLE${SEATS} stage${stageIdx + 1} ${isTie ? 'TIE' : 'WIN'} DONE ===`);
 }
 
 async function forfeitCreate() {
@@ -267,7 +281,8 @@ const results = [];
 if (ONLY === 'all' || ONLY === 'stages') {
   const joinerPool = ['PLAYER_QA2', 'PLAYER_QA3', 'PLAYER_QA4', 'ORACLE', ...JOINERS12.slice(0, 8)];
   for (let stage = 0; stage < 7; stage++) {
-    for (let m = 0; m < 3; m++) {
+    const PER = Number(process.env.E2E_PER_STAGE || 3);
+    for (let m = 0; m < PER; m++) {
       const creator = m % 2 === 0 ? 'DEPLOYER' : 'PLAYER_QA2';
       const joiner = joinerPool[(stage * 3 + m) % joinerPool.length];
       const r = await playDuel(stage, creator, joiner);
@@ -284,7 +299,7 @@ if (ONLY === 'all' || ONLY === 'table12') await table12();
 if (ONLY === 'finish') {
   const cid = Number(process.env.E2E_CID || 0);
   if (!cid) throw new Error('E2E_CID required');
-  const stageIdx = 0; const seed = `PIT-${cid}`;
+  const stageIdx = Number(process.env.E2E_CID_STAGE || 0); const seed = `PIT-${cid}`; // stage committed in the create note — pass E2E_CID_STAGE
   const roster = await kit.readPlayers(cid);
   console.log(`=== FINISH cid=${cid}: ${roster.length} seated ===`);
   for (const [i, p] of roster.entries()) {

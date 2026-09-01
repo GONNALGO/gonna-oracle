@@ -1,0 +1,12 @@
+import algosdk from 'algosdk';
+import { readFileSync } from 'node:fs';
+const S = JSON.parse(readFileSync('contracts/quantum-arena/deploy/mainnet.secrets.json','utf8'));
+const algod = new algosdk.Algodv2('', 'https://mainnet-api.algonode.cloud', '');
+const dep = algosdk.mnemonicToSecretKey(S.DEPLOYER.mnemonic);
+const p = await algod.getTransactionParams().do();
+const txns = [];
+for (let i = 1; i <= 12; i++) txns.push(algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: dep.addr, receiver: S['QA_G'+String(i).padStart(2,'0')].addr, amount: 100_000, suggestedParams: { ...p } }));
+algosdk.assignGroupID(txns);
+const { txid } = await algod.sendRawTransaction(txns.map(t=>t.signTxn(dep.sk))).do();
+await algosdk.waitForConfirmation(algod, txid, 4);
+console.log('DUST OK', txid, 'DEPLOYER now', (await algod.accountInformation(S.DEPLOYER.addr).do()).amount/1e6);
