@@ -229,29 +229,49 @@ export class ReplayVerifier {
     } catch {
       return { ok: false, reason: 'replay bundle failed to load', status: 500 };
     }
-    let result: ReplayResult;
-    let game: any = null;
-    try {
-      (globalThis as Record<string, unknown>)['__GONNA_VER'] = opts.build; // per-request pin (multi-bundle processes)
-      game = bootGame(eng);
-      // EXACT client boot entries (v16.1): same scene/RNG wiring as the live run
-      if (opts.stageMode === 'stage') startStageRun(game, opts.stageIdx ?? 0, opts.seedLabel);
-      else startFullRunSeeded(eng, game, opts.seedLabel);
-      result = replayCampaign(game, opts.masks, this.timeoutMs, opts.edges);
-    } catch (e) {
-      // diag: where the engine was when the abort fired (score/scene only —
-      // the replay contract has no per-frame client trace to diff against)
-      const abortDiag: ReplayDiag = game ? { partialScore: game.score, endScene: game.scene } : {};
-      if (e instanceof ReplayTimeoutError) return { ok: false, reason: 'REPLAY TIMEOUT - RETRY', status: 500, diag: abortDiag };
-      if (e instanceof ReplayStuckError) return { ok: false, reason: 'REPLAY MISMATCH', status: 400, diag: abortDiag }; // log never reaches a play frame for the tail masks
-      throw e; // engine crash = genuine internal error (500 via onError)
+    // v18.1.2 (Friedbean 100M REPLAY MISMATCH): pre-fix builds gated the
+    // slow-mo cadence on the GLOBAL boot frame (this.frame % 3), so a tape
+    // recorded in a long-lived browser page replays correctly only under the
+    // page's frame PHASE. That phase is unrecoverable from the tape — but it
+    // is mod 3, so the whole space is {0,1,2}. Try each phase with a fresh
+    // boot and accept the run if ANY phase reproduces the EXACT claimed
+    // score. Anti-cheat is untouched: a forged tape still has no reason to
+    // reproduce a real score under any phase. Builds >= v18.1.2 gate on the
+    // run-local slow-mo counter and are phase-independent (all three attempts
+    // agree). Fallback runs on FAILURE only, so the common path costs 1 replay.
+    let firstFail: { ok: false; reason: string; status: number; diag?: ReplayDiag } | null = null;
+    for (const framePhase of [0, 1, 2]) {
+      let result: ReplayResult;
+      let game: any = null;
+      try {
+        (globalThis as Record<string, unknown>)['__GONNA_VER'] = opts.build; // per-request pin (multi-bundle processes)
+        game = bootGame(eng);
+        // EXACT client boot entries (v16.1): same scene/RNG wiring as the live run
+        if (opts.stageMode === 'stage') startStageRun(game, opts.stageIdx ?? 0, opts.seedLabel);
+        else startFullRunSeeded(eng, game, opts.seedLabel);
+        game.frame = framePhase; // emulate the client page's boot-frame phase
+        result = replayCampaign(game, opts.masks, this.timeoutMs, opts.edges);
+      } catch (e) {
+        // diag: where the engine was when the abort fired (score/scene only —
+        // the replay contract has no per-frame client trace to diff against)
+        const abortDiag: ReplayDiag = game ? { partialScore: game.score, endScene: game.scene } : {};
+        if (e instanceof ReplayTimeoutError) return { ok: false, reason: 'REPLAY TIMEOUT - RETRY', status: 500, diag: abortDiag };
+        if (e instanceof ReplayStuckError) {
+          // log never reaches a play frame for the tail masks — try the next phase
+          firstFail ??= { ok: false, reason: 'REPLAY MISMATCH', status: 400, diag: abortDiag };
+          continue;
+        }
+        throw e; // engine crash = genuine internal error (500 via onError)
+      }
+      if (result.score !== opts.score) {
+        firstFail ??= {
+          ok: false, reason: 'REPLAY MISMATCH', status: 400,
+          diag: { replayedScore: result.score, playFrames: result.playFrames, steps: result.steps, endScene: result.scene, elapsedMs: result.elapsedMs },
+        };
+        continue;
+      }
+      return { ok: true, result };
     }
-    if (result.score !== opts.score) {
-      return {
-        ok: false, reason: 'REPLAY MISMATCH', status: 400,
-        diag: { replayedScore: result.score, playFrames: result.playFrames, steps: result.steps, endScene: result.scene, elapsedMs: result.elapsedMs },
-      };
-    }
-    return { ok: true, result };
+    return firstFail ?? { ok: false, reason: 'REPLAY MISMATCH', status: 400 };
   }
 }

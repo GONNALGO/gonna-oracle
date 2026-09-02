@@ -1905,7 +1905,16 @@ export class Game implements GameCtx {
     }
     if (this.slowmoT > 0) {
       this.slowmoT--;
-      if (this.frame % 3 !== 0) {
+      // v18.1.2 (Friedbean 100M REPLAY MISMATCH): the slow-mo cadence gate MUST
+      // be a pure function of the run-local slow-mo counter. Gating on the
+      // global boot frame (this.frame % 3) made WHICH tape frames advance the
+      // sim depend on how long the PAGE had been alive — the oracle's
+      // fresh-boot replay ran a different frame phase than the client's
+      // browser, so every slow-mo episode (5-hit combo / boss kill) could
+      // desync the tape and kill the replayed run. slowmoT evolves
+      // identically in client & replay, so the frozen frames now land on the
+      // same tape indices on both sides.
+      if (this.slowmoT % 3 !== 0) {
         this.fx.update();
         this.holdInput = true;
         return;
@@ -2510,7 +2519,10 @@ export class Game implements GameCtx {
     }
     if (this.slowmoT > 0) {
       this.slowmoT--;
-      if (this.frame % 3 !== 0) {
+      // v18.1.2: run-local cadence gate (see the campaign twin above) — the
+      // DESCENT slow-mo must freeze the SAME tape frames in the browser and in
+      // the oracle replay, regardless of the page's boot frame phase.
+      if (this.slowmoT % 3 !== 0) {
         this.fx.update();
         this.holdInput = true;
         return;
