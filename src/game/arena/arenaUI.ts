@@ -1247,6 +1247,25 @@ export class ArenaUI {
       // v12: the joiner plays too — PLAY YOUR RUN -> SEAL -> SIGN SCORE
       const c = this.current;
       if (!c) return { act: 'none' };
+      // v18.1.1: NEVER deal an UNVERIFIED level — a fallback guess used to
+      // send the joiner into the WRONG stage and the stake run died at the
+      // oracle (STAGEIDX). Re-resolve from the oracle FIRST, block honestly
+      // if the truth is unreachable.
+      if (c.stageMode !== 'full' && c.stageVerified === false) {
+        this.note('VERIFYING THE LEVEL - ONE MOMENT');
+        void this.run(
+          async () => this.adapter().getChallenge(c.id),
+          (nc) => {
+            if (nc) {
+              this.current = nc;
+              if (nc.stageMode !== 'full' && nc.stageVerified === false) {
+                this.fail('LEVEL UNVERIFIED - CHECK THE LINE AND RETRY');
+              }
+            }
+          },
+        );
+        return { act: 'move' };
+      }
       this.resetSeal();
       this.sealRole = 'joiner';
       if (qaActive()) {

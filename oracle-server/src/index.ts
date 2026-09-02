@@ -58,6 +58,21 @@ export function createApp(deps: AppDeps): Hono {
     }),
   );
 
+  // v18.1.1 STAGE ORACLE (Prince: "gli utenti devono poter giocare sempre"):
+  // the create-note stage commitment, server-side — the same scan the signer
+  // trusts. Public on-chain data, no secrets. Mobile clients use this as the
+  // AUTHORITATIVE stage source so a flaky indexer/poisoned cache on the phone
+  // can never deal the wrong level (the STAGEIDX reject class dies here).
+  app.get('/v1/stage/:cid', async (c) => {
+    const limited = await rateGate(c, null);
+    if (limited) return limited;
+    const cid = Number(c.req.param('cid'));
+    if (!Number.isInteger(cid) || cid < 0) return c.json({ error: 'bad cid' }, 400);
+    const commit = await deps.chain.getStageForCid(cid);
+    if (!commit) return c.json({ error: 'stage commitment unavailable' }, 503);
+    return c.json({ cid, stage: commit.stage, source: commit.source });
+  });
+
   // Fixed-window rate limit (SPEC §2/§3.2 rule 6): per IP AND per addr (when
   // the body carries one). Counted at entry so chain reads are protected.
   const rateGate = async (c: Context, addrKey: string | null): Promise<Response | null> => {

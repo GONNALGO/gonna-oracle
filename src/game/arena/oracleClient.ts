@@ -169,6 +169,28 @@ export async function postContinueReceipt(refId: string, addr: string, txid: str
   await postJson('/v1/continue/receipt', { refId, addr, txid }, opts);
 }
 
+// v18.1.1 STAGE ORACLE: the AUTHORITATIVE create-note stage commitment,
+// server-side (the same scan the signer trusts). A phone with a poisoned
+// stage cache or a hiccuping indexer used to fall back to a cid%7 GUESS,
+// play the wrong level and eat a STAGEIDX reject at sign time — that class
+// is dead. Throws on any failure: callers fall back to the local tiers.
+export async function fetchCommittedStage(cid: number, opts?: { timeoutMs?: number }): Promise<number> {
+  if (oracleIsDev()) throw new Error('dev oracle: no stage endpoint');
+  const base = oracleBaseUrl().replace(/\/$/, '');
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), opts?.timeoutMs ?? 8000);
+  try {
+    const r = await fetch(base + '/v1/stage/' + cid, { signal: ctl.signal });
+    if (!r.ok) throw new Error('oracle stage http ' + r.status);
+    const j = (await r.json()) as { stage?: unknown };
+    const s = Number(j.stage);
+    if (!Number.isInteger(s) || s < 0 || s > 6) throw new Error('oracle stage gibberish');
+    return s;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // ---------- sig helpers used by the testnet adapter (chainAdapter) ----------
 // SERVER path (default): the HTTP oracle signs after its chain checks.
 // DEV path (explicit ?oracle=dev ONLY): the armed QA dev key signs the

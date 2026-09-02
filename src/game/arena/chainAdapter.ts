@@ -937,7 +937,7 @@ export class MockArenaAdapter implements ArenaAdapter {
 // armed QA dev-oracle key is used ONLY on the explicit ?oracle=dev override.
 // ======================================================================
 import * as kit from './testnetKit';
-import { oracleScoreSig, oracleVerdictSig, registerContinueReceipt } from './oracleClient';
+import { oracleScoreSig, oracleVerdictSig, registerContinueReceipt, fetchCommittedStage } from './oracleClient';
 import { IS_MAINNET, netLsKey } from './arenaKit';
 import { buildVer } from '../ver';
 import { qaScore } from './qaSigner';
@@ -1036,12 +1036,21 @@ export class TestnetArenaAdapter implements ArenaAdapter {
     };
   }
 
-  // v15.2.8: the committed level for a single-mode card — (a) on-chain note
-  // via the indexer scan, (b) this browser's card memory, (c) the deep-link
-  // ?st= hint (v15.2.8b: fills the stage, verified FALSE — caller-controlled),
-  // (d) cid%7 fallback (verified: false). Indexer hiccups never blank a card:
-  // the memory/link tiers still resolve.
+  // v15.2.8: the committed level for a single-mode card — (a) the ORACLE's
+  // authoritative server-side note scan (v18.1.1: same truth the signer
+  // checks — a poisoned phone cache can never deal the wrong level), then
+  // (b) on-chain note via the indexer scan, (c) this browser's card memory,
+  // (d) the deep-link ?st= hint (verified FALSE — caller-controlled),
+  // (e) cid%7 fallback (verified: false). Indexer hiccups never blank a card.
   private async cardStage(cid: number, stageMode: StageMode): Promise<StageResolution> {
+    if (stageMode !== 'full') {
+      try {
+        const s = await fetchCommittedStage(cid);
+        return { stageIdx: s, verified: true, source: 'note' };
+      } catch {
+        console.debug('[arena] oracle stage endpoint unreachable — falling back to indexer/memory/link tiers');
+      }
+    }
     let notes: Record<string, number> | null = null;
     try {
       notes = await kit.fetchArenaCreateStages();

@@ -261,7 +261,13 @@ export async function handleSignScore(deps: Deps, rawBody: unknown, ip: string):
     if (body.stageMode === 'stage') {
       stageCommit = await chain.getStageForCid(body.cid);
       if (!stageCommit) return bad('stage commitment unavailable (indexer scan failed)', 503);
-      if (stageCommit.stage !== body.stageIdx) return bad('stageIdx does not match the create-note commitment');
+      // v18.1.1: LOG this reject — Prince's mobile joiners hit it invisibly
+      // (the client fell back to a cid%7 stage guess when the note scan
+      // failed, then signed the guess against the real commitment)
+      if (stageCommit.stage !== body.stageIdx) {
+        logSignScoreReject('STAGEIDX MISMATCH', body, { committed: stageCommit.stage, source: stageCommit.source });
+        return bad('stageIdx does not match the create-note commitment');
+      }
     }
   }
 
