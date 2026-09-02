@@ -14,7 +14,7 @@ import type { SkinId } from './skins';
 import { drawIconTG, drawIconX } from './shareicons';
 
 export const FLUO = '#39FF14'; // bullrun green (v9.2 share/bullrun accent)
-export const GAME_URL = 'gonna.bond/gonnafight';
+export const GAME_URL = 'gonna.bond/quantumfight';
 export const TG_CHANNEL = 'https://t.me/GONNAFI';
 export const SIGNATURE = 'GONNA SKRRT SKRRT $GONNA @gonnalgo';
 

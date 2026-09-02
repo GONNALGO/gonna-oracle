@@ -147,7 +147,7 @@ export function renderShareCard(ch: Challenge, fighterImg: CanvasImageSource | n
   drawText(c, 'BY ' + ch.creatorName, cx, 394, 3, DIM, 'center');
   drawTextSh(c, 'THINK YOU CAN TAKE IT?', cx, 442, 4, FLUO, 'center', '#0a3d00');
   if (ch.visibility === 'private') drawText(c, 'PRIVATE CHALLENGE - LINK ONLY', cx, 494, 3, '#b45aff', 'center');
-  drawText(c, 'gonna.bond/gonnafight', cx, 566, 3, GOLD_DK, 'center');
+  drawText(c, 'gonna.bond/quantumfight', cx, 566, 3, GOLD_DK, 'center');
   if (ch.creatorType === 'falcon') quantumBadge(c, SHARE_W - 100, 52, 3);
 
   return cv;
