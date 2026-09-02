@@ -5,7 +5,7 @@
 // Mobile: Pera wallet app -> developer settings -> TESTNET mode.
 // ============================================================================
 import { withTimeout } from './testnetKit';
-import { netLsKey } from './arenaKit';
+import { IS_MAINNET, netLsKey } from './arenaKit';
 import type { TxSignFn } from './testnetKit';
 
 // v14.2: a stale WC session can hang reconnectSession() too — probe with a
@@ -13,6 +13,12 @@ import type { TxSignFn } from './testnetKit';
 const PROBE_TIMEOUT_MS = 12_000;
 
 type PeraWalletConnectT = import('@perawallet/connect').PeraWalletConnect;
+
+// v18.1 MAINNET FIX (Prince: "il mobile si disconnette da solo"): the arena
+// Pera instance was hard-paired as TESTNET (416002) even in the mainnet build
+// — Pera in mainnet mode could never hold that session (drops, reconnects not
+// recognized, signs rejected). The chainId now follows the build network.
+const WC_CHAIN_ID = IS_MAINNET ? 416001 : 416002;
 
 // M-1: NETWORK-SCOPED — a saved live-adapter account must not leak cross-net
 // M-4: base key renamed testnet->live (the network scope already carries
@@ -24,7 +30,7 @@ let pera: PeraWalletConnectT | null = null;
 async function peraInstance(): Promise<PeraWalletConnectT> {
   if (pera) return pera;
   const mod = await import('@perawallet/connect');
-  pera = new mod.PeraWalletConnect({ chainId: 416002 }); // TESTNET
+  pera = new mod.PeraWalletConnect({ chainId: WC_CHAIN_ID }); // build network (v18.1)
   return pera;
 }
 

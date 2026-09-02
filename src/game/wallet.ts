@@ -38,6 +38,10 @@ export interface WalletState {
   address: string | null;
   connecting: boolean;
   mocked: boolean;
+  // v18.1: the WC session dropped (mobile offline / wallet app killed it) but
+  // the identity is KEPT — every page still recognizes the degen, and one tap
+  // re-pairs. Only the explicit in-app DISCONNECT wipes the identity.
+  sessionDead: boolean;
 }
 
 export interface OwnedNft {
@@ -74,7 +78,7 @@ interface WalletLib {
   connector?: { on?: (event: string, cb: (...args: unknown[]) => void) => void } | null;
 }
 
-const state: WalletState = { provider: null, address: null, connecting: false, mocked: false };
+const state: WalletState = { provider: null, address: null, connecting: false, mocked: false, sessionDead: false };
 const elig: Eligibility = {
   checked: false, ok: false, algo: 0, gonna: 0, gonnaDecimals: 6,
   nfts: [], ts: 0, source: null, busy: false, error: false,
@@ -367,10 +371,36 @@ async function loadLib(provider: WalletProvider): Promise<WalletLib> {
   return w;
 }
 
-// the wallet app killed the session: reset everything and notify the engine
+// the wallet app killed the session: v18.1 — GO SOFT, never log the degen
+// out. Identity + caches survive (Prince: "il mobile non deve mai
+// disconnettersi"); every page still recognizes the wallet and a silent
+// re-pair is attempted in the background. Only the explicit in-app
+// DISCONNECT (below) wipes the identity.
+let healing = false; // our own recovery disconnects must not re-enter here
 function sessionEnded(): void {
+  if (healing) return; // self-initiated recovery disconnect — state managed by recoverSession
+  if (!state.address) return; // nothing to preserve
+  state.sessionDead = true;
+  // v18.1: the engine is NOT kicked to the connect scene anymore — the
+  // identity is intact (soft state), every page keeps rendering as connected,
+  // and the background heal below re-pairs with no UI when the WC session is
+  // still alive. sessionListener fires only on the explicit full wipe.
+  const provider = state.provider;
+  if (!provider || mock) return;
+  void (async () => {
+    try {
+      const w = await loadLib(provider);
+      const accounts = await w.reconnectSession();
+      if (accounts && accounts.length > 0) applySession(provider, w, accounts);
+    } catch { /* truly dead: the soft state waits for a tap on RE-PAIR */ }
+  })();
+}
+
+// v18.1: the ONLY full wipe — the explicit in-app disconnect
+function sessionWiped(): void {
   state.provider = null;
   state.address = null;
+  state.sessionDead = false;
   activeLibKey = null;
   lsDel(KEY_WALLET);
   lsDel(KEY_ELIG);
@@ -390,6 +420,7 @@ function watchDisconnect(w: WalletLib): void {
 function applySession(provider: WalletProvider, w: WalletLib, accounts: string[]): void {
   state.provider = provider;
   state.address = accounts[0];
+  state.sessionDead = false;
   activeLibKey = libKey(provider);
   lsSet(KEY_WALLET, JSON.stringify({ provider, address: state.address }));
   // identity bridge: a gate connect on the arena-testnet staging path is
@@ -432,7 +463,9 @@ export function onSessionEnded(cb: (() => void) | null): void {
 
 export async function connect(provider: WalletProvider): Promise<string> {
   if (mock) return state.address!; // CI: already "connected"
-  if (state.address && state.provider === provider) return state.address; // idempotent: already connected
+  // v18.1: a SOFT-DEAD session (address kept, WC dropped) never early-returns
+  // — connect always re-pairs: silent reconnect first, fresh pairing after.
+  if (state.address && state.provider === provider && !state.sessionDead) return state.address; // idempotent: already connected
   state.connecting = true;
   pendingProvider = provider;
   installVisibilityRescue();
@@ -482,10 +515,12 @@ export async function disconnect(): Promise<void> {
     return;
   }
   const w = (activeLibKey ? libs[activeLibKey] : null) ?? (state.provider ? libs[libKey(state.provider)] : null);
+  healing = true; // our own disconnect must not route through the soft path
   try {
     if (w) await w.disconnect();
   } catch { /* wallet already gone */ }
-  sessionEnded();
+  healing = false;
+  sessionWiped();
 }
 
 // v15.2.2 WEDGE CURE (gate side): the gate session doubles as the ARENA
@@ -495,12 +530,47 @@ export async function disconnect(): Promise<void> {
 export async function recoverSession(): Promise<void> {
   if (mock || !state.provider) return; // CI mock / never connected: nothing to heal
   const provider = state.provider;
+  const keepAddr = state.address;
   const w = (activeLibKey ? libs[activeLibKey] : null) ?? libs[libKey(provider)];
+  healing = true; // the recovery disconnect is ours — sessionEnded stands down
   try {
     if (w) await w.disconnect();
   } catch { /* wedged beyond disconnect — connect() rebuilds below */ }
+  healing = false;
   state.address = null; // force connect() past its idempotent early-return
-  await connect(provider); // reconnect-first, then a FRESH pairing
+  try {
+    await connect(provider); // reconnect-first, then a FRESH pairing
+  } catch (e) {
+    // v18.1 (Prince: "si disconnette da solo"): a FAILED recovery (mobile
+    // still offline) must NEVER log the degen out — restore the identity in
+    // the soft state; every page keeps recognizing the wallet and the next
+    // tap on RE-PAIR tries again. Only the WC session is gone, not the degen.
+    state.provider = provider;
+    state.address = keepAddr;
+    state.sessionDead = true;
+    if (keepAddr) lsSet(KEY_WALLET, JSON.stringify({ provider, address: keepAddr }));
+    throw e;
+  }
+}
+
+// v18.1: soft-state accessors for the UI (RE-PAIR buttons everywhere)
+export function isSessionSoftDead(): boolean {
+  return state.sessionDead && state.address !== null;
+}
+
+// one-tap re-pair from ANY page: reuses the persisted provider, silent
+// reconnect first, fresh pairing only if the session is truly gone
+export async function rePairWallet(): Promise<string> {
+  if (mock) return state.address!;
+  let provider = state.provider;
+  if (!provider) {
+    try {
+      const raw = lsGet(KEY_WALLET);
+      if (raw) provider = (JSON.parse(raw) as { provider: WalletProvider }).provider;
+    } catch { /* corrupt */ }
+  }
+  if (!provider) throw new Error('NO WALLET TO RE-PAIR - CONNECT FIRST');
+  return connect(provider); // reconnect-first inside
 }
 
 // boot: restore a persisted session (mock in CI, wallet lib otherwise)
@@ -531,10 +601,13 @@ export function init(): void {
       const accounts = await w.reconnectSession();
       if (!accounts || accounts.length === 0) throw new Error('session expired');
       state.address = accounts[0];
+      state.sessionDead = false;
       watchDisconnect(w);
       maybeSovereign(accounts[0]); // v9.3.0: restored session — crown check too
     } catch {
-      // keep the persisted address in a soft state; the user can reconnect
+      // v18.1: keep the persisted address in the SOFT state — every page
+      // recognizes the wallet; the first sign (or a RE-PAIR tap) re-pairs
+      state.sessionDead = true;
     }
     void refreshEligibility(false);
   })();
@@ -637,6 +710,31 @@ export async function refreshEligibility(force: boolean): Promise<Eligibility> {
 }
 
 // ---------- accessors ----------
+// v18.1 (Prince: "se mi connetto da una delle pagine tutte le altre devono
+// riconoscerlo"): an ARENA-side connect runs on its own Pera instance — the
+// gate must adopt that identity too (same origin, same WC session storage,
+// same chainId on mainnet), so home & every page recognize the degen without
+// a second pairing. The gate lib heals silently in the background.
+export function adoptExternalSession(provider: WalletProvider, address: string): void {
+  if (mock) return;
+  if (state.address === address && !state.sessionDead) return;
+  state.provider = provider;
+  state.address = address;
+  state.sessionDead = true; // no live session object in the gate lib yet
+  lsSet(KEY_WALLET, JSON.stringify({ provider, address }));
+  loadCachedElig(address);
+  resolveIdentity(address);
+  maybeSovereign(address);
+  void (async () => {
+    try {
+      const w = await loadLib(provider);
+      const accounts = await w.reconnectSession();
+      if (accounts && accounts.length > 0) applySession(provider, w, accounts);
+    } catch { /* stays soft — the first sign (or RE-PAIR) re-pairs */ }
+    void refreshEligibility(false);
+  })();
+}
+
 export function getWallet(): WalletState {
   return state;
 }
@@ -679,6 +777,15 @@ function isSessionFatal(e: unknown): boolean {
 export async function signTransactions(txGroups: unknown[][]): Promise<Uint8Array[]> {
   if (mock) throw new Error('mock wallet cannot sign');
   const pick = () => (activeLibKey ? libs[activeLibKey] : null) ?? (state.provider ? libs[libKey(state.provider)] : null);
+  // v18.1: a soft-dead session silently re-pairs BEFORE the request — a sign
+  // on a known-dead session is a guaranteed wedge (and a scary wallet prompt)
+  if (state.sessionDead && state.provider) {
+    try {
+      const w0 = pick() ?? (await loadLib(state.provider));
+      const acc = await w0.reconnectSession();
+      if (acc && acc.length > 0) applySession(state.provider, w0, acc);
+    } catch { /* still dead: fall through, the sign error path heals below */ }
+  }
   const w = pick();
   if (!w || !w.signTransaction) throw new Error('wallet not connected');
   try {
@@ -686,10 +793,19 @@ export async function signTransactions(txGroups: unknown[][]): Promise<Uint8Arra
   } catch (e) {
     if (!isSessionFatal(e) || !state.provider) throw e;
     console.debug('[wallet] session fatal mid-sign — heal + one retry:', e);
+    // v18.1: silent re-pair FIRST — the wedged session often resumes with no
+    // UI at all; the heavy recoverSession (fresh pairing) is the last resort
+    try {
+      const acc = await w.reconnectSession();
+      if (acc && acc.length > 0) {
+        applySession(state.provider, w, acc);
+        return await w.signTransaction(txGroups, state.address ?? undefined);
+      }
+    } catch { /* session truly wedged: full recovery below */ }
     await recoverSession(); // disconnect + fresh pairing (connect rebuilds)
     const w2 = pick();
     if (!w2 || !w2.signTransaction || !state.address) {
-      throw new Error('WALLET SESSION LOST - TAP CONNECT TO RE-PAIR');
+      throw new Error('WALLET SESSION LOST - TAP RE-PAIR TO RECONNECT');
     }
     return w2.signTransaction(txGroups, state.address);
   }

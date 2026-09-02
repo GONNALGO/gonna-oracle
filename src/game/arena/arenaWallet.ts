@@ -17,7 +17,7 @@
 
 import * as wallet from '../wallet';
 import type { AccountType, ChallengePlayer } from './chainAdapter';
-import { arenaMode, mockAccountType, setTestnetIdentityProvider } from './chainAdapter';
+import { arenaMode, arenaUsesTestnetChain, mockAccountType, setTestnetIdentityProvider } from './chainAdapter';
 import { connectTestnetPera, isPeraSessionFatal, liveTestnetSignFn, recoverTestnetSession, testnetAddress } from './testnetWallet';
 import { qaActive, qaPlayerAddress, qaSignFn } from './qaSigner';
 import { setSignRecoverHook } from './testnetKit';
@@ -77,7 +77,15 @@ export function arenaAddress(): string {
 // the ARENA signs with the SAME Pera/Defly session as THE GATE in mock/mainnet
 // mode; on testnet it uses the dedicated chainId-416002 Pera instance.
 export async function connectArenaWallet(provider: ArenaWalletProvider): Promise<string> {
-  if (arenaMode() === 'live') return connectTestnetPera();
+  if (arenaMode() === 'live') {
+    const addr = await connectTestnetPera();
+    // v18.1 ONE IDENTITY (Prince: "tutte le altre devono riconoscerlo"): an
+    // arena-side connect is adopted by the GATE too, so home and every page
+    // recognize the wallet without a second pairing (same origin, same WC
+    // session, same chainId on mainnet builds).
+    if (!arenaUsesTestnetChain()) wallet.adoptExternalSession('pera', addr);
+    return addr;
+  }
   return wallet.connect(provider);
 }
 

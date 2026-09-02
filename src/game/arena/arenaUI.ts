@@ -26,6 +26,7 @@ import { activeSignOp, explorerTxUrl, getCloseTxid, getTxid, isSignCancel, SIGN_
 import { ARENA_FIXTURES_ENABLED, ARENA_NETWORK } from './arenaKit';
 import type { SignOpView } from './testnetKit';
 import { connectArenaWallet } from './arenaWallet';
+import { liveTestnetSignFn } from './testnetWallet';
 import { qaActive, qaScore } from './qaSigner';
 import type { Challenge, ChallengeConfig, FighterPick, HistoryEntry, LegacyStats, SealedRunInfo, Visibility } from './chainAdapter';
 import { ARENA_RUN_CKPT_KEY } from './inputLog';
@@ -168,6 +169,12 @@ export class ArenaUI {
   private shareMsgT = 0;
   // v11: wallet connect feedback (board header)
   private walletMsg = '';
+  // v18.1 (Prince: "nella pagina non c'è il tasto"): when the wallet session
+  // is lost mid-flow the SEAL screen itself offers RE-PAIR — no dead ends,
+  // no back-navigation to find a connect button. Set by failed wallet ops,
+  // cleared by a successful (re)connect, probed on seal-screen entry.
+  private walletDead = false;
+  private walletProbeT = 0;
   private walletMsgT = 0;
   // v14.2: board status line (RUN DISCARDED etc.) — heads the LIVE feed
   private notice = '';
@@ -483,6 +490,11 @@ export class ArenaUI {
     if (this.screen === 'seal') {
       // v14.2: DISCARD abandons EVERYTHING — no tx was ever sent, nothing to
       // clean up; back to THE PIT board with a status line, NOT the wizard.
+      // v18.1: a discarded RECOVERED run must not resurface on the next visit
+      // — if the checkpoint armed THIS seal, the armor falls with it.
+      if (this.ckpt && this.sealedRun && this.ckpt.run.inputLogB64 === this.sealedRun.inputLogB64) {
+        this.clearRunCheckpoint();
+      }
       this.resetSeal();
       this.screen = 'board';
       this.focus = 0;
@@ -968,13 +980,17 @@ export class ArenaUI {
       } catch { /* no window (node tests) */ }
       return { act: 'none' };
     }
-    if (id === 'wallet') {
+    if (id === 'wallet' || id === 'repair') {
       // testnet: real Pera connect (chainId 416002); mock: mainnet gate wallet
+      // v18.1: 'repair' is the same entry point, surfaced on the seal screen
+      // itself when the session dies mid-flow — reconnect-first inside, so a
+      // still-live WC session is reused and no new pairing even opens
       this.walletMsgT = 0;
       console.debug('[arena] CONNECT — wallet connect start');
       void this.run(
         () => connectArenaWallet('pera'),
         (addr) => {
+          this.walletDead = false;
           this.walletMsg = 'CONNECTED ' + addr.slice(0, 6) + '..' + addr.slice(-4);
           this.walletMsgT = 240;
         },
@@ -1274,6 +1290,10 @@ export class ArenaUI {
         // back on the wizard CONFIRM to re-seal (log-free, no red toast).
         this.cidMovedDiscard();
       } else {
+        // v18.1: a wallet/session failure raises the RE-PAIR path — the seal
+        // screen shows its own button, the degen never leaves the flow
+        const msg = e instanceof Error ? e.message : '';
+        if (/wallet|connect|session|re-pair/i.test(msg)) this.walletDead = true;
         // v14.2: EVERY failure is visible — console breadcrumb + red UI line
         console.debug('[arena] op failed:', e);
         this.fail(e instanceof Error ? e.message : 'REKT - TRY AGAIN');
@@ -1281,6 +1301,27 @@ export class ArenaUI {
     } finally {
       this.busy = false; // the button ALWAYS comes back (timeout included)
     }
+  }
+
+  // v18.1: can ANY signer sign right now? Probed on seal entry (and after a
+  // RE-PAIR) — a dead session flips SIGN into RE-PAIR before the tap, so a
+  // dead click + lost request never happens. Best-effort, never throws.
+  private probeWallet(): void {
+    if (arenaMode() !== 'live' || qaActive()) return;
+    const now = Date.now();
+    if (now - this.walletProbeT < 10000) return; // throttled — one probe per few seconds
+    this.walletProbeT = now;
+    if (this.busy) return; // never probe over an in-flight connect/sign
+    const addr = arenaAddress();
+    if (addr.startsWith('ANON') || addr.startsWith('DEGEN')) {
+      this.walletDead = true; // never connected here
+      return;
+    }
+    void (async () => {
+      const gateAlive = wallet.isConnected() && !wallet.isSessionSoftDead() && wallet.getWallet().address === addr;
+      const arenaSign = gateAlive ? null : await liveTestnetSignFn(addr); // gate first: no probe cost
+      this.walletDead = !(gateAlive || arenaSign !== null);
+    })().catch(() => undefined);
   }
 
   // v11: the engine calls this when the ARENA run ends — the score is SEALED
@@ -1381,7 +1422,7 @@ export class ArenaUI {
   // gesture, app kill) THE PIT offers to arm the recovered seal — the prefix
   // replays byte-exact to the saved score, so the oracle signs it like any
   // run. Cleared ONLY after a successful sign (or when a new run starts).
-  private ckpt: { score: number; run: SealedRunInfo; cid: number | null } | null = null;
+  private ckpt: { score: number; run: SealedRunInfo; cid: number | null; stageMode: 'full' | 'stage'; stageIdx: number } | null = null;
 
   private clearRunCheckpoint(): void {
     this.ckpt = null;
@@ -1405,10 +1446,17 @@ export class ArenaUI {
         return;
       }
       const m = /^(?:PIT|RUN)-(\d+)$/.exec(seedLabel);
+      // v18.1: the tape CARRIES its mode — a recovered run defines the card
+      // (PIT-* = THE DESCENT level stageIdx, RUN-* = FULL RUN), so a stale
+      // wizard pick can never collide with the seal (Prince's SEED MISMATCH).
+      const ckMode: 'full' | 'stage' = seedLabel.startsWith('RUN-') ? 'full' : 'stage';
+      const ckStage = Number(j.stageIdx);
       this.ckpt = {
         score,
         cid: m ? Number(m[1]) : null,
         run: { seedLabel, frames, durationSec: Number(j.durationSec ?? frames / 60), build, inputLogB64 },
+        stageMode: ckMode, // the oracle checks the LABEL — it is the truth
+        stageIdx: Number.isFinite(ckStage) ? ckStage : 0,
       };
     } catch {
       this.ckpt = null;
@@ -1423,15 +1471,27 @@ export class ArenaUI {
       ? this.cards.find((x) => x.id === cid) ?? this.mine.find((x) => x.id === cid) ?? null
       : null;
     if (card) {
+      // v18.1 SEED GUARD: the recovered tape must match the ON-CHAIN card's
+      // mode (and level) — a DESCENT tape can never ride a FULL RUN card
+      // (the oracle rejects it: SEED MISMATCH). Refuse cleanly, keep the card.
+      const cardMode = card.stageMode === 'full' ? 'full' : 'stage';
+      if (k.stageMode !== cardMode || (cardMode === 'stage' && card.stageIdx !== null && card.stageIdx !== k.stageIdx)) {
+        this.clearRunCheckpoint();
+        return this.note('LOST RUN IS FOR ANOTHER BATTLE - SEAL A FRESH ONE');
+      }
       // card on-chain + my seat unsigned -> joiner seal screen (SIGN SCORE)
       this.current = card;
       this.sealRole = 'joiner';
       this.notice = 'RUN #' + cid + ' RECOVERED - ' + k.score + ' PTS ARMED';
     } else {
       // creator draft (the card was never created): pin the cid — the CREATE
-      // flow carries the recovered run and the CID_MOVED guard still holds
+      // flow carries the recovered run and the CID_MOVED guard still holds.
+      // v18.1: the tape DEFINES the battle — mode + level come from the run
+      // itself, so the sign body can never contradict the sealed log.
       this.sealRole = 'creator';
       this.sealRunCid = cid;
+      this.cfg.stageMode = k.stageMode === 'full' ? 'full' : 'single';
+      this.cfg.stageIdx = k.stageMode === 'full' ? null : k.stageIdx;
       this.notice = 'RUN RECOVERED - ' + k.score + ' PTS ARMED';
     }
     // arm the recovered seal — the EXACT same fields a fresh finishArenaRun sets
@@ -1460,6 +1520,17 @@ export class ArenaUI {
     this.resetSeal();
   }
 
+  // v18.1 SEED GUARD (Prince's SEED MISMATCH): the sealed log's label must
+  // match the mode about to be signed — 'RUN-' rides FULL RUN cards, 'PIT-'
+  // rides DESCENT cards. A contradiction is caught HERE, never at the oracle.
+  private sealModeOk(mode: 'full' | 'stage'): boolean {
+    const run = this.sealBest > 0 ? this.sealBestRun : this.sealedRun;
+    if (!run) return true; // no telemetry (mock/QA) — nothing to contradict
+    const l = run.seedLabel;
+    if (l === 'NO-RUN-LOG' || l.startsWith('DRAFT-') || l === 'UNSEEDED') return true; // legacy/QA fallbacks
+    return mode === 'full' ? l.startsWith('RUN-') : l.startsWith('PIT-');
+  }
+
   private doSign(): ArenaAction {
     const cfg: ChallengeConfig = { ...this.cfg };
     // v15.2.8: RANDOM commits exactly like a manual DESCENT pick (the shuffle
@@ -1471,6 +1542,16 @@ export class ArenaUI {
     // never a dead click: on testnet a real create NEEDS a sealed run score
     if (this.adapter().mode === 'live' && !qaActive() && this.sealedScore === null) {
       return this.fail('PLAY YOUR RUN FIRST');
+    }
+    // v18.1: the sealed run must match the battle being created — a mode flip
+    // after the run (or a stale recovered tape) dies HERE, not at the oracle
+    if (this.adapter().mode === 'live' && !this.sealModeOk(cfg.stageMode === 'full' ? 'full' : 'stage')) {
+      this.resetSeal();
+      this.clearRunCheckpoint();
+      this.screen = 'create';
+      this.step = 'confirm';
+      this.focus = 0;
+      return this.note('BATTLE MODE CHANGED - REPLAY TO SEAL');
     }
     // v14.4: creator replays are FREE pre-commitment — the sealed draft is
     // just the latest run. No continue receipt ever rides a create (the 5
@@ -1518,6 +1599,13 @@ export class ArenaUI {
   private doSubmit(): ArenaAction {
     const c = this.current;
     if (!c) return { act: 'none' };
+    // v18.1: the sealed run must match THIS card's battle (recovered tapes
+    // included) — contradicting the on-chain mode dies here, not at the oracle
+    if (this.adapter().mode === 'live' && !this.sealModeOk(c.stageMode === 'full' ? 'full' : 'stage')) {
+      this.resetSeal();
+      this.clearRunCheckpoint();
+      return this.note('SEALED RUN IS FOR ANOTHER BATTLE - REPLAY');
+    }
     const me = arenaAddress();
     // v12: sign the BEST sealed run; a post-CONTINUE score carries the
     // on-chain payment ref (the oracle verifies the receipt before signing).
@@ -1891,7 +1979,11 @@ export class ArenaUI {
         drawText(c, this.walletMsg, VW - 10, 4, 1, FLUO, 'right');
       } else if (isAnon) {
         this.btn(c, frame, { id: 'wallet', x: VW - 96, y: 2, w: 88, h: 12 }, 'CONNECT', { green: true });
+      } else if (this.walletDead) {
+        // v18.1: identity kept, session lost — one tap re-pairs, right here
+        this.btn(c, frame, { id: 'repair', x: VW - 96, y: 2, w: 88, h: 12 }, 'RE-PAIR', { green: true });
       } else {
+        this.probeWallet(); // throttled: catches a session killed in the background
         drawText(c, addr.slice(0, 6) + '..' + addr.slice(-4), VW - 10, 4, 1, GOLD, 'right');
       }
     } else {
@@ -2300,6 +2392,7 @@ export class ArenaUI {
 
   // ---------- v11/v12: SEAL screen (post-run, pre-sign) ----------------------
   private drawSeal(c: CanvasRenderingContext2D, frame: number): void {
+    this.probeWallet(); // v18.1: throttled — a dead session flips SIGN to RE-PAIR
     const joiner = this.sealRole === 'joiner';
     const ch = this.current;
     const title = joiner ? 'SCORE SEALED' : 'SCORE SEALED';
@@ -2333,14 +2426,24 @@ export class ArenaUI {
       drawText(c, lines[i][1], x + w - 10, ly + i * 11, 1, i <= 1 ? GOLD : '#c8ccd4', 'right');
     }
     if (joiner) {
-      this.btn(c, frame, { id: 'sign', x: 92, y: 156, w: 200, h: 20 }, this.busy ? 'SIGNING...' : 'SIGN SCORE', { gold: true });
+      // v18.1: session lost mid-flow — the RE-PAIR button takes the SIGN slot
+      // (the seal is untouched; after re-pairing the gold button comes back)
+      if (this.walletDead) {
+        this.btn(c, frame, { id: 'repair', x: 92, y: 156, w: 200, h: 20 }, this.busy ? 'RE-PAIRING...' : 'RE-PAIR WALLET', { green: true });
+      } else {
+        this.btn(c, frame, { id: 'sign', x: 92, y: 156, w: 200, h: 20 }, this.busy ? 'SIGNING...' : 'SIGN SCORE', { gold: true });
+      }
       // joiner is STAKED — the retry costs 5 ALGO, best-of-2, single use
       if (this.sealRuns < 2) {
         this.btn(c, frame, { id: 'continue', x: 92, y: 180, w: 200, h: 14 }, this.continuePaying ? 'PAYING 5 ALGO...' : 'CONTINUE - 5 ALGO - BEST OF 2', { green: true });
       }
       this.btn(c, frame, { id: 'seal:discard', x: 122, y: 200, w: 140, h: 12 }, 'DISCARD - NO TX SENT', { dim: true });
     } else {
-      this.btn(c, frame, { id: 'sign', x: 92, y: 164, w: 200, h: 18 }, this.busy ? 'SIGNING...' : 'SIGN & STAKE', { gold: true });
+      if (this.walletDead) {
+        this.btn(c, frame, { id: 'repair', x: 92, y: 164, w: 200, h: 18 }, this.busy ? 'RE-PAIRING...' : 'RE-PAIR WALLET', { green: true });
+      } else {
+        this.btn(c, frame, { id: 'sign', x: 92, y: 164, w: 200, h: 18 }, this.busy ? 'SIGNING...' : 'SIGN & STAKE', { gold: true });
+      }
       // free do-over: fresh run of the SAME stage/draft, no payment, no
       // oracle continue receipt — the new seal simply REPLACES the draft
       this.btn(c, frame, { id: 'replay', x: 92, y: 186, w: 200, h: 12 }, 'REPLAY - FREE', { green: true });
