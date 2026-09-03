@@ -77,15 +77,15 @@ export function arenaAddress(): string {
 // the ARENA signs with the SAME Pera/Defly session as THE GATE in mock/mainnet
 // mode; on testnet it uses the dedicated chainId-416002 Pera instance.
 export async function connectArenaWallet(provider: ArenaWalletProvider): Promise<string> {
-  if (arenaMode() === 'live') {
-    const addr = await connectTestnetPera();
-    // v18.1 ONE IDENTITY (Prince: "tutte le altre devono riconoscerlo"): an
-    // arena-side connect is adopted by the GATE too, so home and every page
-    // recognize the wallet without a second pairing (same origin, same WC
-    // session, same chainId on mainnet builds).
-    if (!arenaUsesTestnetChain()) wallet.adoptExternalSession('pera', addr);
-    return addr;
+  if (arenaMode() === 'live' && arenaUsesTestnetChain()) {
+    // testnet chain: the dedicated chainId-416002 Pera instance (Pera-only)
+    return connectTestnetPera();
   }
+  // v18.1.6 ONE WALLET FOREVER (Prince: "l'ultima connessione vale per tutte
+  // le pagine"): mainnet/mock connect goes straight through THE shared gate
+  // session — the degen's pick, PERA or DEFLY. One identity, one storage
+  // (same origin: home, pit, gate all read the same KEY_WALLET + WC session)
+  // — connect once anywhere, recognized everywhere, forever.
   return wallet.connect(provider);
 }
 
@@ -125,6 +125,16 @@ setTestnetIdentityProvider(async () => {
     if (gateAddr === target && wallet.isConnected()) {
       console.debug('[arena] signer chosen: gate session fallback');
       return wallet.signTransactions(groups);
+    }
+    // v18.1.6: never give up without a SILENT heal — a still-alive WC session
+    // is reused invisibly; only a truly dead session surfaces the chooser
+    console.debug('[arena] NO live signer — trying a silent heal first');
+    if (await wallet.silentHeal()) {
+      const healed = wallet.getWallet().address;
+      if (healed === target && wallet.isConnected()) {
+        console.debug('[arena] signer chosen: silently-healed gate session');
+        return wallet.signTransactions(groups);
+      }
     }
     console.debug('[arena] NO live signer — WALLET NOT CONNECTED');
     throw new Error('WALLET NOT CONNECTED - TAP CONNECT');
