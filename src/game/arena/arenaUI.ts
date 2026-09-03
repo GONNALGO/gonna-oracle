@@ -2433,7 +2433,9 @@ export class ArenaUI {
     // v14.4 founder ruling: before a card exists on-chain NOTHING is at
     // stake, so the CREATOR replays for free (the draft score is simply
     // replaced). The 5 ALGO CONTINUE is joiner-only (post-commitment).
-    if (!joiner) {
+    if (!joiner && !signOp) {
+      // v18.1.5: while the oracle-replay panel owns the top zone these two
+      // rule lines stand down — no overlapping ink, ever
       drawText(c, 'FREE REPLAYS UNTIL YOU STAKE', VW / 2, 98, 1, GOLD, 'center');
       drawText(c, 'ONCE SIGNED, THE SCORE IS LAW', VW / 2, 107, 1, DIM, 'center');
     }
@@ -2446,7 +2448,9 @@ export class ArenaUI {
       ['FEE', feeLine(joiner ? 'submit' : 'create', arenaSession().accountType, arenaUsesTestnetChain())],
       ['FIGHTER', this.cfg.fighter.name],
     ];
-    const ly = joiner ? 104 : 116; // creator: two rule lines eat 12px
+    // v18.1.5: with the replay panel up, the joiner's info lines slide down
+    // 8px so the panel's sub-line never touches the STAKE row
+    const ly = joiner ? (signOp ? 112 : 104) : 116; // creator: two rule lines eat 12px
     for (let i = 0; i < lines.length; i++) {
       drawText(c, lines[i][0], x + 10, ly + i * 11, 1, DIM);
       drawText(c, lines[i][1], x + w - 10, ly + i * 11, 1, i <= 1 ? GOLD : '#c8ccd4', 'right');
@@ -2480,7 +2484,7 @@ export class ArenaUI {
   // v18.1.4: the honest sign-progress panel (seal screen, while busy).
   // 'building' = the SERVER ORACLE is replaying the whole run before it
   // seals the score — the only legitimately slow step, and now the player
-  // SEES it. The bar fills over the patient 40s window and holds at 95%
+  // SEES it. The bar fills over the honest 140s window and holds at 95%
   // until the oracle answers; it never lies about being finished.
   private drawOracleProgress(c: CanvasRenderingContext2D, op: NonNullable<ReturnType<typeof activeSignOp>>): void {
     const elapsed = Date.now() - op.attemptStartedAt;
@@ -2489,8 +2493,10 @@ export class ArenaUI {
     let frac: number;
     if (op.phase === 'building') {
       label = 'THE ORACLE IS REPLAYING YOUR RUN';
-      sub = op.attempt > 1 ? 'RETRY ' + op.attempt + ' - THE SEAL FOLLOWS' : 'EVERY FRAME RE-FOUGHT - THE SEAL FOLLOWS';
-      frac = Math.min(elapsed / 40000, 0.95);
+      sub = op.attempt > 1 ? 'RETRY ' + op.attempt + ' - THE SEAL FOLLOWS' : 'LONG RUN, LONG SEAL - THE BAR NEVER LIES';
+      // v18.1.5: fills over the honest 140s replay window (server budget
+      // 120s + line), then holds at 95% — never claims done before the word
+      frac = Math.min(elapsed / 140000, 0.95);
     } else if (op.phase === 'signing') {
       label = 'SEALED - SIGN IN YOUR WALLET';
       sub = 'THE ORACLE SAID YES';
