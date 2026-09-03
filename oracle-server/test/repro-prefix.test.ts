@@ -68,7 +68,7 @@ describe('checkpoint prefix property (v17.0.11 recovery)', () => {
       for (const s of snaps) {
         const B = bootGame(eng);
         startStageRun(B, stage, 'PFX-' + stage);
-        const res = replayCampaign(B, masks.subarray(0, s.frames), 60_000, edges!.subarray(0, s.frames));
+        const res = await replayCampaign(B, masks.subarray(0, s.frames), 60_000, edges!.subarray(0, s.frames));
         expect(res.score).toBe(s.score); // prefix N frames -> EXACT snapshot score
       }
       console.log(`stage ${stage}: ${snaps.length} prefix checkpoints all byte-exact (last: ${snaps[snaps.length - 1]!.frames} frames = ${snaps[snaps.length - 1]!.score} pts)`);
