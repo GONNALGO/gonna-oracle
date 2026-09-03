@@ -466,8 +466,15 @@ export class ArenaUI {
     }
     if (this.screen === 'versus') {
       if (this.verdict) {
+        // v18.1.8: a settled verdict's back goes STRAIGHT TO THE PIT — the
+        // pot already moved inside resolve; dropping the degen back onto the
+        // card only invited a dead action zone.
         this.verdict = false;
         this.coinRain = [];
+        this.screen = 'board';
+        this.current = null;
+        void this.refreshBoard();
+        void this.refreshHistory();
         return { act: 'move' };
       }
       this.screen = 'board';
@@ -2798,8 +2805,11 @@ export class ArenaUI {
             : 'WAITING FOR A CHALLENGER...';
         if ((frame & 16) !== 0) drawTextSh(c, waitLine, VW / 2, ay + 4, 1, FLUO, 'center', '#0a3d00');
         ay += 18;
-      } else if (!testnet && card.status === 'resolved' && card.winner === me) {
-        // mock-only: on testnet the pot is paid INSIDE resolve (inner axfer)
+      } else if (arenaMode() === 'mock' && card.status === 'resolved' && card.winner === me) {
+        // v18.1.8: MOCK-ONLY, for real this time — the old !testnet guard let
+        // MAINNET live render a 'CLAIM THE POT' on an already-paid card (the
+        // pot rides INSIDE resolve as an inner axfer). Tapping it fired a
+        // claim the chain can never honor and wedged the wallet session.
         this.btn(c, frame, { id: 'vclaim', x: 92, y: ay, w: 200, h: 20 }, 'CLAIM THE POT', { gold: true });
         ay += 24;
       } else if (card.status === 'expired' && seated) {
@@ -2908,7 +2918,13 @@ export class ArenaUI {
       this.btn(c, frame, { id: 'mine:next', x: 40, y: 198, w: 26, h: 14 }, '>', { small: true });
       drawText(c, 'MY CARDS ' + (mi + 1) + '/' + this.mine.length, 74, 202, 1, DIM);
     }
-    this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
+    // v18.1.8: under a settled verdict the one honest exit is THE PIT — the
+    // pot is already paid on-chain, no dead 'BACK' into an empty action zone
+    if (this.verdict && (card.status === 'resolved' || card.status === 'claimed')) {
+      this.btn(c, frame, { id: 'back', x: 222, y: 198, w: 148, h: 14 }, 'BACK TO THE PIT', { gold: true });
+    } else {
+      this.btn(c, frame, { id: 'back', x: 292, y: 198, w: 78, h: 14 }, 'BACK');
+    }
     void art;
   }
 
