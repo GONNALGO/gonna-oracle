@@ -18,11 +18,16 @@
 import * as wallet from '../wallet';
 import type { AccountType, ChallengePlayer } from './chainAdapter';
 import { arenaMode, arenaUsesTestnetChain, mockAccountType, setTestnetIdentityProvider } from './chainAdapter';
-import { connectTestnetPera, isPeraSessionFatal, liveTestnetSignFn, recoverTestnetSession, testnetAddress } from './testnetWallet';
+import { clearTestnetAddress, connectTestnetPera, disconnectTestnetPera, isPeraSessionFatal, liveTestnetSignFn, recoverTestnetSession, testnetAddress } from './testnetWallet';
 import { qaActive, qaPlayerAddress, qaSignFn } from './qaSigner';
 import { setSignRecoverHook } from './testnetKit';
-import { netLsKey } from './arenaKit';
+import { IS_MAINNET, netLsKey } from './arenaKit';
 import type { TxSignFn } from './testnetKit';
+
+// v18.1.7 GHOST KILLER: on a mainnet build the legacy arena-side account key
+// (written by pre-unification connects) is deleted at boot — the pit can
+// never again wake up thinking it is someone the home gate disowned.
+if (IS_MAINNET) clearTestnetAddress();
 
 export type ArenaWalletProvider = wallet.WalletProvider;
 
@@ -57,8 +62,17 @@ export function arenaAddress(): string {
       const qa = window.localStorage.getItem(LS_QA_ADDR);
       if (qaActive() && qa) return qa;
     } catch { /* no storage */ }
-    const p = testnetAddress();
-    if (p) return p;
+    // v18.1.7 (Prince: "mi sono disconnesso da gonna e collegato un nuovo
+    // wallet, se premo the pit rimane gonna.algo — perchè?"): the legacy
+    // arena-side account key is TESTNET-CHAIN-ONLY. On MAINNET the GATE
+    // identity is the ONE AND ONLY truth — a ghost address left by a
+    // pre-unification session must NEVER outrank the home wallet, and every
+    // page reads the same gate state: connect/disconnect anywhere is the
+    // truth everywhere, instantly.
+    if (arenaUsesTestnetChain()) {
+      const p = testnetAddress();
+      if (p) return p;
+    }
   }
   const w = wallet.getWallet();
   if (w.address) return w.address;
@@ -99,7 +113,9 @@ setTestnetIdentityProvider(async () => {
     const address = await qaPlayerAddress();
     if (address) return { address, sign: await qaSignFn() };
   }
-  const arenaAddr = testnetAddress(); // adopted at gate connect or board CONNECT
+  // v18.1.7: the arena-side account key counts ONLY on the testnet chain;
+  // on mainnet the gate address is the sole identity (no ghost can win)
+  const arenaAddr = arenaUsesTestnetChain() ? testnetAddress() : null;
   const gateAddr = wallet.isConnected() ? wallet.getWallet().address : null;
   const target = arenaAddr ?? gateAddr;
   if (!target) return null;
@@ -164,6 +180,10 @@ setSignRecoverHook(async () => {
 });
 
 export async function disconnectArenaWallet(): Promise<void> {
+  // v18.1.7: a disconnect speaks for EVERY page — the ghost account key dies
+  // with the session, so no page can resurrect an old identity
+  clearTestnetAddress();
+  if (arenaUsesTestnetChain()) await disconnectTestnetPera();
   return wallet.disconnect();
 }
 
