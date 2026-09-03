@@ -569,8 +569,33 @@ export async function rePairWallet(): Promise<string> {
       if (raw) provider = (JSON.parse(raw) as { provider: WalletProvider }).provider;
     } catch { /* corrupt */ }
   }
-  if (!provider) throw new Error('NO WALLET TO RE-PAIR - CONNECT FIRST');
+  if (!provider) throw new Error('NO WALLET - CONNECT FIRST');
   return connect(provider); // reconnect-first inside
+}
+
+// v18.1.6 (Prince: "mai e poi mai deve dire repair"): a SILENT session heal —
+// reuses the persisted provider's still-alive WalletConnect session WITHOUT
+// ever opening a pairing UI. Background probes and the pre-sign check call
+// this; the fresh-pairing path stays behind an explicit degen tap.
+export async function silentHeal(): Promise<boolean> {
+  if (mock) return true;
+  let provider = state.provider;
+  if (!provider) {
+    try {
+      const raw = lsGet(KEY_WALLET);
+      if (raw) provider = (JSON.parse(raw) as { provider: WalletProvider }).provider;
+    } catch { /* corrupt */ }
+  }
+  if (!provider) return false;
+  try {
+    const w = await loadLib(provider);
+    const accounts = await w.reconnectSession();
+    if (!accounts || accounts.length === 0) return false;
+    applySession(provider, w, accounts);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // boot: restore a persisted session (mock in CI, wallet lib otherwise)
@@ -805,7 +830,7 @@ export async function signTransactions(txGroups: unknown[][]): Promise<Uint8Arra
     await recoverSession(); // disconnect + fresh pairing (connect rebuilds)
     const w2 = pick();
     if (!w2 || !w2.signTransaction || !state.address) {
-      throw new Error('WALLET SESSION LOST - TAP RE-PAIR TO RECONNECT');
+      throw new Error('WALLET SESSION LOST - TAP CONNECT');
     }
     return w2.signTransaction(txGroups, state.address);
   }
