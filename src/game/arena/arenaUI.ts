@@ -2418,7 +2418,14 @@ export class ArenaUI {
     this.drawHeader(c, title, joiner && ch ? 'CARD #' + ch.id : this.cfg.format === 'duel' ? 'DUEL - TAKES ALL' : 'OPEN TABLE');
     const score = this.sealBest > 0 ? this.sealBest : (this.sealedScore ?? 0);
     drawTextSh(c, String(score).padStart(7, '0'), VW / 2, 62, 2, GOLD, 'center', '#4a3005');
-    if (joiner && this.sealRuns >= 2) {
+    // v18.1.4 (Prince: "non lasciare attese dubbiose!"): while the sign op is
+    // in flight the player watches EXACTLY what is happening — the oracle is
+    // REPLAYING the run (that is the wait), then the wallet prompt, then the
+    // wire. An honest progress bar, never a silent freeze.
+    const signOp = this.busy ? activeSignOp() : null;
+    if (signOp) {
+      this.drawOracleProgress(c, signOp);
+    } else if (joiner && this.sealRuns >= 2) {
       drawTextSh(c, 'BEST OF 2 - CONTINUE USED', VW / 2, 88, 1, '#ff8a3c', 'center', '#2a1503');
     } else if ((frame & 16) !== 0) {
       drawTextSh(c, 'SCORE SEALED BY ORACLE', VW / 2, 88, 1, FLUO, 'center', '#0a3d00');
@@ -2468,6 +2475,42 @@ export class ArenaUI {
       this.btn(c, frame, { id: 'replay', x: 92, y: 186, w: 200, h: 12 }, 'REPLAY - FREE', { green: true });
       this.btn(c, frame, { id: 'seal:discard', x: 122, y: 204, w: 140, h: 11 }, 'DISCARD - NO TX SENT', { dim: true });
     }
+  }
+
+  // v18.1.4: the honest sign-progress panel (seal screen, while busy).
+  // 'building' = the SERVER ORACLE is replaying the whole run before it
+  // seals the score — the only legitimately slow step, and now the player
+  // SEES it. The bar fills over the patient 40s window and holds at 95%
+  // until the oracle answers; it never lies about being finished.
+  private drawOracleProgress(c: CanvasRenderingContext2D, op: NonNullable<ReturnType<typeof activeSignOp>>): void {
+    const elapsed = Date.now() - op.attemptStartedAt;
+    let label: string;
+    let sub: string;
+    let frac: number;
+    if (op.phase === 'building') {
+      label = 'THE ORACLE IS REPLAYING YOUR RUN';
+      sub = op.attempt > 1 ? 'RETRY ' + op.attempt + ' - THE SEAL FOLLOWS' : 'EVERY FRAME RE-FOUGHT - THE SEAL FOLLOWS';
+      frac = Math.min(elapsed / 40000, 0.95);
+    } else if (op.phase === 'signing') {
+      label = 'SEALED - SIGN IN YOUR WALLET';
+      sub = 'THE ORACLE SAID YES';
+      frac = 1;
+    } else {
+      label = 'ON THE WIRE - CONFIRMING ON-CHAIN';
+      sub = 'ALMOST LAW';
+      frac = 1;
+    }
+    drawTextSh(c, label, VW / 2, 84, 1, GOLD, 'center', '#4a3005');
+    const bx = 92, bw = 200, by = 92, bh = 6;
+    c.fillStyle = '#101420';
+    c.fillRect(bx, by, bw, bh);
+    c.strokeStyle = GOLD_DK;
+    c.lineWidth = 1;
+    c.strokeRect(bx - 0.5, by - 0.5, bw + 1, bh + 1);
+    const fw = Math.max(2, Math.round(bw * frac));
+    c.fillStyle = op.phase === 'building' && frac >= 0.95 ? AMBER : GOLD;
+    c.fillRect(bx, by, fw, bh);
+    drawText(c, sub, VW / 2, by + bh + 9, 1, DIM, 'center');
   }
 
   // v10.4: aspect-preserving blit — a sprite inside a seal is FIT, never squashed
