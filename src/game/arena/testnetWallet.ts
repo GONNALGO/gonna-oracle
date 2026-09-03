@@ -192,7 +192,7 @@ export async function peraSignFn(address: string): Promise<TxSignFn> {
         accounts = await withTimeout(p2.reconnectSession(), PROBE_TIMEOUT_MS, 'reconnect timeout');
       } catch { /* session truly gone */ }
       if (!accounts.includes(address)) {
-        throw new Error('WALLET SESSION LOST - TAP CONNECT TO RE-PAIR');
+        throw new Error('WALLET SESSION LOST - TAP CONNECT');
       }
       const signed = await p2.signTransaction(toSign);
       console.debug('[arena] pera.signTransaction ✓ after heal, ' + signed.length + ' signed');
