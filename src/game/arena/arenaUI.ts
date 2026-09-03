@@ -169,11 +169,11 @@ export class ArenaUI {
   private shareMsgT = 0;
   // v11: wallet connect feedback (board header)
   private walletMsg = '';
-  // v18.1 (Prince: "nella pagina non c'è il tasto"): when the wallet session
-  // is lost mid-flow the SEAL screen itself offers RE-PAIR — no dead ends,
-  // no back-navigation to find a connect button. Set by failed wallet ops,
-  // cleared by a successful (re)connect, probed on seal-screen entry.
-  private walletDead = false;
+  // v18.1.6 (Prince: "MAI e poi mai deve dire repair"): RE-PAIR IS DEAD.
+  // A known identity always shows its address; the session heals SILENTLY
+  // in the background; a truly dead session gets the PERA/DEFLY chooser
+  // (walletPick) — reconnect-first inside, valid for EVERY page.
+  private walletPick = false;
   private walletProbeT = 0;
   private walletMsgT = 0;
   // v14.2: board status line (RUN DISCARDED etc.) — heads the LIVE feed
@@ -980,17 +980,24 @@ export class ArenaUI {
       } catch { /* no window (node tests) */ }
       return { act: 'none' };
     }
-    if (id === 'wallet' || id === 'repair') {
-      // testnet: real Pera connect (chainId 416002); mock: mainnet gate wallet
-      // v18.1: 'repair' is the same entry point, surfaced on the seal screen
-      // itself when the session dies mid-flow — reconnect-first inside, so a
-      // still-live WC session is reused and no new pairing even opens
+    if (id === 'wallet') {
+      // v18.1.6 ONE WALLET FOREVER (Prince: "mai e poi mai deve dire repair,
+      // devo poterlo fare sia con defly che pera"): the tap opens the PROVIDER
+      // CHOOSER — the degen picks PERA or DEFLY, reconnect-first inside, and
+      // the LAST connect is the identity every page recognizes (shared gate
+      // session storage on the same origin).
+      this.walletPick = !this.walletPick;
       this.walletMsgT = 0;
-      console.debug('[arena] CONNECT — wallet connect start');
+      return { act: 'move' };
+    }
+    if (id === 'wallet:pera' || id === 'wallet:defly') {
+      const provider = id === 'wallet:pera' ? 'pera' : 'defly';
+      this.walletMsgT = 0;
+      console.debug('[arena] CONNECT — wallet connect start (' + provider + ')');
       void this.run(
-        () => connectArenaWallet('pera'),
+        () => connectArenaWallet(provider),
         (addr) => {
-          this.walletDead = false;
+          this.walletPick = false;
           this.walletMsg = 'CONNECTED ' + addr.slice(0, 6) + '..' + addr.slice(-4);
           this.walletMsgT = 240;
         },
@@ -1309,10 +1316,11 @@ export class ArenaUI {
         // back on the wizard CONFIRM to re-seal (log-free, no red toast).
         this.cidMovedDiscard();
       } else {
-        // v18.1: a wallet/session failure raises the RE-PAIR path — the seal
-        // screen shows its own button, the degen never leaves the flow
+        // v18.1.6: a wallet/session failure opens the PERA/DEFLY chooser right
+        // here — the degen never leaves the flow, the seal is untouched, and
+        // the reconnect (either wallet) heals EVERY page at once
         const msg = e instanceof Error ? e.message : '';
-        if (/wallet|connect|session|re-pair/i.test(msg)) this.walletDead = true;
+        if (/wallet|connect|session|re-pair/i.test(msg)) this.walletPick = true;
         // v14.2: EVERY failure is visible — console breadcrumb + red UI line
         console.debug('[arena] op failed:', e);
         this.fail(e instanceof Error ? e.message : 'REKT - TRY AGAIN');
@@ -1322,24 +1330,25 @@ export class ArenaUI {
     }
   }
 
-  // v18.1: can ANY signer sign right now? Probed on seal entry (and after a
-  // RE-PAIR) — a dead session flips SIGN into RE-PAIR before the tap, so a
-  // dead click + lost request never happens. Best-effort, never throws.
+  // v18.1.6: the background probe HEALS instead of judging. A known identity
+  // whose session went quiet gets a SILENT WalletConnect reconnect (no
+  // pairing UI, no RE-PAIR label, the address never leaves the header). Only
+  // a session that is truly dead waits for the degen's own tap on the
+  // PERA/DEFLY chooser. Throttled, best-effort, never throws.
   private probeWallet(): void {
     if (arenaMode() !== 'live' || qaActive()) return;
     const now = Date.now();
-    if (now - this.walletProbeT < 10000) return; // throttled — one probe per few seconds
+    if (now - this.walletProbeT < 30000) return; // gentle — one silent heal per 30s
     this.walletProbeT = now;
     if (this.busy) return; // never probe over an in-flight connect/sign
     const addr = arenaAddress();
-    if (addr.startsWith('ANON') || addr.startsWith('DEGEN')) {
-      this.walletDead = true; // never connected here
-      return;
-    }
+    if (addr.startsWith('ANON') || addr.startsWith('DEGEN')) return; // never connected — the CONNECT chooser shows
     void (async () => {
       const gateAlive = wallet.isConnected() && !wallet.isSessionSoftDead() && wallet.getWallet().address === addr;
-      const arenaSign = gateAlive ? null : await liveTestnetSignFn(addr); // gate first: no probe cost
-      this.walletDead = !(gateAlive || arenaSign !== null);
+      if (gateAlive) return;
+      const arenaSign = await liveTestnetSignFn(addr);
+      if (arenaSign) return;
+      await wallet.silentHeal(); // quiet WC reconnect — the degen notices nothing
     })().catch(() => undefined);
   }
 
@@ -1996,13 +2005,15 @@ export class ArenaUI {
       const isAnon = addr.startsWith('ANON') || addr.startsWith('DEGEN');
       if (this.walletMsgT > 0 && this.walletMsg) {
         drawText(c, this.walletMsg, VW - 10, 4, 1, FLUO, 'right');
+      } else if (this.walletPick) {
+        // v18.1.6: the degen's pick — PERA or DEFLY, reconnect-first, and the
+        // LAST connect speaks for EVERY page (home, pit, gate)
+        this.btn(c, frame, { id: 'wallet:pera', x: VW - 96, y: 2, w: 43, h: 12 }, 'PERA', { green: true });
+        this.btn(c, frame, { id: 'wallet:defly', x: VW - 51, y: 2, w: 43, h: 12 }, 'DEFLY', { green: true });
       } else if (isAnon) {
         this.btn(c, frame, { id: 'wallet', x: VW - 96, y: 2, w: 88, h: 12 }, 'CONNECT', { green: true });
-      } else if (this.walletDead) {
-        // v18.1: identity kept, session lost — one tap re-pairs, right here
-        this.btn(c, frame, { id: 'repair', x: VW - 96, y: 2, w: 88, h: 12 }, 'RE-PAIR', { green: true });
       } else {
-        this.probeWallet(); // throttled: catches a session killed in the background
+        this.probeWallet(); // throttled silent heal — a quiet session is re-armed invisibly
         drawText(c, addr.slice(0, 6) + '..' + addr.slice(-4), VW - 10, 4, 1, GOLD, 'right');
       }
     } else {
@@ -2456,10 +2467,12 @@ export class ArenaUI {
       drawText(c, lines[i][1], x + w - 10, ly + i * 11, 1, i <= 1 ? GOLD : '#c8ccd4', 'right');
     }
     if (joiner) {
-      // v18.1: session lost mid-flow — the RE-PAIR button takes the SIGN slot
-      // (the seal is untouched; after re-pairing the gold button comes back)
-      if (this.walletDead) {
-        this.btn(c, frame, { id: 'repair', x: 92, y: 156, w: 200, h: 20 }, this.busy ? 'RE-PAIRING...' : 'RE-PAIR WALLET', { green: true });
+      // v18.1.6: SIGN is NEVER taken away. A dead session opens the
+      // PERA/DEFLY chooser in the same slot — the seal is untouched and the
+      // reconnect (either wallet) brings the gold button right back
+      if (this.walletPick) {
+        this.btn(c, frame, { id: 'wallet:pera', x: 92, y: 156, w: 98, h: 20 }, this.busy ? 'PAIRING...' : 'PERA', { green: true });
+        this.btn(c, frame, { id: 'wallet:defly', x: 194, y: 156, w: 98, h: 20 }, this.busy ? 'PAIRING...' : 'DEFLY', { green: true });
       } else {
         this.btn(c, frame, { id: 'sign', x: 92, y: 156, w: 200, h: 20 }, this.busy ? 'SIGNING...' : 'SIGN SCORE', { gold: true });
       }
@@ -2469,8 +2482,9 @@ export class ArenaUI {
       }
       this.btn(c, frame, { id: 'seal:discard', x: 122, y: 200, w: 140, h: 12 }, 'DISCARD - NO TX SENT', { dim: true });
     } else {
-      if (this.walletDead) {
-        this.btn(c, frame, { id: 'repair', x: 92, y: 164, w: 200, h: 18 }, this.busy ? 'RE-PAIRING...' : 'RE-PAIR WALLET', { green: true });
+      if (this.walletPick) {
+        this.btn(c, frame, { id: 'wallet:pera', x: 92, y: 164, w: 98, h: 18 }, this.busy ? 'PAIRING...' : 'PERA', { green: true });
+        this.btn(c, frame, { id: 'wallet:defly', x: 194, y: 164, w: 98, h: 18 }, this.busy ? 'PAIRING...' : 'DEFLY', { green: true });
       } else {
         this.btn(c, frame, { id: 'sign', x: 92, y: 164, w: 200, h: 18 }, this.busy ? 'SIGNING...' : 'SIGN & STAKE', { gold: true });
       }
