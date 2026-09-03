@@ -69,15 +69,41 @@ export class OracleError extends Error {
   }
 }
 
-const TIMEOUT_MS = 8000; // SPEC §7: 8s + 1 retry
-const MAX_ATTEMPTS = 2;
+const TIMEOUT_MS = 8000; // SPEC §7: 8s + 1 retry (fast endpoints only)
+// v18.1.3 (Prince: "15 wave e non mi fa firmare — non deve succedere mai"):
+// the sign-score replay on the server can take up to REPLAY_TIMEOUT_MS (30s)
+// for a LONG legit run (15+ waves = 60k+ frames). The old 8s abort killed
+// every patient sign, the player hammered RETRY, and the burst of big POSTs
+// tripped the EDGE rate wall (429 without CORS headers) which surfaced as a
+// lying 'UNREACHABLE' line. Now: sign-score waits up to 45s, and transient
+// failures (network, timeout, 429, 5xx) are retried with patience and
+// exponential backoff INSIDE the client — the run is never lost to a wobble.
+const SIGN_TIMEOUT_MS = 45000;
+const MAX_ATTEMPTS = 2; // fast path (non-sign endpoints)
+const PATIENT_ATTEMPTS = 5; // sign-score: 5 tries, backoff 2s/4s/8s/16s
+const BACKOFF_MS = [2000, 4000, 8000, 16000];
 
-async function postJson(path: string, body: unknown, opts?: { timeoutMs?: number }): Promise<unknown> {
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+function retryAfterMs(res: Response): number | null {
+  const h = res.headers.get('retry-after');
+  if (!h) return null;
+  const secs = Number(h);
+  if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, 30000);
+  const when = Date.parse(h);
+  if (Number.isFinite(when)) return Math.min(Math.max(when - Date.now(), 0), 30000);
+  return null;
+}
+
+async function postJson(path: string, body: unknown, opts?: { timeoutMs?: number; patient?: boolean }): Promise<unknown> {
   const base = oracleBaseUrl();
+  const timeoutMs = opts?.timeoutMs ?? TIMEOUT_MS;
+  const attempts = opts?.patient ? PATIENT_ATTEMPTS : MAX_ATTEMPTS;
   let lastErr: OracleError = new OracleError('THE ORACLE IS UNREACHABLE - CHECK THE LINE AND RETRY');
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) await sleep(BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)] as number);
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? TIMEOUT_MS);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let res: Response;
     try {
       res = await fetch(base + path, {
@@ -87,9 +113,10 @@ async function postJson(path: string, body: unknown, opts?: { timeoutMs?: number
         signal: ctrl.signal,
       });
     } catch (e) {
-      // network down OR our own abort — retried once, never silently dev-signed
+      // network down, CORS-walled edge 429, OR our own abort — retried with
+      // patience, never silently dev-signed
       const aborted = e instanceof Error && e.name === 'AbortError';
-      lastErr = new OracleError(aborted ? 'THE ORACLE IS SILENT - TIMED OUT, RETRY' : 'THE ORACLE IS UNREACHABLE - CHECK THE LINE AND RETRY');
+      lastErr = new OracleError(aborted ? 'THE ORACLE IS SILENT - TIMED OUT, RETRY' : 'THE ORACLE IS BUSY OR THE LINE IS DOWN - RETRY');
       clearTimeout(timer);
       continue;
     }
@@ -108,10 +135,21 @@ async function postJson(path: string, body: unknown, opts?: { timeoutMs?: number
     } catch {
       /* no json body — the HTTP status is the honest reason */
     }
-    if (res.status === 429) throw new OracleError('THE ORACLE IS BUSY - RETRY IN A BREATH', 429);
+    if (res.status === 429) {
+      // v18.1.3: a 429 is a SPEED BUMP, not a wall — honor Retry-After and
+      // back off patiently instead of dumping the player on an error line.
+      lastErr = new OracleError('THE ORACLE IS BUSY - RETRY IN A BREATH', 429);
+      const wait = retryAfterMs(res);
+      if (wait !== null && attempt + 1 < attempts) {
+        // honor the server's Retry-After (in ADDITION to the loop backoff —
+        // extra patience here is the whole point)
+        await sleep(Math.max(wait, BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)] as number));
+      }
+      continue;
+    }
     if (res.status >= 500) {
       lastErr = new OracleError('THE ORACLE SAYS NO - ' + reason, res.status);
-      continue; // one retry on a server-side wobble
+      continue; // retry on a server-side wobble
     }
     throw new OracleError('THE ORACLE SAYS NO - ' + reason, res.status);
   }
@@ -150,7 +188,9 @@ export interface VerdictResponse {
 }
 
 export async function signScore(req: SignScoreRequest, opts?: { timeoutMs?: number }): Promise<SignScoreResponse> {
-  const j = (await postJson('/v1/sign-score', req, opts)) as Partial<SignScoreResponse>;
+  // v18.1.3: patient mode + 45s — the server replays the WHOLE run before it
+  // signs; a 15-wave tape can need tens of seconds. Never abort early.
+  const j = (await postJson('/v1/sign-score', req, { timeoutMs: opts?.timeoutMs ?? SIGN_TIMEOUT_MS, patient: true })) as Partial<SignScoreResponse>;
   if (typeof j.sigB64 !== 'string' || typeof j.oracleAddr !== 'string') {
     throw new OracleError('THE ORACLE TALKS GIBBERISH - BAD SIGN RECEIPT');
   }
