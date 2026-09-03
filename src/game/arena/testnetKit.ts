@@ -852,8 +852,13 @@ export function signSendManaged(sign: TxSignFn, buildTxns: () => Promise<Txn[]>,
     },
     get stalled() {
       // v15.2.3: NEVER stalled while the tx is on the wire — the wallet already
-      // answered; only the chain can be slow now, and RETRY there would double-broadcast
-      return !settled && phase !== 'sending' && attemptStartedAt > 0 && Date.now() - attemptStartedAt >= nudgeMs;
+      // answered; only the chain can be slow now, and RETRY there would double-broadcast.
+      // v18.1.5 (Prince PIT-8 loop): NEVER stalled during 'building' either —
+      // that phase IS the server oracle replaying the run, a legit wait of up
+      // to ~2 minutes for a pro-length tape. The amber RETRY strip popping up
+      // there invited a destructive rebuild mid-replay. The strip exists for
+      // WALLET silence ('signing') only.
+      return !settled && phase === 'signing' && attemptStartedAt > 0 && Date.now() - attemptStartedAt >= nudgeMs;
     },
     get cancellable() {
       return !settled && phase !== 'sending';
