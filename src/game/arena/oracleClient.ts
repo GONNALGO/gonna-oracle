@@ -78,7 +78,9 @@ const TIMEOUT_MS = 8000; // SPEC §7: 8s + 1 retry (fast endpoints only)
 // lying 'UNREACHABLE' line. Now: sign-score waits up to 45s, and transient
 // failures (network, timeout, 429, 5xx) are retried with patience and
 // exponential backoff INSIDE the client — the run is never lost to a wobble.
-const SIGN_TIMEOUT_MS = 45000;
+// v18.1.5: 150s — the server replay budget for a pro-length run is 120s
+// (REPLAY_TIMEOUT_MS); the client must out-wait it, never abort mid-seal.
+const SIGN_TIMEOUT_MS = 150000;
 const MAX_ATTEMPTS = 2; // fast path (non-sign endpoints)
 const PATIENT_ATTEMPTS = 5; // sign-score: 5 tries, backoff 2s/4s/8s/16s
 const BACKOFF_MS = [2000, 4000, 8000, 16000];
